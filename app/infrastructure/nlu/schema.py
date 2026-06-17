@@ -1,0 +1,33 @@
+"""Pydantic-схема для structured output OpenAI. Зеркалит application.dto.ParsedMessage."""
+from __future__ import annotations
+
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+
+class NluItem(BaseModel):
+    name: str = Field(description="Название продукта на русском, как понято из сообщения")
+    canonical_key: str = Field(
+        description="Стабильный английский slug в snake_case, одинаковый для разных "
+        "формулировок одного продукта (напр. chicken_breast_grilled)"
+    )
+    unit: Literal["g", "ml", "piece", "portion", "unknown"]
+    quantity: float | None = Field(default=None, description="Число штук для штучных продуктов")
+    grams: float | None = Field(default=None, description="Оценка общего веса порции в граммах")
+    portion_hint: Literal["small", "medium", "large"] | None = None
+    unit_weight_g: float | None = Field(default=None, description="Вес одной штуки в граммах")
+    kcal_per_100g: float = Field(
+        description="Оценка КБЖУ на 100 г (нужна только для новых продуктов)"
+    )
+    protein_per_100g: float
+    fat_per_100g: float
+    carb_per_100g: float
+    confidence: float = Field(description="Уверенность по продукту, 0..1")
+
+
+class NluResult(BaseModel):
+    intent: Literal["meal", "weight", "query", "correction", "unknown"]
+    items: list[NluItem] = Field(default_factory=list)
+    weight_kg: float | None = None
+    confidence: float = Field(description="Общая уверенность разбора, 0..1")
