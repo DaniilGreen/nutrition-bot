@@ -179,7 +179,7 @@ def _format_unknown() -> str:
     )
 
 
-def _kcal_line(rem: Remaining, fill: str = "▰", empty: str = "▱") -> str:
+def _kcal_line(rem: Remaining, fill: str = "●", empty: str = "○") -> str:
     consumed = rem.consumed.kcal
     goal = rem.goal.daily_kcal
     pct = round(100 * consumed / goal) if goal else 0
@@ -192,7 +192,7 @@ def _kcal_line(rem: Remaining, fill: str = "▰", empty: str = "▱") -> str:
 
 
 def _macro_line(
-    label: str, consumed: float, goal: float, fill: str = "▰", empty: str = "▱"
+    label: str, consumed: float, goal: float, fill: str = "●", empty: str = "○"
 ) -> str:
     pct = round(100 * consumed / goal) if goal else 0
     return f"{label} {_n(consumed)}/{_n(goal)} {_bar(consumed, goal, fill, empty)} {pct}%"
@@ -207,8 +207,8 @@ def _remaining_block(rem: Remaining) -> str:
     )
 
 
-def _bar(value: float, goal: float, fill: str = "▰", empty: str = "▱", width: int = 10) -> str:
-    """Текстовая полоска (стиль C ▰▱ по умолчанию); fill/empty параметризованы (FR-9)."""
+def _bar(value: float, goal: float, fill: str = "●", empty: str = "○", width: int = 10) -> str:
+    """Текстовая полоска (стиль E ●○ по умолчанию); fill/empty параметризованы (FR-9)."""
     if goal <= 0:
         return empty * width
     ratio = 0.0 if value < 0 else min(1.0, value / goal)
