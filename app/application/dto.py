@@ -47,4 +47,5 @@ class ParsedMessage:
     intent: Intent
     items: list[ParsedItem] = field(default_factory=list)
     weight_kg: float | None = None
+    correction_op: str | None = None  # delete|replace|adjust|other для intent=correction
     confidence: float = 1.0

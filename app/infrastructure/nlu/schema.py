@@ -30,4 +30,7 @@ class NluResult(BaseModel):
     intent: Literal["meal", "weight", "query", "correction", "unknown"]
     items: list[NluItem] = Field(default_factory=list)
     weight_kg: float | None = None
+    correction_op: Literal["delete", "replace", "adjust", "other"] | None = Field(
+        default=None, description="Тип правки для intent=correction"
+    )
     confidence: float = Field(description="Общая уверенность разбора, 0..1")

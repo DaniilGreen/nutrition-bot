@@ -6,13 +6,15 @@
 from __future__ import annotations
 
 from app.application.dto import Intent, ParsedMessage, Unit
-from app.application.entities import Product, User, WeightLog
+from app.application.entities import MealItem, Product, User, WeightLog
 from app.application.meal_service import MealService
 from app.application.ports import NluPort, ProductRepo, SttPort
 from app.application.results import (
     ClarificationNeeded,
+    CorrectionFailed,
     DailyStats,
     History,
+    ItemRemoved,
     MealDeleted,
     MealLogged,
     Result,
@@ -59,6 +61,9 @@ class Assistant:
 
         if parsed.intent is Intent.QUERY:
             return await self._stats.daily(user)
+
+        if parsed.intent is Intent.CORRECTION:
+            return await self._handle_correction(user, parsed)
 
         return Unknown(reason="не распознал приём пищи или вес")
 
@@ -132,6 +137,22 @@ class Assistant:
         meal = await self._meals.log(user, parsed, raw_input=raw_input, input_type=input_type)
         stats = await self._stats.daily(user)
         return MealLogged(meal=meal, remaining=stats.remaining)
+
+    async def _handle_correction(self, user: User, parsed: ParsedMessage) -> Result:
+        """FR-14: MVP — только «удали X». Прочие правки (replace/adjust) — вежливый отказ."""
+        op = parsed.correction_op or "delete"
+        if op != "delete":
+            return CorrectionFailed(target="", reason="unsupported")
+        targets = [it.name for it in parsed.items if it.name.strip()]
+        removed: list[MealItem] = []
+        for name in targets:
+            item = await self._meals.remove_item_by_name(user, name)
+            if item is not None:
+                removed.append(item)
+        if not removed:
+            return CorrectionFailed(target=", ".join(targets), reason="not_found")
+        stats = await self._stats.daily(user)
+        return ItemRemoved(items=removed, remaining=stats.remaining)
 
 
 def _first_unclarified_index(parsed: ParsedMessage) -> int | None:

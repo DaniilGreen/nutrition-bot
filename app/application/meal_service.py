@@ -27,6 +27,8 @@ from app.domain.value_objects import Density, sum_macros
 _JUNK_KEYS = frozenset({"", "unknown", "none", "null", "na", "n_a", "item", "product", "food", "еда"})
 _MIN_KEY_LEN = 3
 _MATCH_THRESHOLD = 0.82  # порог имени для RAG-совпадения с каталогом
+_CORRECTION_LOOKBACK = 10  # сколько недавних записей просматриваем для «удали X»
+_CORRECTION_NAME_THRESHOLD = 0.8  # порог нечёткого совпадения имени при удалении
 
 
 class MealService:
@@ -88,6 +90,18 @@ class MealService:
 
     async def remove_item(self, user: User, meal_id: int, item_id: int) -> Meal | None:
         return await self._meals.remove_item(_require_id(user), meal_id, item_id)
+
+    async def remove_item_by_name(self, user: User, name: str) -> MealItem | None:
+        """Коррекция «удали X»: снять самую свежую позицию, чьё имя совпало с name."""
+        user_id = _require_id(user)
+        recent = await self._meals.list_recent(user_id, _CORRECTION_LOOKBACK)  # newest-first
+        for meal in recent:
+            for item in meal.items:
+                if _name_matches(name, item.name_snapshot):
+                    assert meal.id is not None and item.id is not None
+                    await self._meals.remove_item(user_id, meal.id, item.id)
+                    return item
+        return None
 
     async def _resolve_product(self, parsed_item: ParsedItem) -> Product:
         key = _canonical_key(parsed_item.canonical_key, parsed_item.name)
@@ -152,6 +166,19 @@ def _canonical_key(llm_key: str, name: str) -> str:
 def _slug(name: str) -> str:
     slug = re.sub(r"[^\w]+", "_", name.strip().lower()).strip("_")
     return slug or "item"
+
+
+def _name_matches(query: str, candidate: str) -> bool:
+    """Совпадение имени для «удали X»: подстрока или нечёткое сходство.
+
+    ponytail: substring+difflib по имени; если мажет (ирис/рис) — матчить по canonical_key.
+    """
+    q, c = _norm(query), _norm(candidate)
+    if not q:
+        return False
+    if q in c or c in q:
+        return True
+    return difflib.SequenceMatcher(None, q, c).ratio() >= _CORRECTION_NAME_THRESHOLD
 
 
 def _norm(text: str) -> str:

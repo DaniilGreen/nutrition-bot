@@ -10,8 +10,10 @@ from zoneinfo import ZoneInfo
 
 from app.application.results import (
     ClarificationNeeded,
+    CorrectionFailed,
     DailyStats,
     History,
+    ItemRemoved,
     MealDeleted,
     MealLogged,
     Result,
@@ -43,6 +45,10 @@ def format_result(result: Result) -> str:
         return _format_history(result)
     if isinstance(result, MealDeleted):
         return _format_deleted(result)
+    if isinstance(result, ItemRemoved):
+        return _format_item_removed(result)
+    if isinstance(result, CorrectionFailed):
+        return _format_correction_failed(result)
     if isinstance(result, Unknown):
         return _format_unknown()
     return "Что-то пошло не так."
@@ -141,6 +147,19 @@ def _format_deleted(r: MealDeleted) -> str:
         return "Нечего удалять."
     names = _esc(", ".join(i.name_snapshot for i in r.meal.items) or "запись")
     return f"🗑 Удалил: {names} ({_n(r.meal.totals.kcal)} ккал)."
+
+
+def _format_item_removed(r: ItemRemoved) -> str:
+    names = ", ".join(_esc(i.name_snapshot) for i in r.items)
+    kcal = sum(i.macros.kcal for i in r.items)
+    return f"🗑 Убрал: {names} (−{_n(kcal)} ккал)\n\n{_remaining_block(r.remaining)}"
+
+
+def _format_correction_failed(r: CorrectionFailed) -> str:
+    if r.reason == "unsupported":
+        return "Пока умею только удаление: напиши «удали рис». Замена и правка граммов — позже."
+    target = f"«{_esc(r.target)}»" if r.target else "это"
+    return f"Не нашёл {target} в недавних записях. Что удалить? Или /undo — снять последнюю запись."
 
 
 def _format_unknown() -> str:

@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.application.dto import ParsedMessage
-from app.application.entities import Meal, WeightLog
+from app.application.entities import Meal, MealItem, WeightLog
 from app.domain.goals import Goal, Remaining
 from app.domain.value_objects import Macros
 
@@ -62,6 +62,22 @@ class MealDeleted:
 
 
 @dataclass
+class ItemRemoved:
+    """Коррекция «удали X»: позиции сняты, показываем обновлённый остаток дня."""
+
+    items: list[MealItem]
+    remaining: Remaining
+
+
+@dataclass
+class CorrectionFailed:
+    """Коррекция не выполнена: не нашли цель (not_found) или op не поддержан (unsupported)."""
+
+    target: str
+    reason: str  # not_found | unsupported
+
+
+@dataclass
 class Unknown:
     reason: str = ""
 
@@ -75,5 +91,7 @@ Result = (
     | WeeklyStats
     | History
     | MealDeleted
+    | ItemRemoved
+    | CorrectionFailed
     | Unknown
 )

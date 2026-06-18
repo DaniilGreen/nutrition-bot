@@ -2,9 +2,30 @@
 from __future__ import annotations
 
 from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
-from app.application.results import MealLogged
+from app.application.meal_service import _name_matches
+from app.application.results import CorrectionFailed, ItemRemoved, MealLogged
 from tests.e2e.test_meal_flow import _build, _new_user
 from tests.fakes import StubNlu
+
+
+def _delete(name: str, key: str) -> ParsedMessage:
+    return ParsedMessage(
+        intent=Intent.CORRECTION,
+        correction_op="delete",
+        confidence=0.9,
+        items=[
+            ParsedItem(
+                name=name,
+                canonical_key=key,
+                unit=Unit.UNKNOWN,
+                kcal_per_100g=0,
+                protein_per_100g=0,
+                fat_per_100g=0,
+                carb_per_100g=0,
+                confidence=0.9,
+            )
+        ],
+    )
 
 
 def _chicken_and_rice() -> ParsedMessage:
@@ -70,3 +91,50 @@ async def test_remove_last_item_deletes_meal() -> None:
     assert gone is None
     today = await assistant.today(user)
     assert today.meals_count == 0
+
+
+# --- FR-14: коррекции на естественном языке («удали X») ---
+
+
+async def test_delete_item_by_name() -> None:
+    assistant, users, _ = _build(StubNlu(_chicken_and_rice(), _delete("рис", "rice")))
+    user = await _new_user(users)
+
+    await assistant.process(user, "курица 200 и рис 150")
+    removed = await assistant.process(user, "удали рис")
+
+    assert isinstance(removed, ItemRemoved)
+    assert [i.name_snapshot for i in removed.items] == ["рис"]
+    today = await assistant.today(user)
+    assert today.remaining.consumed.kcal == 330.0  # осталась только курица 165*2
+
+
+async def test_delete_item_not_found() -> None:
+    assistant, users, _ = _build(StubNlu(_chicken_and_rice(), _delete("гречка", "buckwheat")))
+    user = await _new_user(users)
+
+    await assistant.process(user, "курица и рис")
+    result = await assistant.process(user, "удали гречку")
+
+    assert isinstance(result, CorrectionFailed)
+    assert result.reason == "not_found"
+
+
+async def test_correction_replace_is_unsupported() -> None:
+    replace = _delete("рис", "rice")
+    replace.correction_op = "replace"
+    assistant, users, _ = _build(StubNlu(_chicken_and_rice(), replace))
+    user = await _new_user(users)
+
+    await assistant.process(user, "курица и рис")
+    result = await assistant.process(user, "замени рис на гречку")
+
+    assert isinstance(result, CorrectionFailed)
+    assert result.reason == "unsupported"
+
+
+def test_name_matches_substring_and_fuzzy() -> None:
+    assert _name_matches("рис", "рис отварной")  # подстрока
+    assert _name_matches("творог", "творог 5%")  # подстрока
+    assert not _name_matches("рис", "гречка")  # разное
+    assert not _name_matches("", "рис")  # пустой запрос
