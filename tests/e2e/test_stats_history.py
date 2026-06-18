@@ -1,4 +1,4 @@
-"""E2E для M2.2: недельная статистика, история, отмена последней записи."""
+"""E2E для M2.2 + меню: недельная статистика, история, отмена (последней и по id)."""
 from __future__ import annotations
 
 from app.application.dto import Intent, ParsedMessage
@@ -6,6 +6,7 @@ from app.application.results import (
     DailyStats,
     History,
     MealDeleted,
+    MealLogged,
     WeeklyStats,
 )
 from tests.e2e.test_meal_flow import _build, _chicken, _new_user
@@ -39,6 +40,18 @@ async def test_history_lists_logged_meals() -> None:
     assert history.timezone == "UTC"
 
 
+async def test_today_returns_daily() -> None:
+    assistant, users, _ = _build(StubNlu(_chicken(165)))
+    user = await _new_user(users)
+
+    await assistant.process(user, "курица 250 грамм")
+    today = await assistant.today(user)
+
+    assert isinstance(today, DailyStats)
+    assert today.meals_count == 1
+    assert today.remaining.consumed.kcal == 412.5
+
+
 async def test_undo_deletes_last_then_empty() -> None:
     assistant, users, _ = _build(
         StubNlu(_chicken(165), ParsedMessage(intent=Intent.QUERY, confidence=0.9))
@@ -56,4 +69,22 @@ async def test_undo_deletes_last_then_empty() -> None:
     assert stats.meals_count == 0
 
     again = await assistant.undo(user)
+    assert again.meal is None
+
+
+async def test_delete_meal_by_id() -> None:
+    assistant, users, _ = _build(StubNlu(_chicken(165)))
+    user = await _new_user(users)
+
+    logged = await assistant.process(user, "курица 250 грамм")
+    assert isinstance(logged, MealLogged)
+    assert logged.meal.id is not None
+
+    deleted = await assistant.delete_meal(user, logged.meal.id)
+    assert deleted.meal is not None
+
+    today = await assistant.today(user)
+    assert today.meals_count == 0
+
+    again = await assistant.delete_meal(user, logged.meal.id)
     assert again.meal is None

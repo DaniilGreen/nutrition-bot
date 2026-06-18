@@ -1,4 +1,4 @@
-"""Use-case: дневная и недельная статистика, остаток КБЖУ."""
+"""Use-case: дневная и недельная статистика, остаток КБЖУ, текущая цель."""
 from __future__ import annotations
 
 from zoneinfo import ZoneInfo
@@ -24,6 +24,9 @@ class StatsService:
         self._users = users
         self._default_goal = default_goal
         self._clock = clock
+
+    async def current_goal(self, user: User) -> Goal:
+        return await self._users.get_goal(_require_id(user)) or self._default_goal
 
     async def daily(self, user: User) -> DailyStats:
         user_id = _require_id(user)

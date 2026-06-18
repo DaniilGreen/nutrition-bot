@@ -11,6 +11,7 @@ from app.application.meal_service import MealService
 from app.application.ports import NluPort, ProductRepo, SttPort
 from app.application.results import (
     ClarificationNeeded,
+    DailyStats,
     History,
     MealDeleted,
     MealLogged,
@@ -21,6 +22,7 @@ from app.application.results import (
 )
 from app.application.stats_service import StatsService
 from app.application.weight_service import WeightService
+from app.domain.goals import Goal
 
 
 class Assistant:
@@ -68,8 +70,14 @@ class Assistant:
         """Продолжить запись приёма пищи после ответа на уточняющий вопрос."""
         return await self._handle_meal(user, draft, raw_input=raw_input, input_type=input_type)
 
+    async def today(self, user: User) -> DailyStats:
+        return await self._stats.daily(user)
+
     async def weekly(self, user: User) -> WeeklyStats:
         return await self._stats.weekly(user)
+
+    async def current_goal(self, user: User) -> Goal:
+        return await self._stats.current_goal(user)
 
     async def history(self, user: User, limit: int = 10) -> History:
         meals = await self._meals.recent(user, limit)
@@ -77,6 +85,9 @@ class Assistant:
 
     async def undo(self, user: User) -> MealDeleted:
         return MealDeleted(meal=await self._meals.delete_last(user))
+
+    async def delete_meal(self, user: User, meal_id: int) -> MealDeleted:
+        return MealDeleted(meal=await self._meals.delete(user, meal_id))
 
     async def _handle_meal(
         self, user: User, parsed: ParsedMessage, *, raw_input: str, input_type: str

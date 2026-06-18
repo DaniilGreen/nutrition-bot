@@ -79,6 +79,13 @@ class InMemoryMealRepo:
         self._meals.remove(last)
         return last
 
+    async def delete(self, user_id: int, meal_id: int) -> Meal | None:
+        for m in self._meals:
+            if m.id == meal_id and m.user_id == user_id:
+                self._meals.remove(m)
+                return m
+        return None
+
 
 class InMemoryWeightRepo:
     def __init__(self) -> None:

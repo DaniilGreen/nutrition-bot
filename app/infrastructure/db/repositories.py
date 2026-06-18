@@ -207,7 +207,15 @@ class SqlMealRepo:
             .order_by(MealORM.eaten_at.desc())
             .limit(1)
         )
-        orm = res.scalar_one_or_none()
+        return await self._delete_orm(res.scalar_one_or_none())
+
+    async def delete(self, user_id: int, meal_id: int) -> Meal | None:
+        res = await self._s.execute(
+            select(MealORM).where(MealORM.id == meal_id, MealORM.user_id == user_id)
+        )
+        return await self._delete_orm(res.scalar_one_or_none())
+
+    async def _delete_orm(self, orm: MealORM | None) -> Meal | None:
         if orm is None:
             return None
         meal = _meal_to_domain(orm)

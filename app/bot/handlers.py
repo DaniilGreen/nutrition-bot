@@ -1,25 +1,38 @@
-"""Хендлеры aiogram. Тонкий слой: парсинг -> Assistant -> форматтер.
+"""Хендлеры aiogram. Тонкий слой: ввод -> Assistant -> форматтер.
 
-M2: уточнения порции (inline + FSM), недельная статистика, история, отмена.
-M3: голосовые — скачиваем OGG, Whisper -> текст -> тот же пайплайн.
+UX: постоянное reply-меню, командное меню, inline «Отменить», «печатает…».
+Надёжность: глобальный error-handler ловит падения (в т.ч. AI) и отвечает юзеру.
 """
 from __future__ import annotations
+
+import logging
+from contextlib import suppress
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, ErrorEvent, Message
 
 from app.application.assistant import Assistant
 from app.application.entities import User
 from app.application.ports import UserRepo
-from app.application.results import ClarificationNeeded, Result
+from app.application.results import ClarificationNeeded, MealLogged, Result
 from app.bot.formatters import format_result
-from app.bot.keyboards import portion_keyboard
+from app.bot.keyboards import (
+    BTN_GOAL,
+    BTN_HISTORY,
+    BTN_TODAY,
+    BTN_UNDO,
+    BTN_WEEK,
+    main_menu_keyboard,
+    meal_actions_keyboard,
+    portion_keyboard,
+)
 from app.bot.states import MealStates
 from app.domain.goals import Goal
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 START_TEXT = (
     "👋 Привет! Я считаю КБЖУ по твоим сообщениям.\n\n"
@@ -28,21 +41,38 @@ START_TEXT = (
     "• «два банана»\n"
     "• «фо бо средняя порция»\n\n"
     "Вес тела: «вес 86.8».\n"
-    "Статистика: «сколько осталось».\n\n"
-    "Команды:\n"
-    "/goal 1800 — цель по калориям\n"
-    "/week — за неделю · /history — история · /undo — отменить последнее"
+    "Кнопки меню — снизу 👇"
 )
 
 
+# --- надёжность: единый перехват ошибок ---------------------------------------
+
+
+@router.errors()
+async def on_error(event: ErrorEvent) -> bool:
+    logger.exception("Unhandled error in handler", exc_info=event.exception)
+    target = event.update.message
+    if target is None and event.update.callback_query is not None:
+        maybe = event.update.callback_query.message
+        target = maybe if isinstance(maybe, Message) else None
+    if target is not None:
+        with suppress(Exception):
+            await target.answer("⚠️ Что-то пошло не так. Попробуй ещё раз через пару секунд.")
+    return True
+
+
+# --- команды ------------------------------------------------------------------
+
+
 @router.message(CommandStart())
-async def on_start(message: Message) -> None:
-    await message.answer(START_TEXT)
+async def on_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(START_TEXT, reply_markup=main_menu_keyboard())
 
 
 @router.message(Command("help"))
 async def on_help(message: Message) -> None:
-    await message.answer(START_TEXT)
+    await message.answer(START_TEXT, reply_markup=main_menu_keyboard())
 
 
 @router.message(Command("goal"))
@@ -57,7 +87,6 @@ async def on_goal(
         return
 
     assert app_user.id is not None
-    # Дефолтная разбивка 30/25/45 (Б/Ж/У). Тонкая настройка макросов — позже.
     goal = Goal(
         daily_kcal=kcal,
         protein_g=round(kcal * 0.30 / 4),
@@ -68,19 +97,75 @@ async def on_goal(
     await message.answer(f"🎯 Цель обновлена: {kcal:g} ккал/день.")
 
 
+@router.message(Command("today"))
+async def cmd_today(message: Message, app_user: User, assistant: Assistant) -> None:
+    await _show_today(message, app_user, assistant)
+
+
 @router.message(Command("week"))
-async def on_week(message: Message, app_user: User, assistant: Assistant) -> None:
-    await message.answer(format_result(await assistant.weekly(app_user)))
+async def cmd_week(message: Message, app_user: User, assistant: Assistant) -> None:
+    await _show_week(message, app_user, assistant)
 
 
 @router.message(Command("history"))
-async def on_history(message: Message, app_user: User, assistant: Assistant) -> None:
-    await message.answer(format_result(await assistant.history(app_user)))
+async def cmd_history(message: Message, app_user: User, assistant: Assistant) -> None:
+    await _show_history(message, app_user, assistant)
 
 
 @router.message(Command("undo"))
-async def on_undo(message: Message, app_user: User, assistant: Assistant) -> None:
-    await message.answer(format_result(await assistant.undo(app_user)))
+async def cmd_undo(message: Message, app_user: User, assistant: Assistant) -> None:
+    await _do_undo(message, app_user, assistant)
+
+
+# --- кнопки постоянного меню (приходят как обычный текст) ----------------------
+
+
+@router.message(F.text == BTN_TODAY)
+async def btn_today(
+    message: Message, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
+    await state.clear()
+    await _show_today(message, app_user, assistant)
+
+
+@router.message(F.text == BTN_WEEK)
+async def btn_week(
+    message: Message, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
+    await state.clear()
+    await _show_week(message, app_user, assistant)
+
+
+@router.message(F.text == BTN_HISTORY)
+async def btn_history(
+    message: Message, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
+    await state.clear()
+    await _show_history(message, app_user, assistant)
+
+
+@router.message(F.text == BTN_GOAL)
+async def btn_goal(
+    message: Message, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
+    await state.clear()
+    goal = await assistant.current_goal(app_user)
+    await message.answer(
+        f"🎯 Текущая цель: <b>{goal.daily_kcal:g} ккал/день</b>\n"
+        f"Б{goal.protein_g:g} Ж{goal.fat_g:g} У{goal.carb_g:g}\n\n"
+        f"Изменить: <code>/goal 1800</code>"
+    )
+
+
+@router.message(F.text == BTN_UNDO)
+async def btn_undo(
+    message: Message, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
+    await state.clear()
+    await _do_undo(message, app_user, assistant)
+
+
+# --- голос и свободный текст ---------------------------------------------------
 
 
 @router.message(F.voice)
@@ -91,6 +176,7 @@ async def on_voice(
     if message.voice is None:
         return
 
+    await _send_typing(message)
     buffer = await bot.download(message.voice)
     audio = buffer.read() if buffer is not None else b""
     transcript = await assistant.transcribe(audio, filename="voice.ogg")
@@ -102,6 +188,7 @@ async def on_voice(
         return
 
     await message.answer(f"🎤 Распознал: «{transcript}»")
+    await _send_typing(message)
     result = await assistant.process(app_user, transcript, input_type="voice")
     await _reply_message(message, result, state, raw=transcript)
 
@@ -110,10 +197,13 @@ async def on_voice(
 async def on_text(
     message: Message, app_user: User, assistant: Assistant, state: FSMContext
 ) -> None:
-    # Новый текст сбрасывает незавершённое уточнение.
     await state.clear()
+    await _send_typing(message)
     result = await assistant.process(app_user, message.text or "", input_type="text")
     await _reply_message(message, result, state, raw=message.text or "")
+
+
+# --- callbacks ----------------------------------------------------------------
 
 
 @router.callback_query(F.data.startswith("portion:"))
@@ -137,8 +227,49 @@ async def on_portion(
         await callback.message.edit_text(format_result(result), reply_markup=portion_keyboard())
     else:
         await state.clear()
-        await callback.message.edit_text(format_result(result))
+        markup = None
+        if isinstance(result, MealLogged) and result.meal.id is not None:
+            markup = meal_actions_keyboard(result.meal.id)
+        await callback.message.edit_text(format_result(result), reply_markup=markup)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("meal_undo:"))
+async def on_meal_undo(callback: CallbackQuery, app_user: User, assistant: Assistant) -> None:
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    meal_id = int((callback.data or "meal_undo:0").split(":", 1)[1])
+    result = await assistant.delete_meal(app_user, meal_id)
+    if result.meal is None:
+        await callback.answer("Уже удалено.")
+        return
+    await callback.message.edit_text("🗑 Запись отменена.")
+    await callback.answer()
+
+
+# --- helpers ------------------------------------------------------------------
+
+
+async def _show_today(message: Message, app_user: User, assistant: Assistant) -> None:
+    await message.answer(format_result(await assistant.today(app_user)))
+
+
+async def _show_week(message: Message, app_user: User, assistant: Assistant) -> None:
+    await message.answer(format_result(await assistant.weekly(app_user)))
+
+
+async def _show_history(message: Message, app_user: User, assistant: Assistant) -> None:
+    await message.answer(format_result(await assistant.history(app_user)))
+
+
+async def _do_undo(message: Message, app_user: User, assistant: Assistant) -> None:
+    await message.answer(format_result(await assistant.undo(app_user)))
+
+
+async def _send_typing(message: Message) -> None:
+    with suppress(Exception):  # индикатор «печатает…» — не критично, если не отправится
+        await message.bot.send_chat_action(message.chat.id, "typing")
 
 
 async def _reply_message(
@@ -148,5 +279,8 @@ async def _reply_message(
         await state.set_state(MealStates.awaiting_portion)
         await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
         await message.answer(format_result(result), reply_markup=portion_keyboard())
+    elif isinstance(result, MealLogged):
+        markup = meal_actions_keyboard(result.meal.id) if result.meal.id is not None else None
+        await message.answer(format_result(result), reply_markup=markup)
     else:
         await message.answer(format_result(result))

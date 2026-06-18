@@ -9,6 +9,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.bot.handlers import router
+from app.bot.menu import setup_bot_commands
 from app.bot.middlewares import ServicesMiddleware
 from app.config import get_settings
 from app.container import Container
@@ -33,6 +34,8 @@ async def main() -> None:
     dp.message.middleware(middleware)
     dp.callback_query.middleware(middleware)
     dp.include_router(router)
+
+    await setup_bot_commands(bot)
 
     try:
         await dp.start_polling(bot)
