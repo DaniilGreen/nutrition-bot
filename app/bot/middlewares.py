@@ -36,6 +36,7 @@ class ServicesMiddleware(BaseMiddleware):
             data["assistant"] = assistant
             data["users"] = users
             data["app_user"] = user
+            data["session"] = session
             try:
                 result = await handler(event, data)
                 await session.commit()

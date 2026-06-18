@@ -15,6 +15,7 @@ from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, ErrorEvent, Message
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.assistant import Assistant
 from app.application.entities import User
@@ -263,7 +264,12 @@ async def on_profile_body(message: Message, state: FSMContext) -> None:
 
 @router.message(F.voice)
 async def on_voice(
-    message: Message, bot: Bot, app_user: User, assistant: Assistant, state: FSMContext
+    message: Message,
+    bot: Bot,
+    app_user: User,
+    assistant: Assistant,
+    session: AsyncSession,
+    state: FSMContext,
 ) -> None:
     await state.clear()
     if message.voice is None:
@@ -283,16 +289,22 @@ async def on_voice(
     await message.answer(f"🎤 Распознал: «{escape(transcript, quote=False)}»")
     await _send_typing(message)
     result = await assistant.process(app_user, transcript, input_type="voice")
+    await session.commit()
     await _reply_message(message, result, state, raw=transcript)
 
 
 @router.message(F.text)
 async def on_text(
-    message: Message, app_user: User, assistant: Assistant, state: FSMContext
+    message: Message,
+    app_user: User,
+    assistant: Assistant,
+    session: AsyncSession,
+    state: FSMContext,
 ) -> None:
     await state.clear()
     await _send_typing(message)
     result = await assistant.process(app_user, message.text or "", input_type="text")
+    await session.commit()  # фиксируем запись ДО ответа — «✅ записал» не врёт
     await _reply_message(message, result, state, raw=message.text or "")
 
 
@@ -301,7 +313,11 @@ async def on_text(
 
 @router.callback_query(F.data.startswith("portion:"))
 async def on_portion(
-    callback: CallbackQuery, app_user: User, assistant: Assistant, state: FSMContext
+    callback: CallbackQuery,
+    app_user: User,
+    assistant: Assistant,
+    session: AsyncSession,
+    state: FSMContext,
 ) -> None:
     data = await state.get_data()
     draft = data.get("draft")
@@ -315,6 +331,7 @@ async def on_portion(
     draft.items[item_index].portion_hint = hint
 
     result = await assistant.continue_meal(app_user, draft, raw_input=raw)
+    await session.commit()
     if isinstance(result, ClarificationNeeded):
         await state.update_data(draft=result.draft, item_index=result.item_index)
         await callback.message.edit_text(format_result(result), reply_markup=portion_keyboard())

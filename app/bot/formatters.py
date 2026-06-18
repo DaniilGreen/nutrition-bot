@@ -129,8 +129,10 @@ def _format_history(r: History) -> str:
     lines = ["🗒 Последние записи:"]
     for m in r.meals:
         when = m.eaten_at.astimezone(tz).strftime("%d.%m %H:%M")
-        names = _esc(", ".join(i.name_snapshot for i in m.items) or "—")
-        lines.append(f"• {when} — {_n(m.totals.kcal)} ккал ({names})")
+        raw_names = ", ".join(i.name_snapshot for i in m.items) or "—"
+        if len(raw_names) > 60:
+            raw_names = raw_names[:59] + "…"  # ponytail: обрезка под лимит Telegram 4096
+        lines.append(f"• {when} — {_n(m.totals.kcal)} ккал ({_esc(raw_names)})")
     return "\n".join(lines)
 
 
