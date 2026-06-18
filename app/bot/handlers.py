@@ -13,6 +13,7 @@ from contextlib import suppress
 from html import escape
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, ErrorEvent, Message
@@ -407,7 +408,7 @@ async def on_variant(
         return
 
     draft.items[item_index].canonical_key = product.canonical_key
-    draft.items[item_index].ambiguous = False  # выбор сделан → конкретный продукт
+    draft.items[item_index].variant_locked = True  # выбор сделан явно → детект не переспрашивает
     result = await assistant.continue_meal(app_user, draft, raw_input=raw)
     await session.commit()
     await _render_after_continue(callback.message, result, state, raw=raw)
@@ -618,14 +619,21 @@ async def _render_after_continue(
     if isinstance(result, ClarificationNeeded):
         await state.set_state(MealStates.awaiting_portion)
         await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
-        await message.edit_text(format_result(result), reply_markup=portion_keyboard())
+        await _safe_edit(message, format_result(result), portion_keyboard())
     elif isinstance(result, VariantClarificationNeeded):
         await state.set_state(MealStates.awaiting_variant)
         await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
-        await message.edit_text(
-            format_result(result), reply_markup=variant_keyboard(result.options)
-        )
+        await _safe_edit(message, format_result(result), variant_keyboard(result.options))
     else:
         await state.clear()
         markup = meal_actions_keyboard(result.meal) if isinstance(result, MealLogged) else None
-        await message.edit_text(format_result(result), reply_markup=markup)
+        await _safe_edit(message, format_result(result), markup)
+
+
+async def _safe_edit(message: Message, text: str, markup: object = None) -> None:
+    """edit_text, проглатывая 'message is not modified' (идентичная правка — не ошибка)."""
+    try:
+        await message.edit_text(text, reply_markup=markup)  # type: ignore[arg-type]
+    except TelegramBadRequest as e:
+        if "not modified" not in str(e).lower():
+            raise

@@ -35,7 +35,8 @@ class ParsedItem:
     grams: float | None = None
     portion_hint: str | None = None
     unit_weight_g: float | None = None
-    ambiguous: bool = False  # generic-имя без уточнения способа/части (FR-20)
+    ambiguous: bool = False  # generic-имя без уточнения способа/части (FR-20, deprecated-детект)
+    variant_locked: bool = False  # вариант выбран юзером (callback) — детект не переспрашивает
     kcal_per_100g: float = 0.0
     protein_per_100g: float = 0.0
     fat_per_100g: float = 0.0

@@ -140,6 +140,8 @@ class MealService:
         Детект specific/generic — детерминированный: квалификатор варианта в тексте (5%/гриль),
         НЕ флаг LLM (он нестабилен — творог/овсянка не флажились).
         """
+        if item.variant_locked:
+            return ("normal", [])  # вариант выбран юзером (callback) — не переспрашивать
         key = _canonical_key(item.canonical_key, item.name)
         concrete = await self._products.get_by_key(key)
         category = concrete.category if concrete is not None else key

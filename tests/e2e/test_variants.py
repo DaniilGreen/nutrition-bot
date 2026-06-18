@@ -95,6 +95,25 @@ async def test_qualifier_picks_variant_overriding_llm() -> None:
     assert result.meal.totals.kcal == 320.0  # tvorog_9 (160/100*200), не tvorog_5 (240)
 
 
+async def test_variant_pick_sticks() -> None:
+    # после вопроса юзер выбрал вариант (эмуляция callback: key + variant_locked) →
+    # continue_meal логирует, НЕ переспрашивает заново (регрессия «message is not modified»)
+    assistant, users, products = _build(StubNlu(_item("творог", "tvorog_5")))
+    await _seed(products, _TVOROG, "tvorog")
+    user = await _new_user(users)
+
+    result = await assistant.process(user, "творог 150")
+    assert isinstance(result, VariantClarificationNeeded)
+
+    draft = result.draft
+    draft.items[result.item_index].canonical_key = "tvorog_9"
+    draft.items[result.item_index].variant_locked = True
+    final = await assistant.continue_meal(user, draft, raw_input="творог 150")
+
+    assert isinstance(final, MealLogged)
+    assert final.meal.totals.kcal == 320.0  # выбранный tvorog_9 (160/100*200), без повторного вопроса
+
+
 async def test_history_default() -> None:
     # ел «курица отварная» 2× (квалификатор отварн → boiled) → «курица» молча boiled (130*2=260)
     assistant, users, products = _build(
