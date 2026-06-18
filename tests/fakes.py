@@ -6,7 +6,7 @@ from datetime import datetime
 from app.application.dto import ParsedMessage
 from app.application.entities import Meal, Product, User, WeightLog
 from app.domain.goals import Goal
-from app.domain.value_objects import sum_macros
+from app.domain.value_objects import Density, sum_macros
 
 
 class InMemoryUserRepo:
@@ -43,6 +43,12 @@ class InMemoryProductRepo:
     async def get_by_key(self, canonical_key: str) -> Product | None:
         return self._by_key.get(canonical_key)
 
+    async def get_by_id(self, product_id: int) -> Product | None:
+        for p in self._by_key.values():
+            if p.id == product_id:
+                return p
+        return None
+
     async def create(self, product: Product) -> Product:
         self._seq += 1
         product.id = self._seq
@@ -51,6 +57,18 @@ class InMemoryProductRepo:
 
     async def all_keys(self) -> list[str]:
         return list(self._by_key.keys())
+
+    async def list_estimated(self, limit: int) -> list[Product]:
+        return [p for p in self._by_key.values() if p.is_estimate][:limit]
+
+    async def update_density(self, product_id: int, density: Density) -> Product | None:
+        for p in self._by_key.values():
+            if p.id == product_id:
+                p.density = density
+                p.is_estimate = False
+                p.source = "manual"
+                return p
+        return None
 
 
 class InMemoryMealRepo:

@@ -1,4 +1,4 @@
-"""Клавиатуры: постоянное reply-меню, inline-кнопки порций, действий и выбора отмены."""
+"""Клавиатуры: reply-меню, inline-кнопки порций, действий, выбора отмены и правки продукта."""
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -7,11 +7,12 @@ from zoneinfo import ZoneInfo
 from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
-from app.application.entities import Meal
+from app.application.entities import Meal, Product
 
 PORTION_CALLBACK_PREFIX = "portion"
 MEAL_UNDO_PREFIX = "meal_undo"
 ITEM_DEL_PREFIX = "item_del"
+PROD_FIX_PREFIX = "prod_fix"
 
 # Тексты кнопок постоянного меню (они же приходят как обычные сообщения).
 BTN_TODAY = "📊 Сегодня"
@@ -69,6 +70,19 @@ def undo_picker_keyboard(meals: Sequence[Meal], tz_name: str) -> InlineKeyboardM
             text=f"🗑 {when} · {meal.totals.kcal:g} ккал · {names}",
             callback_data=f"{MEAL_UNDO_PREFIX}:{meal.id}",
         )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def products_fix_keyboard(products: Sequence[Product]) -> InlineKeyboardMarkup:
+    """Список продуктов с AI-оценкой — выбрать, какому исправить КБЖУ."""
+    builder = InlineKeyboardBuilder()
+    for product in products:
+        if product.id is not None:
+            builder.button(
+                text=f"✏️ {_short(product.display_name)} ({product.density.kcal_per_100g:g} ккал)",
+                callback_data=f"{PROD_FIX_PREFIX}:{product.id}",
+            )
     builder.adjust(1)
     return builder.as_markup()
 

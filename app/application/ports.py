@@ -13,6 +13,7 @@ from typing import Protocol
 from app.application.dto import ParsedMessage
 from app.application.entities import Meal, Product, User, WeightLog
 from app.domain.goals import Goal
+from app.domain.value_objects import Density
 
 
 class NluPort(Protocol):
@@ -36,9 +37,15 @@ class UserRepo(Protocol):
 class ProductRepo(Protocol):
     async def get_by_key(self, canonical_key: str) -> Product | None: ...
 
+    async def get_by_id(self, product_id: int) -> Product | None: ...
+
     async def create(self, product: Product) -> Product: ...
 
     async def all_keys(self) -> list[str]: ...
+
+    async def list_estimated(self, limit: int) -> list[Product]: ...
+
+    async def update_density(self, product_id: int, density: Density) -> Product | None: ...
 
 
 class MealRepo(Protocol):

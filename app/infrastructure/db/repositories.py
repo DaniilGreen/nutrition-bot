@@ -123,6 +123,10 @@ class SqlProductRepo:
         orm = res.scalar_one_or_none()
         return _product_to_domain(orm) if orm is not None else None
 
+    async def get_by_id(self, product_id: int) -> Product | None:
+        orm = await self._s.get(ProductORM, product_id)
+        return _product_to_domain(orm) if orm is not None else None
+
     async def create(self, product: Product) -> Product:
         orm = ProductORM(
             canonical_key=product.canonical_key,
@@ -145,6 +149,28 @@ class SqlProductRepo:
     async def all_keys(self) -> list[str]:
         res = await self._s.execute(select(ProductORM.canonical_key))
         return list(res.scalars().all())
+
+    async def list_estimated(self, limit: int) -> list[Product]:
+        res = await self._s.execute(
+            select(ProductORM)
+            .where(ProductORM.is_estimate.is_(True))
+            .order_by(ProductORM.created_at.desc())
+            .limit(limit)
+        )
+        return [_product_to_domain(o) for o in res.scalars().all()]
+
+    async def update_density(self, product_id: int, density: Density) -> Product | None:
+        orm = await self._s.get(ProductORM, product_id)
+        if orm is None:
+            return None
+        orm.kcal_per_100g = density.kcal_per_100g
+        orm.protein_per_100g = density.protein_per_100g
+        orm.fat_per_100g = density.fat_per_100g
+        orm.carb_per_100g = density.carb_per_100g
+        orm.is_estimate = False  # вручную выверено — больше не оценка
+        orm.source = "manual"
+        await self._s.flush()
+        return _product_to_domain(orm)
 
 
 class SqlMealRepo:

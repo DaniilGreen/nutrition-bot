@@ -9,8 +9,9 @@ _COMMANDS = [
     BotCommand(command="today", description="Сегодня"),
     BotCommand(command="week", description="За неделю"),
     BotCommand(command="history", description="История"),
-    BotCommand(command="undo", description="Отменить последнее"),
+    BotCommand(command="undo", description="Отменить запись"),
     BotCommand(command="goal", description="Цель по калориям"),
+    BotCommand(command="products", description="Поправить КБЖУ продукта"),
     BotCommand(command="help", description="Помощь"),
 ]
 

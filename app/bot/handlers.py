@@ -2,6 +2,7 @@
 
 UX: постоянное reply-меню, командное меню, «печатает…».
 Отмена: контекстная (inline на свежей записи) — без вопроса; меню «Отменить» — выбор.
+Каталог: /products → правка КБЖУ продукта, который AI оценил неверно.
 Надёжность: глобальный error-handler ловит падения (в т.ч. AI) и отвечает юзеру.
 """
 from __future__ import annotations
@@ -29,10 +30,12 @@ from app.bot.keyboards import (
     main_menu_keyboard,
     meal_actions_keyboard,
     portion_keyboard,
+    products_fix_keyboard,
     undo_picker_keyboard,
 )
 from app.bot.states import MealStates
 from app.domain.goals import Goal
+from app.domain.value_objects import Density
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -120,6 +123,18 @@ async def cmd_undo(message: Message, app_user: User, assistant: Assistant) -> No
     await _show_undo_picker(message, app_user, assistant)
 
 
+@router.message(Command("products"))
+async def cmd_products(message: Message, app_user: User, assistant: Assistant) -> None:
+    products = await assistant.fixable_products(limit=10)
+    if not products:
+        await message.answer("Пока нечего править — нет продуктов с AI-оценкой.")
+        return
+    await message.answer(
+        "Продукты с AI-оценкой КБЖУ. Что поправить?",
+        reply_markup=products_fix_keyboard(products),
+    )
+
+
 # --- кнопки постоянного меню (приходят как обычный текст) ----------------------
 
 
@@ -166,6 +181,36 @@ async def btn_undo(
 ) -> None:
     await state.clear()
     await _show_undo_picker(message, app_user, assistant)
+
+
+# --- ввод исправленных КБЖУ продукта (FSM) ------------------------------------
+
+
+@router.message(MealStates.awaiting_density, F.text)
+async def on_density_input(
+    message: Message, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
+    nums = _parse_floats(message.text or "")
+    if len(nums) != 4:
+        await message.answer(
+            "Нужно 4 числа через пробел: ккал белки жиры углеводы. "
+            "Напр.: <code>165 31 3.6 0</code>\nИли нажми кнопку меню, чтобы выйти."
+        )
+        return
+    data = await state.get_data()
+    product_id = int(data.get("product_id", 0))
+    await state.clear()
+    product = await assistant.fix_product_density(
+        product_id, Density(nums[0], nums[1], nums[2], nums[3])
+    )
+    if product is None:
+        await message.answer("Продукт не найден.")
+        return
+    await message.answer(
+        f"✅ Обновил «{escape(product.display_name, quote=False)}»: "
+        f"{nums[0]:g} ккал · Б{nums[1]:g} Ж{nums[2]:g} У{nums[3]:g} на 100 г.\n"
+        f"Новые записи будут считаться по этим цифрам."
+    )
 
 
 # --- голос и свободный текст ---------------------------------------------------
@@ -268,6 +313,31 @@ async def on_item_del(callback: CallbackQuery, app_user: User, assistant: Assist
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("prod_fix:"))
+async def on_prod_fix(
+    callback: CallbackQuery, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    product_id = int((callback.data or "prod_fix:0").split(":", 1)[1])
+    product = await assistant.get_product(product_id)
+    if product is None:
+        await callback.answer("Продукт не найден.")
+        return
+    await state.set_state(MealStates.awaiting_density)
+    await state.update_data(product_id=product_id)
+    d = product.density
+    await callback.message.answer(
+        f"✏️ <b>{escape(product.display_name, quote=False)}</b>\n"
+        f"Сейчас на 100 г: {d.kcal_per_100g:g} ккал · "
+        f"Б{d.protein_per_100g:g} Ж{d.fat_per_100g:g} У{d.carb_per_100g:g}\n\n"
+        f"Пришли 4 числа через пробел — ккал, белки, жиры, углеводы на 100 г.\n"
+        f"Напр.: <code>165 31 3.6 0</code>"
+    )
+    await callback.answer()
+
+
 # --- helpers ------------------------------------------------------------------
 
 
@@ -297,6 +367,16 @@ async def _show_undo_picker(message: Message, app_user: User, assistant: Assista
 async def _send_typing(message: Message) -> None:
     with suppress(Exception):  # индикатор «печатает…» — не критично, если не отправится
         await message.bot.send_chat_action(message.chat.id, "typing")
+
+
+def _parse_floats(text: str) -> list[float]:
+    out: list[float] = []
+    for token in text.replace(",", ".").split():
+        try:
+            out.append(float(token))
+        except ValueError:
+            return []
+    return out
 
 
 async def _reply_message(

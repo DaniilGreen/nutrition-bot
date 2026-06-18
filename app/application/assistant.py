@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from app.application.dto import Intent, ParsedMessage, Unit
-from app.application.entities import User
+from app.application.entities import Product, User
 from app.application.meal_service import MealService
 from app.application.ports import NluPort, ProductRepo, SttPort
 from app.application.results import (
@@ -23,6 +23,7 @@ from app.application.results import (
 from app.application.stats_service import StatsService
 from app.application.weight_service import WeightService
 from app.domain.goals import Goal
+from app.domain.value_objects import Density
 
 
 class Assistant:
@@ -96,6 +97,17 @@ class Assistant:
             return None
         stats = await self._stats.daily(user)
         return MealLogged(meal=meal, remaining=stats.remaining)
+
+    # --- каталог продуктов (правка кривых AI-оценок) ---
+
+    async def fixable_products(self, limit: int = 10) -> list[Product]:
+        return await self._products.list_estimated(limit)
+
+    async def get_product(self, product_id: int) -> Product | None:
+        return await self._products.get_by_id(product_id)
+
+    async def fix_product_density(self, product_id: int, density: Density) -> Product | None:
+        return await self._products.update_density(product_id, density)
 
     async def _handle_meal(
         self, user: User, parsed: ParsedMessage, *, raw_input: str, input_type: str
