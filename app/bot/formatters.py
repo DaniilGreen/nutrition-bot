@@ -65,13 +65,12 @@ def _format_meal(r: MealLogged) -> str:
             f"• {_esc(it.name_snapshot)} — {_n(it.grams)} г · {_n(m.kcal)} ккал · "
             f"Б{_n(m.protein)} Ж{_n(m.fat)} У{_n(m.carb)}"
         )
-    t = r.meal.totals
-    lines += [
-        "",
-        f"Итого: <b>{_n(t.kcal)} ккал</b> · Б{_n(t.protein)} Ж{_n(t.fat)} У{_n(t.carb)}",
-        "",
-        _remaining_block(r.remaining),
-    ]
+    if len(r.meal.items) > 1:  # для одной позиции «Итого» дублирует строку — не показываем
+        t = r.meal.totals
+        lines.append(
+            f"\nИтого: <b>{_n(t.kcal)} ккал</b> · Б{_n(t.protein)} Ж{_n(t.fat)} У{_n(t.carb)}"
+        )
+    lines += ["", _remaining_block(r.remaining)]
     notes = []
     if r.meal.estimated:
         notes.append("≈ часть цифр — AI-оценка. Неверно? /products")
@@ -115,15 +114,7 @@ def _format_weight_trend(t: WeightTrend) -> str:
 
 
 def _format_stats(rem: Remaining, meals_count: int) -> str:
-    return (
-        f"📊 Сегодня · приёмов: {meals_count}\n\n"
-        f"{_kcal_line(rem)}\n\n"
-        "<code>"
-        f"{_macro_line('🥩 Белок', rem.consumed.protein, rem.goal.protein_g)}\n"
-        f"{_macro_line('🧈 Жир', rem.consumed.fat, rem.goal.fat_g)}\n"
-        f"{_macro_line('🍞 Углеводы', rem.consumed.carb, rem.goal.carb_g)}"
-        "</code>"
-    )
+    return f"📊 Сегодня · приёмов: {meals_count}\n\n{_dashboard(rem)}"
 
 
 def _format_weekly(r: WeeklyStats) -> str:
@@ -181,16 +172,24 @@ def _format_unknown() -> str:
     )
 
 
-def _kcal_line(rem: Remaining, fill: str = "▰", empty: str = "▱") -> str:
-    consumed = rem.consumed.kcal
-    goal = rem.goal.daily_kcal
-    pct = round(100 * consumed / goal) if goal else 0
-    head = f"🔥 <b>{_n(consumed)} / {_n(goal)} ккал</b>"
-    if rem.kcal_left >= 0:
-        head += f" · осталось {_n(rem.kcal_left)}"
-    else:
-        head += f" · ⚠️ +{_n(-rem.kcal_left)} сверх"
-    return f"{head}\n{_bar(consumed, goal, fill, empty)} {pct}%"
+def _kcal_remaining(rem: Remaining) -> str:
+    left = rem.kcal_left
+    if left >= 0:
+        return f"осталось {_n(left)} ккал"
+    return f"⚠️ +{_n(-left)} ккал сверх"
+
+
+def _dashboard(rem: Remaining) -> str:
+    """Выровненная сетка B (моноширинно <code>): ккал-строка + пустая строка + БЖУ; ниже остаток."""
+    macros = "\n".join(
+        [
+            _macro_line("🥩 Белок", rem.consumed.protein, rem.goal.protein_g),
+            _macro_line("🧈 Жир", rem.consumed.fat, rem.goal.fat_g),
+            _macro_line("🍞 Углеводы", rem.consumed.carb, rem.goal.carb_g),
+        ]
+    )
+    kcal = _macro_line("🔥 Ккал", rem.consumed.kcal, rem.goal.daily_kcal)
+    return f"<code>{kcal}\n\n{macros}</code>\n{_kcal_remaining(rem)}"
 
 
 def _macro_line(label: str, consumed: float, goal: float) -> str:
@@ -201,12 +200,7 @@ def _macro_line(label: str, consumed: float, goal: float) -> str:
 
 
 def _remaining_block(rem: Remaining) -> str:
-    return (
-        f"{_kcal_line(rem)}\n"
-        f"🥩 Б {_n(rem.consumed.protein)}/{_n(rem.goal.protein_g)} · "
-        f"🧈 Ж {_n(rem.consumed.fat)}/{_n(rem.goal.fat_g)} · "
-        f"🍞 У {_n(rem.consumed.carb)}/{_n(rem.goal.carb_g)}"
-    )
+    return _dashboard(rem)
 
 
 def _bar(value: float, goal: float, fill: str = "▰", empty: str = "▱", width: int = 10) -> str:
