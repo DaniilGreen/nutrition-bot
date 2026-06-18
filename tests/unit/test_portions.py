@@ -62,3 +62,21 @@ def test_final_default() -> None:
     r = _call()
     assert r.grams == DEFAULT_PORTION_G
     assert r.assumed is True
+
+
+def test_explicit_grams_beats_portion_fallback() -> None:
+    # «30 грамм одна порция», у продукта нет курируемых размеров → 30 г, не дефолт 300
+    r = _call(unit="portion", portion_hint="medium", grams_estimate=30)
+    assert r.grams == 30
+    assert r.assumed is False
+
+
+def test_curated_portion_beats_explicit_grams() -> None:
+    # У блюда есть курируемый размер «большая» → он точнее оценки граммов LLM
+    r = _call(
+        unit="portion",
+        portion_hint="large",
+        grams_estimate=700,
+        product_portion_sizes={"large": 650},
+    )
+    assert r.grams == 650

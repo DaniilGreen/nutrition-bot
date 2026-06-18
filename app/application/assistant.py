@@ -52,6 +52,8 @@ class Assistant:
             return await self._handle_meal(user, parsed, raw_input=text, input_type=input_type)
 
         if parsed.intent is Intent.WEIGHT and parsed.weight_kg is not None:
+            if not 20 <= parsed.weight_kg <= 400:  # человек весит в этих пределах
+                return Unknown(reason="вес вне разумных пределов (20–400 кг)")
             log, delta = await self._weights.log(user, parsed.weight_kg)
             return WeightLogged(log=log, delta_kg=delta)
 

@@ -8,6 +8,7 @@ UX: постоянное reply-меню, командное меню, «печа
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import suppress
 from html import escape
 
@@ -18,6 +19,7 @@ from aiogram.types import CallbackQuery, ErrorEvent, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.assistant import Assistant
+from app.application.dto import Unit
 from app.application.entities import User
 from app.application.ports import UserRepo
 from app.application.results import ClarificationNeeded, MealLogged, Result
@@ -244,6 +246,47 @@ async def on_density_input(
         f"{nums[0]:g} ккал · Б{nums[1]:g} Ж{nums[2]:g} У{nums[3]:g} на 100 г.\n"
         f"Новые записи будут считаться по этим цифрам."
     )
+
+
+@router.message(MealStates.awaiting_portion, F.text)
+async def on_portion_text(
+    message: Message,
+    app_user: User,
+    assistant: Assistant,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    """Ответ на вопрос о порции ТЕКСТОМ (не тапом): «30 грамм» / «большая»."""
+    data = await state.get_data()
+    draft = data.get("draft")
+    raw = str(data.get("raw", ""))
+    if draft is None:  # черновик потерян — обрабатываем как обычный ввод
+        await state.clear()
+        result = await assistant.process(app_user, message.text or "", input_type="text")
+        await session.commit()
+        await _reply_message(message, result, state, raw=message.text or "")
+        return
+
+    item = draft.items[int(data.get("item_index", 0))]
+    hint = _portion_word(message.text or "")
+    if hint is not None:
+        item.unit = Unit.PORTION
+        item.portion_hint = hint
+    else:
+        grams = _first_number(message.text or "")
+        if grams is None:
+            await message.answer(
+                "Ответь размером (Маленькая / Средняя / Большая) или граммами, напр. «250»."
+            )
+            return
+        item.unit = Unit.GRAM
+        item.grams = grams
+        item.portion_hint = None
+
+    result = await assistant.continue_meal(app_user, draft, raw_input=raw)
+    await session.commit()
+    await state.clear()
+    await _reply_message(message, result, state, raw=raw)
 
 
 @router.message(ProfileStates.body, F.text)
@@ -504,6 +547,22 @@ def _parse_floats(text: str) -> list[float]:
         except ValueError:
             return []
     return out
+
+
+def _portion_word(text: str) -> str | None:
+    low = text.lower()
+    if "мал" in low:
+        return "small"
+    if "средн" in low:
+        return "medium"
+    if "больш" in low:
+        return "large"
+    return None
+
+
+def _first_number(text: str) -> float | None:
+    m = re.search(r"\d+(?:[.,]\d+)?", text)
+    return float(m.group().replace(",", ".")) if m else None
 
 
 async def _reply_message(

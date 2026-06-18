@@ -1,8 +1,11 @@
 """Разрешение веса порции в граммы.
 
-Самый большой рычаг калорийности и самый неопределённый вход. Логика:
-явный вес → счёт штук → порция S/M/L → оценка LLM → дефолт.
-Флаг `assumed` показывает, что вес угадан (драйвер уточняющего вопроса в M2).
+Самый большой рычаг калорийности и самый неопределённый вход. Приоритет:
+явный вес → счёт штук → курируемый размер порции → явные граммы-оценка →
+порция-дефолт → дефолт. Флаг `assumed` показывает, что вес угадан.
+
+Важно: явные граммы из текста («30 грамм») идут ВЫШЕ дефолтной порции — иначе
+слово «порция» затирает явный вес (баг: «30 грамм одна порция» → 300 г).
 """
 from __future__ import annotations
 
@@ -42,18 +45,25 @@ def resolve_grams(
             return GramsResolution(grams=quantity * piece, assumed=False)
         return GramsResolution(grams=quantity * DEFAULT_PIECE_WEIGHT_G, assumed=True)
 
-    # 3. Порция S/M/L ("тарелка фо бо" + ответ на уточнение).
+    # 3. Порция с курируемым размером (для блюд — самый точный путь).
+    if (
+        unit == "portion"
+        and portion_hint is not None
+        and product_portion_sizes
+        and portion_hint in product_portion_sizes
+    ):
+        return GramsResolution(grams=product_portion_sizes[portion_hint], assumed=False)
+
+    # 4. Явные граммы из текста — важнее дефолтной порции ("30 грамм одна порция").
+    if grams_estimate is not None:
+        return GramsResolution(grams=grams_estimate, assumed=False)
+
+    # 5. Порция без курируемых размеров → дефолт × множитель.
     if unit == "portion" and portion_hint is not None:
-        if product_portion_sizes and portion_hint in product_portion_sizes:
-            return GramsResolution(grams=product_portion_sizes[portion_hint], assumed=False)
         base = product_default_portion_g or DEFAULT_PORTION_G
         factor = PORTION_FALLBACK_FACTOR.get(portion_hint, 1.0)
         return GramsResolution(grams=base * factor, assumed=True)
 
-    # 4. Оценка граммов от LLM как есть.
-    if grams_estimate is not None:
-        return GramsResolution(grams=grams_estimate, assumed=False)
-
-    # 5. Последний дефолт.
+    # 6. Последний дефолт.
     base = product_default_portion_g or DEFAULT_PORTION_G
     return GramsResolution(grams=base, assumed=True)
