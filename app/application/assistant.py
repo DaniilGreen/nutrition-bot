@@ -89,6 +89,7 @@ class Assistant:
 
     async def weight_trend(self, user: User, limit: int = 14) -> WeightTrend:
         logs = await self._weights.history(user, limit)
+        logs = [log for log in logs if 20 <= log.weight_kg <= 400]  # отсечь мусорные значения
         return WeightTrend(logs=logs, timezone=user.timezone)
 
     async def log_weight(self, user: User, weight_kg: float) -> tuple[WeightLog, float | None]:
