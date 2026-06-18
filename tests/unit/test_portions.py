@@ -71,6 +71,13 @@ def test_explicit_grams_beats_portion_fallback() -> None:
     assert r.assumed is False
 
 
+def test_pieces_without_weight_use_grams_estimate() -> None:
+    # «3 яйца», вес штуки неизвестен, но LLM оценил суммарно 150 г → 150, не дефолт 300
+    r = _call(unit="piece", quantity=3, grams_estimate=150)
+    assert r.grams == 150
+    assert r.assumed is True
+
+
 def test_curated_portion_beats_explicit_grams() -> None:
     # У блюда есть курируемый размер «большая» → он точнее оценки граммов LLM
     r = _call(

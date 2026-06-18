@@ -43,6 +43,9 @@ def resolve_grams(
         piece = product_unit_weight_g or parsed_unit_weight_g
         if piece is not None:
             return GramsResolution(grams=quantity * piece, assumed=False)
+        if grams_estimate is not None:
+            # нет веса штуки, но LLM оценил суммарные граммы — доверяем оценке, не дефолту 100
+            return GramsResolution(grams=grams_estimate, assumed=True)
         return GramsResolution(grams=quantity * DEFAULT_PIECE_WEIGHT_G, assumed=True)
 
     # 3. Порция с курируемым размером (для блюд — самый точный путь).
