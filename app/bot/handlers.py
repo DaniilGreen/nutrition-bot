@@ -22,7 +22,12 @@ from app.application.assistant import Assistant
 from app.application.dto import Unit
 from app.application.entities import User
 from app.application.ports import UserRepo
-from app.application.results import ClarificationNeeded, MealLogged, Result
+from app.application.results import (
+    ClarificationNeeded,
+    MealLogged,
+    Result,
+    VariantClarificationNeeded,
+)
 from app.bot.formatters import format_result
 from app.bot.keyboards import (
     BTN_GOAL,
@@ -40,6 +45,7 @@ from app.bot.keyboards import (
     products_fix_keyboard,
     sex_keyboard,
     undo_picker_keyboard,
+    variant_keyboard,
 )
 from app.bot.states import MealStates, ProfileStates
 from app.domain.goals import Goal, goal_from_profile
@@ -375,13 +381,36 @@ async def on_portion(
 
     result = await assistant.continue_meal(app_user, draft, raw_input=raw)
     await session.commit()
-    if isinstance(result, ClarificationNeeded):
-        await state.update_data(draft=result.draft, item_index=result.item_index)
-        await callback.message.edit_text(format_result(result), reply_markup=portion_keyboard())
-    else:
-        await state.clear()
-        markup = meal_actions_keyboard(result.meal) if isinstance(result, MealLogged) else None
-        await callback.message.edit_text(format_result(result), reply_markup=markup)
+    await _render_after_continue(callback.message, result, state, raw=raw)
+
+
+@router.callback_query(F.data.startswith("variant:"))
+async def on_variant(
+    callback: CallbackQuery,
+    app_user: User,
+    assistant: Assistant,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    draft = data.get("draft")
+    if draft is None or not isinstance(callback.message, Message):
+        await callback.answer("Запись устарела — отправь приём пищи заново.")
+        return
+
+    item_index = int(data.get("item_index", 0))
+    raw = str(data.get("raw", ""))
+    product_id = int((callback.data or "variant:0").split(":", 1)[1])
+    product = await assistant.get_product(product_id)
+    if product is None:
+        await callback.answer("Вариант не найден — отправь заново.")
+        return
+
+    draft.items[item_index].canonical_key = product.canonical_key
+    draft.items[item_index].ambiguous = False  # выбор сделан → конкретный продукт
+    result = await assistant.continue_meal(app_user, draft, raw_input=raw)
+    await session.commit()
+    await _render_after_continue(callback.message, result, state, raw=raw)
     await callback.answer()
 
 
@@ -572,7 +601,31 @@ async def _reply_message(
         await state.set_state(MealStates.awaiting_portion)
         await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
         await message.answer(format_result(result), reply_markup=portion_keyboard())
+    elif isinstance(result, VariantClarificationNeeded):
+        await state.set_state(MealStates.awaiting_variant)
+        await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
+        await message.answer(format_result(result), reply_markup=variant_keyboard(result.options))
     elif isinstance(result, MealLogged):
         await message.answer(format_result(result), reply_markup=meal_actions_keyboard(result.meal))
     else:
         await message.answer(format_result(result))
+
+
+async def _render_after_continue(
+    message: Message, result: Result, state: FSMContext, *, raw: str
+) -> None:
+    """После ответа на уточнение (порция/вариант): следующий вопрос или финал — правит сообщение."""
+    if isinstance(result, ClarificationNeeded):
+        await state.set_state(MealStates.awaiting_portion)
+        await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
+        await message.edit_text(format_result(result), reply_markup=portion_keyboard())
+    elif isinstance(result, VariantClarificationNeeded):
+        await state.set_state(MealStates.awaiting_variant)
+        await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
+        await message.edit_text(
+            format_result(result), reply_markup=variant_keyboard(result.options)
+        )
+    else:
+        await state.clear()
+        markup = meal_actions_keyboard(result.meal) if isinstance(result, MealLogged) else None
+        await message.edit_text(format_result(result), reply_markup=markup)

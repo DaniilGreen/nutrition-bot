@@ -1,9 +1,10 @@
 """Реализация портов на SQLAlchemy. Маппинг ORM <-> доменные dataclass'ы."""
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.entities import Meal, MealItem, Product, User, WeightLog
@@ -159,6 +160,12 @@ class SqlProductRepo:
         res = await self._s.execute(select(ProductORM))
         return [_product_to_domain(o) for o in res.scalars().all()]
 
+    async def list_by_category(self, category: str) -> list[Product]:
+        res = await self._s.execute(
+            select(ProductORM).where(ProductORM.category == category)
+        )
+        return [_product_to_domain(o) for o in res.scalars().all()]
+
     async def list_estimated(self, limit: int) -> list[Product]:
         res = await self._s.execute(
             select(ProductORM)
@@ -273,6 +280,26 @@ class SqlMealRepo:
         orm.total_carb = round(sum(i.carb for i in orm.items), 1)
         await self._s.flush()
         return _meal_to_domain(orm)
+
+    async def most_frequent_item(
+        self, user_id: int, product_ids: Sequence[int], since: datetime
+    ) -> int | None:
+        """Самый частый product_id из набора в записях юзера с since (tie-break — свежесть)."""
+        if not product_ids:
+            return None
+        res = await self._s.execute(
+            select(MealItemORM.product_id)
+            .join(MealORM, MealItemORM.meal_id == MealORM.id)
+            .where(
+                MealORM.user_id == user_id,
+                MealItemORM.product_id.in_(list(product_ids)),
+                MealORM.eaten_at >= since,
+            )
+            .group_by(MealItemORM.product_id)
+            .order_by(func.count().desc(), func.max(MealORM.eaten_at).desc())
+            .limit(1)
+        )
+        return res.scalar_one_or_none()
 
     async def _delete_orm(self, orm: MealORM | None) -> Meal | None:
         if orm is None:

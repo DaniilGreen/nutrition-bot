@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.application.dto import ParsedMessage
-from app.application.entities import Meal, MealItem, WeightLog
+from app.application.entities import Meal, MealItem, Product, WeightLog
 from app.domain.goals import Goal, Remaining
 from app.domain.value_objects import Macros
 
@@ -22,6 +22,16 @@ class ClarificationNeeded:
     draft: ParsedMessage
     item_index: int
     item_name: str
+
+
+@dataclass
+class VariantClarificationNeeded:
+    """FR-20: generic-имя неоднозначно, истории нет — выбрать вариант из семейства."""
+
+    draft: ParsedMessage
+    item_index: int
+    item_name: str
+    options: list[Product]
 
 
 @dataclass
@@ -85,6 +95,7 @@ class Unknown:
 Result = (
     MealLogged
     | ClarificationNeeded
+    | VariantClarificationNeeded
     | WeightLogged
     | WeightTrend
     | DailyStats

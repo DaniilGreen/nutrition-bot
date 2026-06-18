@@ -14,6 +14,7 @@ from __future__ import annotations
 import difflib
 import re
 from collections.abc import Sequence
+from datetime import timedelta
 
 from app.application.dto import ParsedItem, ParsedMessage
 from app.application.entities import Meal, MealItem, Product, User
@@ -29,6 +30,7 @@ _MIN_KEY_LEN = 3
 _MATCH_THRESHOLD = 0.82  # порог имени для RAG-совпадения с каталогом
 _CORRECTION_LOOKBACK = 10  # сколько недавних записей просматриваем для «удали X»
 _CORRECTION_NAME_THRESHOLD = 0.8  # порог нечёткого совпадения имени при удалении
+_HISTORY_WINDOW_DAYS = 90  # окно истории для выбора варианта generic-имени (FR-20)
 
 
 class MealService:
@@ -45,7 +47,7 @@ class MealService:
         items: list[MealItem] = []
         estimated = False
         for parsed_item in parsed.items:
-            product = await self._resolve_product(parsed_item)
+            product = await self._resolve_product_for(user_id, parsed_item)
             estimated = estimated or product.is_estimate
             resolution = resolve_grams(
                 unit=parsed_item.unit.value,
@@ -102,6 +104,47 @@ class MealService:
                     await self._meals.remove_item(user_id, meal.id, item.id)
                     return item
         return None
+
+    async def variant_options_if_needed(
+        self, user: User, item: ParsedItem
+    ) -> list[Product] | None:
+        """FR-20: если generic-имя неоднозначно и истории нет — варианты для вопроса; иначе None."""
+        kind, products = await self._variant_resolution(_require_id(user), item)
+        return products if kind == "clarify" else None
+
+    async def _resolve_product_for(self, user_id: int, item: ParsedItem) -> Product:
+        kind, products = await self._variant_resolution(user_id, item)
+        if kind == "use" and products:
+            return products[0]  # вариант выбран по истории/единственный в семействе
+        return await self._resolve_product(item)
+
+    async def _variant_resolution(
+        self, user_id: int, item: ParsedItem
+    ) -> tuple[str, list[Product]]:
+        """Разрешение варианта generic-имени (FR-20). Возвращает (kind, products):
+
+        normal — обычный путь; use — взять products[0]; clarify — спросить (products = варианты).
+        """
+        key = _canonical_key(item.canonical_key, item.name)
+        concrete = await self._products.get_by_key(key)
+        if concrete is not None and not item.ambiguous:
+            return ("normal", [])  # точный продукт назван явно
+        category = concrete.category if concrete is not None else key
+        if not category:
+            return ("normal", [])
+        variants = await self._products.list_by_category(category)
+        if not variants:
+            return ("normal", [])  # семейства нет — обычный путь (LLM-оценка/RAG)
+        if len(variants) == 1:
+            return ("use", variants)  # единственный вариант семейства
+        since = self._clock() - timedelta(days=_HISTORY_WINDOW_DAYS)
+        ids = [v.id for v in variants if v.id is not None]
+        dominant_id = await self._meals.most_frequent_item(user_id, ids, since)
+        if dominant_id is not None:
+            chosen = next((v for v in variants if v.id == dominant_id), None)
+            if chosen is not None:
+                return ("use", [chosen])  # «как обычно» — из истории юзера
+        return ("clarify", variants)  # истории нет → спросить
 
     async def _resolve_product(self, parsed_item: ParsedItem) -> Product:
         key = _canonical_key(parsed_item.canonical_key, parsed_item.name)

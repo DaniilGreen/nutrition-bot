@@ -35,23 +35,23 @@ CURATED: list[dict] = [
     {"key": "caesar_salad", "name": "Салат цезарь", "kcal": 200, "p": 9, "f": 15, "c": 7, "sizes": _S_MAIN},
     {"key": "vinaigrette_salad", "name": "Винегрет", "kcal": 80, "p": 1.5, "f": 5, "c": 7, "sizes": _S_MAIN},
     {"key": "goulash", "name": "Гуляш", "kcal": 150, "p": 14, "f": 8, "c": 4, "sizes": _S_MAIN},
-    {"key": "cutlet_pork_beef", "name": "Котлета", "kcal": 250, "p": 15, "f": 18, "c": 8, "sizes": None},
-    {"key": "cutlet_chicken", "name": "Куриная котлета", "kcal": 210, "p": 16, "f": 13, "c": 8, "sizes": None},
+    {"key": "cutlet_pork_beef", "name": "Котлета", "kcal": 250, "p": 15, "f": 18, "c": 8, "sizes": None, "cat": "cutlet"},
+    {"key": "cutlet_chicken", "name": "Куриная котлета", "kcal": 210, "p": 16, "f": 13, "c": 8, "sizes": None, "cat": "cutlet"},
     {"key": "syrniki", "name": "Сырники", "kcal": 215, "p": 17, "f": 8, "c": 18, "sizes": None},
     {"key": "bliny", "name": "Блины", "kcal": 190, "p": 6, "f": 7, "c": 26, "sizes": None},
     {"key": "omelette", "name": "Омлет", "kcal": 180, "p": 11, "f": 14, "c": 2, "sizes": None},
     {"key": "fried_eggs", "name": "Яичница", "kcal": 190, "p": 13, "f": 15, "c": 1, "sizes": None},
-    {"key": "oatmeal_water", "name": "Овсянка на воде", "kcal": 90, "p": 3, "f": 2, "c": 15, "sizes": None},
-    {"key": "oatmeal_milk", "name": "Овсянка на молоке", "kcal": 120, "p": 4.5, "f": 4, "c": 16, "sizes": None},
+    {"key": "oatmeal_water", "name": "Овсянка на воде", "kcal": 90, "p": 3, "f": 2, "c": 15, "sizes": None, "cat": "oatmeal"},
+    {"key": "oatmeal_milk", "name": "Овсянка на молоке", "kcal": 120, "p": 4.5, "f": 4, "c": 16, "sizes": None, "cat": "oatmeal"},
     {"key": "buckwheat_boiled", "name": "Гречка отварная", "kcal": 110, "p": 4, "f": 1, "c": 21, "sizes": None},
     {"key": "rice_boiled", "name": "Рис отварной", "kcal": 130, "p": 2.7, "f": 0.3, "c": 28, "sizes": None},
     {"key": "pasta_boiled", "name": "Макароны отварные", "kcal": 115, "p": 3.5, "f": 0.4, "c": 23, "sizes": None},
     {"key": "mashed_potato", "name": "Картофельное пюре", "kcal": 90, "p": 2, "f": 3, "c": 14, "sizes": None},
-    {"key": "tvorog_5", "name": "Творог 5%", "kcal": 120, "p": 16, "f": 5, "c": 3, "sizes": None},
-    {"key": "tvorog_9", "name": "Творог 9%", "kcal": 160, "p": 16, "f": 9, "c": 3, "sizes": None},
-    {"key": "chicken_breast_boiled", "name": "Куриная грудка отварная", "kcal": 130, "p": 29, "f": 1.8, "c": 0, "sizes": None},
-    {"key": "chicken_breast_fried", "name": "Куриная грудка жареная", "kcal": 200, "p": 30, "f": 8, "c": 0, "sizes": None},
-    {"key": "chicken_grilled", "name": "Курица гриль", "kcal": 200, "p": 22, "f": 12, "c": 0, "sizes": None},
+    {"key": "tvorog_5", "name": "Творог 5%", "kcal": 120, "p": 16, "f": 5, "c": 3, "sizes": None, "cat": "tvorog"},
+    {"key": "tvorog_9", "name": "Творог 9%", "kcal": 160, "p": 16, "f": 9, "c": 3, "sizes": None, "cat": "tvorog"},
+    {"key": "chicken_breast_boiled", "name": "Куриная грудка отварная", "kcal": 130, "p": 29, "f": 1.8, "c": 0, "sizes": None, "cat": "chicken"},
+    {"key": "chicken_breast_fried", "name": "Куриная грудка жареная", "kcal": 200, "p": 30, "f": 8, "c": 0, "sizes": None, "cat": "chicken"},
+    {"key": "chicken_grilled", "name": "Курица гриль", "kcal": 200, "p": 22, "f": 12, "c": 0, "sizes": None, "cat": "chicken"},
     {"key": "whey_protein", "name": "Протеин (сывороточный)", "kcal": 370, "p": 75, "f": 6, "c": 8, "sizes": None},
 ]
 
@@ -92,6 +92,7 @@ async def seed_curated(session_factory: object) -> int:
                 continue  # юзер уже выверил вручную — не перетираем
             target = existing or ProductORM(canonical_key=r["key"])
             target.display_name = r["name"]
+            target.category = r.get("cat")
             target.kcal_per_100g = r["kcal"]
             target.protein_per_100g = r["p"]
             target.fat_per_100g = r["f"]

@@ -18,6 +18,7 @@ from app.application.results import (
     MealLogged,
     Result,
     Unknown,
+    VariantClarificationNeeded,
     WeeklyStats,
     WeightLogged,
     WeightTrend,
@@ -33,6 +34,8 @@ def format_result(result: Result) -> str:
         return _format_meal(result)
     if isinstance(result, ClarificationNeeded):
         return _format_clarification(result)
+    if isinstance(result, VariantClarificationNeeded):
+        return _format_variant_clarification(result)
     if isinstance(result, WeightLogged):
         return _format_weight(result)
     if isinstance(result, WeightTrend):
@@ -81,6 +84,10 @@ def _format_meal(r: MealLogged) -> str:
 
 def _format_clarification(r: ClarificationNeeded) -> str:
     return f"🤔 «{_esc(r.item_name)}» — какая порция?"
+
+
+def _format_variant_clarification(r: VariantClarificationNeeded) -> str:
+    return f"🤔 «{_esc(r.item_name)}» — уточни вариант (запомню как обычный):"
 
 
 def _format_weight(r: WeightLogged) -> str:

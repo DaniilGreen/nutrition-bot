@@ -10,6 +10,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from app.application.entities import Meal, Product
 
 PORTION_CALLBACK_PREFIX = "portion"
+VARIANT_CALLBACK_PREFIX = "variant"
 MEAL_UNDO_PREFIX = "meal_undo"
 ITEM_DEL_PREFIX = "item_del"
 PROD_FIX_PREFIX = "prod_fix"
@@ -40,6 +41,19 @@ def portion_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="Средняя", callback_data=f"{PORTION_CALLBACK_PREFIX}:medium")
     builder.button(text="Большая", callback_data=f"{PORTION_CALLBACK_PREFIX}:large")
     builder.adjust(3)
+    return builder.as_markup()
+
+
+def variant_keyboard(options: Sequence[Product]) -> InlineKeyboardMarkup:
+    """FR-20: выбор варианта неоднозначного generic-имени (кнопка на продукт семейства)."""
+    builder = InlineKeyboardBuilder()
+    for product in options:
+        if product.id is not None:
+            builder.button(
+                text=f"{_short(product.display_name)} ({product.density.kcal_per_100g:g})",
+                callback_data=f"{VARIANT_CALLBACK_PREFIX}:{product.id}",
+            )
+    builder.adjust(1)
     return builder.as_markup()
 
 

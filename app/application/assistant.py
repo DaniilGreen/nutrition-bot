@@ -19,6 +19,7 @@ from app.application.results import (
     MealLogged,
     Result,
     Unknown,
+    VariantClarificationNeeded,
     WeeklyStats,
     WeightLogged,
     WeightTrend,
@@ -133,6 +134,13 @@ class Assistant:
             return ClarificationNeeded(
                 draft=parsed, item_index=idx, item_name=parsed.items[idx].name
             )
+
+        for i, item in enumerate(parsed.items):  # FR-20: неоднозначное generic-имя без истории
+            options = await self._meals.variant_options_if_needed(user, item)
+            if options:
+                return VariantClarificationNeeded(
+                    draft=parsed, item_index=i, item_name=item.name, options=options
+                )
 
         meal = await self._meals.log(user, parsed, raw_input=raw_input, input_type=input_type)
         stats = await self._stats.daily(user)
