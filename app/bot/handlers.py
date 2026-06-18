@@ -29,7 +29,7 @@ from app.application.results import (
     Result,
     VariantClarificationNeeded,
 )
-from app.bot.formatters import format_result
+from app.bot.formatters import format_goal, format_result
 from app.bot.keyboards import (
     BTN_GOAL,
     BTN_HISTORY,
@@ -205,10 +205,9 @@ async def btn_goal(
     await state.clear()
     goal = await assistant.current_goal(app_user)
     await message.answer(
-        f"🎯 Текущая цель: <b>{goal.daily_kcal:g} ккал/день</b>\n"
-        f"Б{goal.protein_g:g} Ж{goal.fat_g:g} У{goal.carb_g:g}\n\n"
-        f"Изменить вручную: <code>/goal 1800</code>\n"
-        f"Или ⚙️ Профиль — посчитаю автоматически."
+        "🎯 Цель на день:\n"
+        f"{format_goal(goal)}\n\n"
+        "Изменить: <code>/goal 1800</code> или ⚙️ Профиль (авто)."
     )
 
 
@@ -525,9 +524,8 @@ async def on_profile_goal(
 
     await callback.message.answer(
         "✅ Готово! Дневная цель:\n"
-        f"🔥 <b>{goal.daily_kcal:g} ккал</b>\n"
-        f"🥩 Б {goal.protein_g:g} · 🧈 Ж {goal.fat_g:g} · 🍞 У {goal.carb_g:g}\n\n"
-        "Поменять вручную: <code>/goal 1800</code>"
+        f"{format_goal(goal)}\n\n"
+        "Поменять: <code>/goal 1800</code>"
     )
     await callback.answer()
 

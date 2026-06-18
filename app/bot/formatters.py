@@ -23,7 +23,7 @@ from app.application.results import (
     WeightLogged,
     WeightTrend,
 )
-from app.domain.goals import Remaining
+from app.domain.goals import Goal, Remaining
 
 _LOW_CONFIDENCE = 0.6  # ниже — помечаем разбор как сомнительный
 _SPARK = "▁▂▃▄▅▆▇█"
@@ -97,6 +97,19 @@ def _format_weight(r: WeightLogged) -> str:
     return text
 
 
+def format_goal(goal: Goal) -> str:
+    """Грид дневной цели в общем выровненном стиле (для /goal и завершения профиля)."""
+    rows = "\n".join(
+        [
+            f"{'🔥 Ккал':<10} {round(goal.daily_kcal)}",
+            f"{'🥩 Белок':<10} {round(goal.protein_g)} г",
+            f"{'🧈 Жир':<10} {round(goal.fat_g)} г",
+            f"{'🍞 Углеводы':<10} {round(goal.carb_g)} г",
+        ]
+    )
+    return f"<code>{rows}</code>"
+
+
 def _format_weight_trend(t: WeightTrend) -> str:
     if not t.logs:
         return "⚖️ Пока нет записей веса. Напиши: «вес 86.8»."
@@ -108,7 +121,8 @@ def _format_weight_trend(t: WeightTrend) -> str:
         delta = round(newest.weight_kg - chrono[0].weight_kg, 1)
         days = (newest.measured_at - chrono[0].measured_at).days
         sign = "+" if delta > 0 else ""
-        text += f"\nΔ {sign}{_n(delta)} кг за {days} дн.  {spark}"
+        period = f"за {days} дн." if days >= 1 else "сегодня"
+        text += f"\n{spark}  Δ {sign}{_n(delta)} кг {period}"
     text += f"\nЗаписей: {len(t.logs)} · обновить: «вес 86.5»"
     return text
 
