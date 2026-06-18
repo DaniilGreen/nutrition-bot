@@ -1,4 +1,4 @@
-"""Клавиатуры: reply-меню, inline-кнопки порций, действий, выбора отмены и правки продукта."""
+"""Клавиатуры: reply-меню + inline для порций, действий, отмены, правки продукта, профиля."""
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -18,17 +18,19 @@ PROD_FIX_PREFIX = "prod_fix"
 BTN_TODAY = "📊 Сегодня"
 BTN_WEEK = "📈 Неделя"
 BTN_HISTORY = "🗒 История"
+BTN_WEIGHT = "⚖️ Вес"
 BTN_GOAL = "🎯 Цель"
+BTN_PROFILE = "⚙️ Профиль"
 BTN_UNDO = "↩️ Отменить"
 
-MENU_BUTTONS = (BTN_TODAY, BTN_WEEK, BTN_HISTORY, BTN_GOAL, BTN_UNDO)
+MENU_BUTTONS = (BTN_TODAY, BTN_WEEK, BTN_HISTORY, BTN_WEIGHT, BTN_GOAL, BTN_PROFILE, BTN_UNDO)
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     for text in MENU_BUTTONS:
         builder.button(text=text)
-    builder.adjust(3, 2)
+    builder.adjust(3, 3, 1)
     return builder.as_markup(resize_keyboard=True, is_persistent=True)
 
 
@@ -83,6 +85,32 @@ def products_fix_keyboard(products: Sequence[Product]) -> InlineKeyboardMarkup:
                 text=f"✏️ {_short(product.display_name)} ({product.density.kcal_per_100g:g} ккал)",
                 callback_data=f"{PROD_FIX_PREFIX}:{product.id}",
             )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def sex_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="♂️ Мужской", callback_data="prof_sex:male")
+    builder.button(text="♀️ Женский", callback_data="prof_sex:female")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def activity_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🛋 Низкая", callback_data="prof_act:low")
+    builder.button(text="🚶 Средняя", callback_data="prof_act:medium")
+    builder.button(text="🏃 Высокая", callback_data="prof_act:high")
+    builder.adjust(3)
+    return builder.as_markup()
+
+
+def goal_type_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔻 Похудение", callback_data="prof_goal:cut")
+    builder.button(text="⚖️ Поддержание", callback_data="prof_goal:maintain")
+    builder.button(text="🔺 Набор", callback_data="prof_goal:bulk")
     builder.adjust(1)
     return builder.as_markup()
 

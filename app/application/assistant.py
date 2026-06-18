@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from app.application.dto import Intent, ParsedMessage, Unit
-from app.application.entities import Product, User
+from app.application.entities import Product, User, WeightLog
 from app.application.meal_service import MealService
 from app.application.ports import NluPort, ProductRepo, SttPort
 from app.application.results import (
@@ -83,6 +83,9 @@ class Assistant:
     async def history(self, user: User, limit: int = 10) -> History:
         meals = await self._meals.recent(user, limit)
         return History(meals=meals, timezone=user.timezone)
+
+    async def log_weight(self, user: User, weight_kg: float) -> tuple[WeightLog, float | None]:
+        return await self._weights.log(user, weight_kg)
 
     async def undo(self, user: User) -> MealDeleted:
         return MealDeleted(meal=await self._meals.delete_last(user))

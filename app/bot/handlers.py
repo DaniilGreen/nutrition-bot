@@ -2,7 +2,7 @@
 
 UX: постоянное reply-меню, командное меню, «печатает…».
 Отмена: контекстная (inline на свежей записи) — без вопроса; меню «Отменить» — выбор.
-Каталог: /products → правка КБЖУ продукта, который AI оценил неверно.
+Каталог: /products → правка КБЖУ. Профиль: /profile → автоцель по Mifflin.
 Надёжность: глобальный error-handler ловит падения (в т.ч. AI) и отвечает юзеру.
 """
 from __future__ import annotations
@@ -24,17 +24,22 @@ from app.bot.formatters import format_result
 from app.bot.keyboards import (
     BTN_GOAL,
     BTN_HISTORY,
+    BTN_PROFILE,
     BTN_TODAY,
     BTN_UNDO,
     BTN_WEEK,
+    BTN_WEIGHT,
+    activity_keyboard,
+    goal_type_keyboard,
     main_menu_keyboard,
     meal_actions_keyboard,
     portion_keyboard,
     products_fix_keyboard,
+    sex_keyboard,
     undo_picker_keyboard,
 )
-from app.bot.states import MealStates
-from app.domain.goals import Goal
+from app.bot.states import MealStates, ProfileStates
+from app.domain.goals import Goal, goal_from_profile
 from app.domain.value_objects import Density
 
 router = Router()
@@ -135,6 +140,11 @@ async def cmd_products(message: Message, app_user: User, assistant: Assistant) -
     )
 
 
+@router.message(Command("profile"))
+async def cmd_profile(message: Message, state: FSMContext) -> None:
+    await _start_profile(message, state)
+
+
 # --- кнопки постоянного меню (приходят как обычный текст) ----------------------
 
 
@@ -162,6 +172,12 @@ async def btn_history(
     await _show_history(message, app_user, assistant)
 
 
+@router.message(F.text == BTN_WEIGHT)
+async def btn_weight(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("⚖️ Напиши свой вес цифрой, например: «вес 86.8».")
+
+
 @router.message(F.text == BTN_GOAL)
 async def btn_goal(
     message: Message, app_user: User, assistant: Assistant, state: FSMContext
@@ -171,8 +187,14 @@ async def btn_goal(
     await message.answer(
         f"🎯 Текущая цель: <b>{goal.daily_kcal:g} ккал/день</b>\n"
         f"Б{goal.protein_g:g} Ж{goal.fat_g:g} У{goal.carb_g:g}\n\n"
-        f"Изменить: <code>/goal 1800</code>"
+        f"Изменить вручную: <code>/goal 1800</code>\n"
+        f"Или ⚙️ Профиль — посчитаю автоматически."
     )
+
+
+@router.message(F.text == BTN_PROFILE)
+async def btn_profile(message: Message, state: FSMContext) -> None:
+    await _start_profile(message, state)
 
 
 @router.message(F.text == BTN_UNDO)
@@ -183,7 +205,7 @@ async def btn_undo(
     await _show_undo_picker(message, app_user, assistant)
 
 
-# --- ввод исправленных КБЖУ продукта (FSM) ------------------------------------
+# --- FSM-вводы (ввод чисел в конкретных состояниях) ----------------------------
 
 
 @router.message(MealStates.awaiting_density, F.text)
@@ -211,6 +233,19 @@ async def on_density_input(
         f"{nums[0]:g} ккал · Б{nums[1]:g} Ж{nums[2]:g} У{nums[3]:g} на 100 г.\n"
         f"Новые записи будут считаться по этим цифрам."
     )
+
+
+@router.message(ProfileStates.body, F.text)
+async def on_profile_body(message: Message, state: FSMContext) -> None:
+    nums = _parse_floats(message.text or "")
+    if len(nums) != 3:
+        await message.answer(
+            "Нужно 3 числа через пробел: <b>вес рост возраст</b>. Напр.: <code>86 180 30</code>"
+        )
+        return
+    await state.update_data(weight=nums[0], height=nums[1], age=nums[2])
+    await state.set_state(ProfileStates.activity)
+    await message.answer("Уровень активности?", reply_markup=activity_keyboard())
 
 
 # --- голос и свободный текст ---------------------------------------------------
@@ -338,7 +373,72 @@ async def on_prod_fix(
     await callback.answer()
 
 
+@router.callback_query(ProfileStates.sex, F.data.startswith("prof_sex:"))
+async def on_profile_sex(callback: CallbackQuery, state: FSMContext) -> None:
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    sex = (callback.data or "prof_sex:male").split(":", 1)[1]
+    await state.update_data(sex=sex)
+    await state.set_state(ProfileStates.body)
+    await callback.message.answer(
+        "Пришли через пробел: <b>вес рост возраст</b>\nНапр.: <code>86 180 30</code>"
+    )
+    await callback.answer()
+
+
+@router.callback_query(ProfileStates.activity, F.data.startswith("prof_act:"))
+async def on_profile_activity(callback: CallbackQuery, state: FSMContext) -> None:
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    activity = (callback.data or "prof_act:medium").split(":", 1)[1]
+    await state.update_data(activity=activity)
+    await state.set_state(ProfileStates.goal)
+    await callback.message.answer("Какая цель?", reply_markup=goal_type_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(ProfileStates.goal, F.data.startswith("prof_goal:"))
+async def on_profile_goal(
+    callback: CallbackQuery, app_user: User, assistant: Assistant, users: UserRepo,
+    state: FSMContext,
+) -> None:
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    target = (callback.data or "prof_goal:maintain").split(":", 1)[1]
+    data = await state.get_data()
+    await state.clear()
+    assert app_user.id is not None
+
+    goal = goal_from_profile(
+        sex=data["sex"],
+        weight_kg=float(data["weight"]),
+        height_cm=float(data["height"]),
+        age=int(data["age"]),
+        activity=data["activity"],
+        target=target,
+    )
+    await users.set_goal(app_user.id, goal)
+    await assistant.log_weight(app_user, float(data["weight"]))
+
+    await callback.message.answer(
+        "✅ Готово! Дневная цель:\n"
+        f"🔥 <b>{goal.daily_kcal:g} ккал</b>\n"
+        f"🥩 Б {goal.protein_g:g} · 🧈 Ж {goal.fat_g:g} · 🍞 У {goal.carb_g:g}\n\n"
+        "Поменять вручную: <code>/goal 1800</code>"
+    )
+    await callback.answer()
+
+
 # --- helpers ------------------------------------------------------------------
+
+
+async def _start_profile(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(ProfileStates.sex)
+    await message.answer("⚙️ Настрою дневную цель по профилю.\nТвой пол?", reply_markup=sex_keyboard())
 
 
 async def _show_today(message: Message, app_user: User, assistant: Assistant) -> None:
