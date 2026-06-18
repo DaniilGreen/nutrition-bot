@@ -1,6 +1,6 @@
 """Хендлеры aiogram. Тонкий слой: парсинг -> Assistant -> форматтер.
 
-M2: гибридные уточнения порции через inline-кнопки + FSM (черновик в памяти).
+M2: уточнения порции (inline + FSM), недельная статистика, история, отмена.
 """
 from __future__ import annotations
 
@@ -28,7 +28,9 @@ START_TEXT = (
     "• «фо бо средняя порция»\n\n"
     "Вес тела: «вес 86.8».\n"
     "Статистика: «сколько осталось».\n\n"
-    "Цель по калориям: /goal 1800"
+    "Команды:\n"
+    "/goal 1800 — цель по калориям\n"
+    "/week — за неделю · /history — история · /undo — отменить последнее"
 )
 
 
@@ -63,6 +65,21 @@ async def on_goal(
     )
     await users.set_goal(app_user.id, goal)
     await message.answer(f"🎯 Цель обновлена: {kcal:g} ккал/день.")
+
+
+@router.message(Command("week"))
+async def on_week(message: Message, app_user: User, assistant: Assistant) -> None:
+    await message.answer(format_result(await assistant.weekly(app_user)))
+
+
+@router.message(Command("history"))
+async def on_history(message: Message, app_user: User, assistant: Assistant) -> None:
+    await message.answer(format_result(await assistant.history(app_user)))
+
+
+@router.message(Command("undo"))
+async def on_undo(message: Message, app_user: User, assistant: Assistant) -> None:
+    await message.answer(format_result(await assistant.undo(app_user)))
 
 
 @router.message(F.voice)

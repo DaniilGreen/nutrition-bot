@@ -1,4 +1,4 @@
-"""Use-case: залогировать приём пищи из разобранного сообщения.
+"""Use-case: запись/чтение/удаление приёмов пищи.
 
 Сердце модели «LLM наполняет, БД фиксирует»:
 - известный продукт → плотность из БД (LLM-числа игнорируются) → детерминизм;
@@ -25,8 +25,7 @@ class MealService:
     async def log(
         self, user: User, parsed: ParsedMessage, *, raw_input: str, input_type: str
     ) -> Meal:
-        user_id = user.id
-        assert user_id is not None, "user must be persisted before logging a meal"
+        user_id = _require_id(user)
 
         items: list[MealItem] = []
         for parsed_item in parsed.items:
@@ -62,6 +61,12 @@ class MealService:
         )
         return await self._meals.add(meal)
 
+    async def recent(self, user: User, limit: int = 10) -> list[Meal]:
+        return await self._meals.list_recent(_require_id(user), limit)
+
+    async def delete_last(self, user: User) -> Meal | None:
+        return await self._meals.delete_last(_require_id(user))
+
     async def _resolve_product(self, parsed_item: ParsedItem) -> Product:
         existing = await self._products.get_by_key(parsed_item.canonical_key)
         if existing is not None:
@@ -81,3 +86,8 @@ class MealService:
             is_estimate=True,
         )
         return await self._products.create(product)
+
+
+def _require_id(user: User) -> int:
+    assert user.id is not None, "user must be persisted before logging a meal"
+    return user.id

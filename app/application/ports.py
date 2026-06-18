@@ -40,9 +40,13 @@ class ProductRepo(Protocol):
 class MealRepo(Protocol):
     async def add(self, meal: Meal) -> Meal: ...
 
-    async def list_for_day(
+    async def list_between(
         self, user_id: int, start: datetime, end: datetime
     ) -> list[Meal]: ...
+
+    async def list_recent(self, user_id: int, limit: int) -> list[Meal]: ...
+
+    async def delete_last(self, user_id: int) -> Meal | None: ...
 
 
 class WeightRepo(Protocol):

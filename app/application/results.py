@@ -5,7 +5,8 @@ from dataclasses import dataclass
 
 from app.application.dto import ParsedMessage
 from app.application.entities import Meal, WeightLog
-from app.domain.goals import Remaining
+from app.domain.goals import Goal, Remaining
+from app.domain.value_objects import Macros
 
 
 @dataclass
@@ -36,8 +37,36 @@ class DailyStats:
 
 
 @dataclass
+class WeeklyStats:
+    consumed: Macros
+    days_logged: int
+    meals_count: int
+    goal: Goal
+
+
+@dataclass
+class History:
+    meals: list[Meal]
+    timezone: str
+
+
+@dataclass
+class MealDeleted:
+    meal: Meal | None
+
+
+@dataclass
 class Unknown:
     reason: str = ""
 
 
-Result = MealLogged | ClarificationNeeded | WeightLogged | DailyStats | Unknown
+Result = (
+    MealLogged
+    | ClarificationNeeded
+    | WeightLogged
+    | DailyStats
+    | WeeklyStats
+    | History
+    | MealDeleted
+    | Unknown
+)

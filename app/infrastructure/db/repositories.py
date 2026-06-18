@@ -179,7 +179,7 @@ class SqlMealRepo:
         await self._s.flush()
         return _meal_to_domain(orm)
 
-    async def list_for_day(self, user_id: int, start: datetime, end: datetime) -> list[Meal]:
+    async def list_between(self, user_id: int, start: datetime, end: datetime) -> list[Meal]:
         res = await self._s.execute(
             select(MealORM)
             .where(
@@ -190,6 +190,30 @@ class SqlMealRepo:
             .order_by(MealORM.eaten_at)
         )
         return [_meal_to_domain(o) for o in res.scalars().all()]
+
+    async def list_recent(self, user_id: int, limit: int) -> list[Meal]:
+        res = await self._s.execute(
+            select(MealORM)
+            .where(MealORM.user_id == user_id)
+            .order_by(MealORM.eaten_at.desc())
+            .limit(limit)
+        )
+        return [_meal_to_domain(o) for o in res.scalars().all()]
+
+    async def delete_last(self, user_id: int) -> Meal | None:
+        res = await self._s.execute(
+            select(MealORM)
+            .where(MealORM.user_id == user_id)
+            .order_by(MealORM.eaten_at.desc())
+            .limit(1)
+        )
+        orm = res.scalar_one_or_none()
+        if orm is None:
+            return None
+        meal = _meal_to_domain(orm)
+        await self._s.delete(orm)
+        await self._s.flush()
+        return meal
 
 
 class SqlWeightRepo:

@@ -63,8 +63,21 @@ class InMemoryMealRepo:
         self._meals.append(meal)
         return meal
 
-    async def list_for_day(self, user_id: int, start: datetime, end: datetime) -> list[Meal]:
+    async def list_between(self, user_id: int, start: datetime, end: datetime) -> list[Meal]:
         return [m for m in self._meals if m.user_id == user_id and start <= m.eaten_at < end]
+
+    async def list_recent(self, user_id: int, limit: int) -> list[Meal]:
+        xs = [m for m in self._meals if m.user_id == user_id]
+        xs.sort(key=lambda m: m.eaten_at, reverse=True)
+        return xs[:limit]
+
+    async def delete_last(self, user_id: int) -> Meal | None:
+        xs = [m for m in self._meals if m.user_id == user_id]
+        if not xs:
+            return None
+        last = max(xs, key=lambda m: m.eaten_at)
+        self._meals.remove(last)
+        return last
 
 
 class InMemoryWeightRepo:

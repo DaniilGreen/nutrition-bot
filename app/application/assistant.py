@@ -1,7 +1,7 @@
 """Фасад приложения: разобрать сообщение и направить в нужный use-case.
 
-Презентационный слой (бот/веб) вызывает только Assistant.process и получает
-Result, который форматирует. Это делает маршрутизацию тестируемой (e2e на фейках).
+Презентационный слой (бот/веб) вызывает Assistant и получает Result, который
+форматирует. Это делает маршрутизацию тестируемой (e2e на фейках).
 """
 from __future__ import annotations
 
@@ -11,9 +11,12 @@ from app.application.meal_service import MealService
 from app.application.ports import NluPort, ProductRepo
 from app.application.results import (
     ClarificationNeeded,
+    History,
+    MealDeleted,
     MealLogged,
     Result,
     Unknown,
+    WeeklyStats,
     WeightLogged,
 )
 from app.application.stats_service import StatsService
@@ -56,6 +59,16 @@ class Assistant:
     ) -> Result:
         """Продолжить запись приёма пищи после ответа на уточняющий вопрос."""
         return await self._handle_meal(user, draft, raw_input=raw_input, input_type=input_type)
+
+    async def weekly(self, user: User) -> WeeklyStats:
+        return await self._stats.weekly(user)
+
+    async def history(self, user: User, limit: int = 10) -> History:
+        meals = await self._meals.recent(user, limit)
+        return History(meals=meals, timezone=user.timezone)
+
+    async def undo(self, user: User) -> MealDeleted:
+        return MealDeleted(meal=await self._meals.delete_last(user))
 
     async def _handle_meal(
         self, user: User, parsed: ParsedMessage, *, raw_input: str, input_type: str

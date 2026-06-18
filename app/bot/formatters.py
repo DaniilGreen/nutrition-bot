@@ -1,12 +1,17 @@
 """Рендер Result -> HTML-текст ответа бота."""
 from __future__ import annotations
 
+from zoneinfo import ZoneInfo
+
 from app.application.results import (
     ClarificationNeeded,
     DailyStats,
+    History,
+    MealDeleted,
     MealLogged,
     Result,
     Unknown,
+    WeeklyStats,
     WeightLogged,
 )
 from app.domain.goals import Remaining
@@ -21,6 +26,12 @@ def format_result(result: Result) -> str:
         return _format_weight(result)
     if isinstance(result, DailyStats):
         return _format_stats(result.remaining, result.meals_count)
+    if isinstance(result, WeeklyStats):
+        return _format_weekly(result)
+    if isinstance(result, History):
+        return _format_history(result)
+    if isinstance(result, MealDeleted):
+        return _format_deleted(result)
     if isinstance(result, Unknown):
         return _format_unknown()
     return "Что-то пошло не так."
@@ -58,6 +69,36 @@ def _format_weight(r: WeightLogged) -> str:
 
 def _format_stats(rem: Remaining, meals_count: int) -> str:
     return f"📊 Сегодня (приёмов пищи: {meals_count})\n\n{_remaining_block(rem)}"
+
+
+def _format_weekly(r: WeeklyStats) -> str:
+    avg = round(r.consumed.kcal / r.days_logged) if r.days_logged else 0
+    c = r.consumed
+    return (
+        "📈 За неделю:\n"
+        f"Калории: <b>{_n(c.kcal)}</b> · в среднем {_n(avg)}/день за {r.days_logged} дн.\n"
+        f"Б{_n(c.protein)} Ж{_n(c.fat)} У{_n(c.carb)} · приёмов: {r.meals_count}\n"
+        f"Цель: {_n(r.goal.daily_kcal)} ккал/день"
+    )
+
+
+def _format_history(r: History) -> str:
+    if not r.meals:
+        return "🗒 История пуста."
+    tz = ZoneInfo(r.timezone)
+    lines = ["🗒 Последние записи:"]
+    for m in r.meals:
+        when = m.eaten_at.astimezone(tz).strftime("%d.%m %H:%M")
+        names = ", ".join(i.name_snapshot for i in m.items) or "—"
+        lines.append(f"• {when} — {_n(m.totals.kcal)} ккал ({names})")
+    return "\n".join(lines)
+
+
+def _format_deleted(r: MealDeleted) -> str:
+    if r.meal is None:
+        return "Нечего удалять."
+    names = ", ".join(i.name_snapshot for i in r.meal.items) or "запись"
+    return f"🗑 Удалил: {names} ({_n(r.meal.totals.kcal)} ккал)."
 
 
 def _remaining_block(rem: Remaining) -> str:
