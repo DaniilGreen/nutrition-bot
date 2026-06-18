@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from app.application.dto import Intent, ParsedMessage, Unit
+from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
 from app.application.entities import MealItem, Product, User, WeightLog
 from app.application.meal_service import MealService
 from app.application.ports import NluPort, ProductRepo, SttPort
@@ -50,6 +50,9 @@ class Assistant:
     async def process(self, user: User, text: str, *, input_type: str = "text") -> Result:
         known_keys = await self._products.all_keys()
         parsed = await self._nlu.parse(text, known_keys=known_keys)
+        if parsed.intent is Intent.MEAL and any(_blank_estimate(i) for i in parsed.items):
+            # LLM иногда отдаёт нулевую оценку (рыба за 0 ккал) — один ретрай, обычно помогает.
+            parsed = await self._nlu.parse(text, known_keys=known_keys)
 
         if parsed.intent is Intent.MEAL and parsed.items:
             return await self._handle_meal(user, parsed, raw_input=text, input_type=input_type)
@@ -161,6 +164,16 @@ class Assistant:
             return CorrectionFailed(target=", ".join(targets), reason="not_found")
         stats = await self._stats.daily(user)
         return ItemRemoved(items=removed, remaining=stats.remaining)
+
+
+def _blank_estimate(item: ParsedItem) -> bool:
+    """Нулевая оценка КБЖУ от LLM — повод переспросить (для еды 0/0/0/0 это промах)."""
+    return (
+        item.kcal_per_100g == 0
+        and item.protein_per_100g == 0
+        and item.fat_per_100g == 0
+        and item.carb_per_100g == 0
+    )
 
 
 def _first_unclarified_index(parsed: ParsedMessage) -> int | None:

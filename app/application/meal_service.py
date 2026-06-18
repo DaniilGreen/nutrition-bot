@@ -171,6 +171,10 @@ class MealService:
             source="llm",
             is_estimate=True,
         )
+        if _is_blank_density(product.density):
+            # Пустая оценка (все макросы 0) — промах LLM либо 0-кал напиток. НЕ пиним:
+            # иначе закрепим мусор навсегда (баг: пангасиус за 0 ккал). Переоценим в след. раз.
+            return product
         return await self._products.create(product)
 
     async def _free_key(self, base: str) -> str:
@@ -209,6 +213,16 @@ def _canonical_key(llm_key: str, name: str) -> str:
 def _slug(name: str) -> str:
     slug = re.sub(r"[^\w]+", "_", name.strip().lower()).strip("_")
     return slug or "item"
+
+
+def _is_blank_density(d: Density) -> bool:
+    """Пустая оценка — все макросы 0 (промах LLM или 0-кал напиток). Такую не пиним в каталог."""
+    return (
+        d.kcal_per_100g == 0
+        and d.protein_per_100g == 0
+        and d.fat_per_100g == 0
+        and d.carb_per_100g == 0
+    )
 
 
 def _name_matches(query: str, candidate: str) -> bool:
