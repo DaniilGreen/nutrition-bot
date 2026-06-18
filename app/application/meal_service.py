@@ -70,6 +70,9 @@ class MealService:
     async def delete(self, user: User, meal_id: int) -> Meal | None:
         return await self._meals.delete(_require_id(user), meal_id)
 
+    async def remove_item(self, user: User, meal_id: int, item_id: int) -> Meal | None:
+        return await self._meals.remove_item(_require_id(user), meal_id, item_id)
+
     async def _resolve_product(self, parsed_item: ParsedItem) -> Product:
         existing = await self._products.get_by_key(parsed_item.canonical_key)
         if existing is not None:

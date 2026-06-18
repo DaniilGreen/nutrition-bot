@@ -6,6 +6,7 @@ from datetime import datetime
 from app.application.dto import ParsedMessage
 from app.application.entities import Meal, Product, User, WeightLog
 from app.domain.goals import Goal
+from app.domain.value_objects import sum_macros
 
 
 class InMemoryUserRepo:
@@ -56,10 +57,14 @@ class InMemoryMealRepo:
     def __init__(self) -> None:
         self._meals: list[Meal] = []
         self._seq = 0
+        self._item_seq = 0
 
     async def add(self, meal: Meal) -> Meal:
         self._seq += 1
         meal.id = self._seq
+        for item in meal.items:
+            self._item_seq += 1
+            item.id = self._item_seq
         self._meals.append(meal)
         return meal
 
@@ -85,6 +90,20 @@ class InMemoryMealRepo:
                 self._meals.remove(m)
                 return m
         return None
+
+    async def remove_item(self, user_id: int, meal_id: int, item_id: int) -> Meal | None:
+        meal = next((m for m in self._meals if m.id == meal_id and m.user_id == user_id), None)
+        if meal is None:
+            return None
+        item = next((i for i in meal.items if i.id == item_id), None)
+        if item is None:
+            return meal
+        meal.items.remove(item)
+        if not meal.items:
+            self._meals.remove(meal)
+            return None
+        meal.totals = sum_macros(i.macros for i in meal.items)
+        return meal
 
 
 class InMemoryWeightRepo:

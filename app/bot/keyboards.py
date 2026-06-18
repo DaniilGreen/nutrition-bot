@@ -1,11 +1,17 @@
-"""Клавиатуры: постоянное reply-меню, inline-кнопки порций и действий с записью."""
+"""Клавиатуры: постоянное reply-меню, inline-кнопки порций, действий и выбора отмены."""
 from __future__ import annotations
+
+from collections.abc import Sequence
+from zoneinfo import ZoneInfo
 
 from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
+from app.application.entities import Meal
+
 PORTION_CALLBACK_PREFIX = "portion"
 MEAL_UNDO_PREFIX = "meal_undo"
+ITEM_DEL_PREFIX = "item_del"
 
 # Тексты кнопок постоянного меню (они же приходят как обычные сообщения).
 BTN_TODAY = "📊 Сегодня"
@@ -34,7 +40,38 @@ def portion_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def meal_actions_keyboard(meal_id: int) -> InlineKeyboardMarkup:
+def meal_actions_keyboard(meal: Meal) -> InlineKeyboardMarkup:
+    """Под свежей записью: удалить отдельную позицию (если их >1) и отменить всё.
+
+    Это контекстная отмена «без вопроса» — кнопки знают конкретную запись.
+    """
     builder = InlineKeyboardBuilder()
-    builder.button(text="↩️ Отменить", callback_data=f"{MEAL_UNDO_PREFIX}:{meal_id}")
+    if len(meal.items) > 1:
+        for item in meal.items:
+            if item.id is not None:
+                builder.button(
+                    text=f"🗑 {_short(item.name_snapshot)}",
+                    callback_data=f"{ITEM_DEL_PREFIX}:{meal.id}:{item.id}",
+                )
+    builder.button(text="↩️ Отменить всё", callback_data=f"{MEAL_UNDO_PREFIX}:{meal.id}")
+    builder.adjust(1)
     return builder.as_markup()
+
+
+def undo_picker_keyboard(meals: Sequence[Meal], tz_name: str) -> InlineKeyboardMarkup:
+    """Меню «Отменить» вне контекста свежей записи — выбор, что именно отменить."""
+    tz = ZoneInfo(tz_name)
+    builder = InlineKeyboardBuilder()
+    for meal in meals:
+        when = meal.eaten_at.astimezone(tz).strftime("%H:%M")
+        names = _short(", ".join(i.name_snapshot for i in meal.items) or "запись", 24)
+        builder.button(
+            text=f"🗑 {when} · {meal.totals.kcal:g} ккал · {names}",
+            callback_data=f"{MEAL_UNDO_PREFIX}:{meal.id}",
+        )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def _short(text: str, limit: int = 22) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"

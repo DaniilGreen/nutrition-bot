@@ -89,6 +89,14 @@ class Assistant:
     async def delete_meal(self, user: User, meal_id: int) -> MealDeleted:
         return MealDeleted(meal=await self._meals.delete(user, meal_id))
 
+    async def remove_item(self, user: User, meal_id: int, item_id: int) -> MealLogged | None:
+        """Удалить одну позицию записи. None — если позиций не осталось (запись удалена)."""
+        meal = await self._meals.remove_item(user, meal_id, item_id)
+        if meal is None:
+            return None
+        stats = await self._stats.daily(user)
+        return MealLogged(meal=meal, remaining=stats.remaining)
+
     async def _handle_meal(
         self, user: User, parsed: ParsedMessage, *, raw_input: str, input_type: str
     ) -> Result:

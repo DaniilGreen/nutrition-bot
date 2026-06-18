@@ -1,6 +1,7 @@
 """Хендлеры aiogram. Тонкий слой: ввод -> Assistant -> форматтер.
 
-UX: постоянное reply-меню, командное меню, inline «Отменить», «печатает…».
+UX: постоянное reply-меню, командное меню, «печатает…».
+Отмена: контекстная (inline на свежей записи) — без вопроса; меню «Отменить» — выбор.
 Надёжность: глобальный error-handler ловит падения (в т.ч. AI) и отвечает юзеру.
 """
 from __future__ import annotations
@@ -27,6 +28,7 @@ from app.bot.keyboards import (
     main_menu_keyboard,
     meal_actions_keyboard,
     portion_keyboard,
+    undo_picker_keyboard,
 )
 from app.bot.states import MealStates
 from app.domain.goals import Goal
@@ -114,7 +116,7 @@ async def cmd_history(message: Message, app_user: User, assistant: Assistant) ->
 
 @router.message(Command("undo"))
 async def cmd_undo(message: Message, app_user: User, assistant: Assistant) -> None:
-    await _do_undo(message, app_user, assistant)
+    await _show_undo_picker(message, app_user, assistant)
 
 
 # --- кнопки постоянного меню (приходят как обычный текст) ----------------------
@@ -162,7 +164,7 @@ async def btn_undo(
     message: Message, app_user: User, assistant: Assistant, state: FSMContext
 ) -> None:
     await state.clear()
-    await _do_undo(message, app_user, assistant)
+    await _show_undo_picker(message, app_user, assistant)
 
 
 # --- голос и свободный текст ---------------------------------------------------
@@ -227,9 +229,7 @@ async def on_portion(
         await callback.message.edit_text(format_result(result), reply_markup=portion_keyboard())
     else:
         await state.clear()
-        markup = None
-        if isinstance(result, MealLogged) and result.meal.id is not None:
-            markup = meal_actions_keyboard(result.meal.id)
+        markup = meal_actions_keyboard(result.meal) if isinstance(result, MealLogged) else None
         await callback.message.edit_text(format_result(result), reply_markup=markup)
     await callback.answer()
 
@@ -243,8 +243,27 @@ async def on_meal_undo(callback: CallbackQuery, app_user: User, assistant: Assis
     result = await assistant.delete_meal(app_user, meal_id)
     if result.meal is None:
         await callback.answer("Уже удалено.")
+        with suppress(Exception):
+            await callback.message.edit_text("🗑 Запись уже удалена.")
         return
     await callback.message.edit_text("🗑 Запись отменена.")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("item_del:"))
+async def on_item_del(callback: CallbackQuery, app_user: User, assistant: Assistant) -> None:
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    parts = (callback.data or "item_del:0:0").split(":")
+    meal_id, item_id = int(parts[1]), int(parts[2])
+    result = await assistant.remove_item(app_user, meal_id, item_id)
+    if result is None:
+        await callback.message.edit_text("🗑 Запись отменена (позиций не осталось).")
+    else:
+        await callback.message.edit_text(
+            format_result(result), reply_markup=meal_actions_keyboard(result.meal)
+        )
     await callback.answer()
 
 
@@ -263,8 +282,15 @@ async def _show_history(message: Message, app_user: User, assistant: Assistant) 
     await message.answer(format_result(await assistant.history(app_user)))
 
 
-async def _do_undo(message: Message, app_user: User, assistant: Assistant) -> None:
-    await message.answer(format_result(await assistant.undo(app_user)))
+async def _show_undo_picker(message: Message, app_user: User, assistant: Assistant) -> None:
+    history = await assistant.history(app_user, limit=5)
+    if not history.meals:
+        await message.answer("Нечего отменять.")
+        return
+    await message.answer(
+        "Что отменить?",
+        reply_markup=undo_picker_keyboard(history.meals, history.timezone),
+    )
 
 
 async def _send_typing(message: Message) -> None:
@@ -280,7 +306,6 @@ async def _reply_message(
         await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
         await message.answer(format_result(result), reply_markup=portion_keyboard())
     elif isinstance(result, MealLogged):
-        markup = meal_actions_keyboard(result.meal.id) if result.meal.id is not None else None
-        await message.answer(format_result(result), reply_markup=markup)
+        await message.answer(format_result(result), reply_markup=meal_actions_keyboard(result.meal))
     else:
         await message.answer(format_result(result))
