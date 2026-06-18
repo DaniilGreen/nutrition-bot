@@ -87,7 +87,7 @@ def _format_clarification(r: ClarificationNeeded) -> str:
 
 
 def _format_variant_clarification(r: VariantClarificationNeeded) -> str:
-    return f"🤔 «{_esc(r.item_name)}» — уточни вариант (запомню как обычный):"
+    return f"🤔 «{_esc(r.item_name)}» — уточни вариант:"
 
 
 def _format_weight(r: WeightLogged) -> str:
