@@ -1,13 +1,22 @@
 """Рендер Result -> HTML-текст ответа бота."""
 from __future__ import annotations
 
-from app.application.results import DailyStats, MealLogged, Result, Unknown, WeightLogged
+from app.application.results import (
+    ClarificationNeeded,
+    DailyStats,
+    MealLogged,
+    Result,
+    Unknown,
+    WeightLogged,
+)
 from app.domain.goals import Remaining
 
 
 def format_result(result: Result) -> str:
     if isinstance(result, MealLogged):
         return _format_meal(result)
+    if isinstance(result, ClarificationNeeded):
+        return _format_clarification(result)
     if isinstance(result, WeightLogged):
         return _format_weight(result)
     if isinstance(result, DailyStats):
@@ -33,6 +42,10 @@ def _format_meal(r: MealLogged) -> str:
         _remaining_block(r.remaining),
     ]
     return "\n".join(lines)
+
+
+def _format_clarification(r: ClarificationNeeded) -> str:
+    return f"🤔 «{r.item_name}» — какая порция?"
 
 
 def _format_weight(r: WeightLogged) -> str:

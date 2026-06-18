@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.application.dto import ParsedMessage
 from app.application.entities import Meal, WeightLog
 from app.domain.goals import Remaining
 
@@ -11,6 +12,15 @@ from app.domain.goals import Remaining
 class MealLogged:
     meal: Meal
     remaining: Remaining
+
+
+@dataclass
+class ClarificationNeeded:
+    """Нужен один уточняющий вопрос (M2): размер порции для конкретного продукта."""
+
+    draft: ParsedMessage
+    item_index: int
+    item_name: str
 
 
 @dataclass
@@ -30,4 +40,4 @@ class Unknown:
     reason: str = ""
 
 
-Result = MealLogged | WeightLogged | DailyStats | Unknown
+Result = MealLogged | ClarificationNeeded | WeightLogged | DailyStats | Unknown

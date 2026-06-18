@@ -1,8 +1,7 @@
 """E2E на уровне Assistant: фейковые репозитории + StubNlu, без БД и без LLM.
 
 Главный тест — `test_density_pinned_on_first_sight`: доказывает инвариант
-«LLM наполняет, БД фиксирует» (повторный приём той же еды даёт те же цифры,
-даже если LLM выдал другую плотность).
+«LLM наполняет, БД фиксирует». Плюс M2: уточнение порции (clarification).
 """
 from __future__ import annotations
 
@@ -11,7 +10,12 @@ from datetime import datetime, timezone
 from app.application.assistant import Assistant
 from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
 from app.application.meal_service import MealService
-from app.application.results import DailyStats, MealLogged, WeightLogged
+from app.application.results import (
+    ClarificationNeeded,
+    DailyStats,
+    MealLogged,
+    WeightLogged,
+)
 from app.application.stats_service import StatsService
 from app.application.weight_service import WeightService
 from app.domain.goals import Goal
@@ -57,6 +61,26 @@ def _chicken(kcal: float) -> ParsedMessage:
                 fat_per_100g=3.6,
                 carb_per_100g=0,
                 confidence=0.95,
+            )
+        ],
+    )
+
+
+def _pho_bo() -> ParsedMessage:
+    return ParsedMessage(
+        intent=Intent.MEAL,
+        confidence=0.6,
+        items=[
+            ParsedItem(
+                name="фо бо",
+                canonical_key="pho_bo",
+                unit=Unit.PORTION,
+                portion_hint=None,
+                kcal_per_100g=60,
+                protein_per_100g=4,
+                fat_per_100g=2,
+                carb_per_100g=6,
+                confidence=0.6,
             )
         ],
     )
@@ -117,3 +141,47 @@ async def test_query_after_meal() -> None:
     assert isinstance(result, DailyStats)
     assert result.meals_count == 1
     assert result.remaining.consumed.kcal == 412.5
+
+
+# --- M2: уточнение порции ---
+
+
+async def test_portion_triggers_clarification() -> None:
+    assistant, users, _ = _build(StubNlu(_pho_bo()))
+    user = await _new_user(users)
+
+    result = await assistant.process(user, "съел тарелку фо бо")
+
+    assert isinstance(result, ClarificationNeeded)
+    assert result.item_index == 0
+    assert result.item_name == "фо бо"
+
+
+async def test_meal_not_logged_until_clarified() -> None:
+    assistant, users, _ = _build(
+        StubNlu(_pho_bo(), ParsedMessage(intent=Intent.QUERY, confidence=0.9))
+    )
+    user = await _new_user(users)
+
+    await assistant.process(user, "съел тарелку фо бо")
+    stats = await assistant.process(user, "сколько осталось")
+
+    assert isinstance(stats, DailyStats)
+    assert stats.meals_count == 0  # без ответа на вопрос запись не создаётся
+
+
+async def test_continue_after_portion_choice() -> None:
+    assistant, users, _ = _build(StubNlu(_pho_bo()))
+    user = await _new_user(users)
+
+    r1 = await assistant.process(user, "съел тарелку фо бо")
+    assert isinstance(r1, ClarificationNeeded)
+
+    draft = r1.draft
+    draft.items[0].portion_hint = "large"
+    r2 = await assistant.continue_meal(user, draft, raw_input="съел тарелку фо бо")
+
+    assert isinstance(r2, MealLogged)
+    # large: дефолтная порция 300 г * 1.4 = 420 г; фо бо 60 ккал/100 г -> 252 ккал
+    assert r2.meal.items[0].grams == 420
+    assert r2.meal.totals.kcal == 252

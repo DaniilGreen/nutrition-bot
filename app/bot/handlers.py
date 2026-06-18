@@ -1,14 +1,21 @@
-"""Хендлеры aiogram. Тонкий слой: парсинг команды -> Assistant -> форматтер."""
+"""Хендлеры aiogram. Тонкий слой: парсинг -> Assistant -> форматтер.
+
+M2: гибридные уточнения порции через inline-кнопки + FSM (черновик в памяти).
+"""
 from __future__ import annotations
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import Message
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
 
 from app.application.assistant import Assistant
 from app.application.entities import User
 from app.application.ports import UserRepo
+from app.application.results import ClarificationNeeded, Result
 from app.bot.formatters import format_result
+from app.bot.keyboards import portion_keyboard
+from app.bot.states import MealStates
 from app.domain.goals import Goal
 
 router = Router()
@@ -47,7 +54,7 @@ async def on_goal(
         return
 
     assert app_user.id is not None
-    # Дефолтная разбивка 30/25/45 (Б/Ж/У). Тонкая настройка макросов — в M2.
+    # Дефолтная разбивка 30/25/45 (Б/Ж/У). Тонкая настройка макросов — позже.
     goal = Goal(
         daily_kcal=kcal,
         protein_g=round(kcal * 0.30 / 4),
@@ -66,6 +73,46 @@ async def on_voice(message: Message) -> None:
 
 
 @router.message(F.text)
-async def on_text(message: Message, app_user: User, assistant: Assistant) -> None:
+async def on_text(
+    message: Message, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
+    # Новый текст сбрасывает незавершённое уточнение.
+    await state.clear()
     result = await assistant.process(app_user, message.text or "", input_type="text")
-    await message.answer(format_result(result))
+    await _reply_message(message, result, state, raw=message.text or "")
+
+
+@router.callback_query(F.data.startswith("portion:"))
+async def on_portion(
+    callback: CallbackQuery, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
+    data = await state.get_data()
+    draft = data.get("draft")
+    if draft is None or not isinstance(callback.message, Message):
+        await callback.answer("Запись устарела — отправь приём пищи заново.")
+        return
+
+    item_index = int(data.get("item_index", 0))
+    raw = str(data.get("raw", ""))
+    hint = (callback.data or "portion:medium").split(":", 1)[1]
+    draft.items[item_index].portion_hint = hint
+
+    result = await assistant.continue_meal(app_user, draft, raw_input=raw)
+    if isinstance(result, ClarificationNeeded):
+        await state.update_data(draft=result.draft, item_index=result.item_index)
+        await callback.message.edit_text(format_result(result), reply_markup=portion_keyboard())
+    else:
+        await state.clear()
+        await callback.message.edit_text(format_result(result))
+    await callback.answer()
+
+
+async def _reply_message(
+    message: Message, result: Result, state: FSMContext, *, raw: str
+) -> None:
+    if isinstance(result, ClarificationNeeded):
+        await state.set_state(MealStates.awaiting_portion)
+        await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
+        await message.answer(format_result(result), reply_markup=portion_keyboard())
+    else:
+        await message.answer(format_result(result))

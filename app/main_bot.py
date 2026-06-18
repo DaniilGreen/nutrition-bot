@@ -6,6 +6,7 @@ import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.bot.handlers import router
 from app.bot.middlewares import ServicesMiddleware
@@ -25,8 +26,12 @@ async def main() -> None:
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    dp = Dispatcher()
-    dp.message.middleware(ServicesMiddleware(container))
+    # MemoryStorage — для 2 пользователей достаточно; FSM-черновик уточнения живёт
+    # в памяти процесса. Для масштабирования — заменить на Redis-storage.
+    dp = Dispatcher(storage=MemoryStorage())
+    middleware = ServicesMiddleware(container)
+    dp.message.middleware(middleware)
+    dp.callback_query.middleware(middleware)
     dp.include_router(router)
 
     try:

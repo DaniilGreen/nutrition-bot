@@ -5,11 +5,17 @@ Result, который форматирует. Это делает маршру�
 """
 from __future__ import annotations
 
-from app.application.dto import Intent
+from app.application.dto import Intent, ParsedMessage, Unit
 from app.application.entities import User
 from app.application.meal_service import MealService
 from app.application.ports import NluPort, ProductRepo
-from app.application.results import MealLogged, Result, Unknown, WeightLogged
+from app.application.results import (
+    ClarificationNeeded,
+    MealLogged,
+    Result,
+    Unknown,
+    WeightLogged,
+)
 from app.application.stats_service import StatsService
 from app.application.weight_service import WeightService
 
@@ -34,9 +40,7 @@ class Assistant:
         parsed = await self._nlu.parse(text, known_keys=known_keys)
 
         if parsed.intent is Intent.MEAL and parsed.items:
-            meal = await self._meals.log(user, parsed, raw_input=text, input_type=input_type)
-            stats = await self._stats.daily(user)
-            return MealLogged(meal=meal, remaining=stats.remaining)
+            return await self._handle_meal(user, parsed, raw_input=text, input_type=input_type)
 
         if parsed.intent is Intent.WEIGHT and parsed.weight_kg is not None:
             log, delta = await self._weights.log(user, parsed.weight_kg)
@@ -46,3 +50,30 @@ class Assistant:
             return await self._stats.daily(user)
 
         return Unknown(reason="не распознал приём пищи или вес")
+
+    async def continue_meal(
+        self, user: User, draft: ParsedMessage, *, raw_input: str, input_type: str = "text"
+    ) -> Result:
+        """Продолжить запись приёма пищи после ответа на уточняющий вопрос."""
+        return await self._handle_meal(user, draft, raw_input=raw_input, input_type=input_type)
+
+    async def _handle_meal(
+        self, user: User, parsed: ParsedMessage, *, raw_input: str, input_type: str
+    ) -> Result:
+        idx = _first_unclarified_index(parsed)
+        if idx is not None:
+            return ClarificationNeeded(
+                draft=parsed, item_index=idx, item_name=parsed.items[idx].name
+            )
+
+        meal = await self._meals.log(user, parsed, raw_input=raw_input, input_type=input_type)
+        stats = await self._stats.daily(user)
+        return MealLogged(meal=meal, remaining=stats.remaining)
+
+
+def _first_unclarified_index(parsed: ParsedMessage) -> int | None:
+    """Первый продукт с порцией без размера — для него и зададим вопрос."""
+    for i, item in enumerate(parsed.items):
+        if item.unit is Unit.PORTION and item.portion_hint is None:
+            return i
+    return None
