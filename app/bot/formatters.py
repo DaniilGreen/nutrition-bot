@@ -101,10 +101,10 @@ def format_goal(goal: Goal) -> str:
     """Грид дневной цели в общем выровненном стиле (для /goal и завершения профиля)."""
     rows = "\n".join(
         [
-            f"{'🔥 Ккал':<10} {round(goal.daily_kcal)}",
-            f"{'🥩 Белок':<10} {round(goal.protein_g)} г",
-            f"{'🧈 Жир':<10} {round(goal.fat_g)} г",
-            f"{'🍞 Углеводы':<10} {round(goal.carb_g)} г",
+            f"{'Ккал':<10} {round(goal.daily_kcal)}",
+            f"{'Белок':<10} {round(goal.protein_g)} г",
+            f"{'Жир':<10} {round(goal.fat_g)} г",
+            f"{'Углеводы':<10} {round(goal.carb_g)} г",
         ]
     )
     return f"<code>{rows}</code>"
@@ -137,10 +137,10 @@ def _format_weekly(r: WeeklyStats) -> str:
     g = r.goal
     rows = "\n".join(
         [
-            _macro_line("🔥 Ккал", round(c.kcal / days), g.daily_kcal),
-            _macro_line("🥩 Белок", round(c.protein / days), g.protein_g),
-            _macro_line("🧈 Жир", round(c.fat / days), g.fat_g),
-            _macro_line("🍞 Углеводы", round(c.carb / days), g.carb_g),
+            _macro_line("Ккал", round(c.kcal / days), g.daily_kcal),
+            _macro_line("Белок", round(c.protein / days), g.protein_g),
+            _macro_line("Жир", round(c.fat / days), g.fat_g),
+            _macro_line("Углеводы", round(c.carb / days), g.carb_g),
         ]
     )
     return (
@@ -198,10 +198,10 @@ def _dashboard(rem: Remaining) -> str:
     """Выровненная сетка B (моноширинно <code>): ккал + БЖУ слитно, в одной колонке."""
     rows = "\n".join(
         [
-            _macro_line("🔥 Ккал", rem.consumed.kcal, rem.goal.daily_kcal),
-            _macro_line("🥩 Белок", rem.consumed.protein, rem.goal.protein_g),
-            _macro_line("🧈 Жир", rem.consumed.fat, rem.goal.fat_g),
-            _macro_line("🍞 Углеводы", rem.consumed.carb, rem.goal.carb_g),
+            _macro_line("Ккал", rem.consumed.kcal, rem.goal.daily_kcal),
+            _macro_line("Белок", rem.consumed.protein, rem.goal.protein_g),
+            _macro_line("Жир", rem.consumed.fat, rem.goal.fat_g),
+            _macro_line("Углеводы", rem.consumed.carb, rem.goal.carb_g),
         ]
     )
     return f"<code>{rows}</code>"
