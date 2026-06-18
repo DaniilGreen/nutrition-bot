@@ -194,9 +194,10 @@ def _dashboard(rem: Remaining) -> str:
 
 
 def _macro_line(label: str, consumed: float, goal: float) -> str:
-    """Строка макроса с фикс-шириной колонок — для выравнивания внутри <pre> (моноширинно)."""
+    """Строка макроса с фикс-шириной колонок (моноширинно). Числа округляем до целых —
+    иначе десятичные («1687.5») ломают ширину поля и бар уезжает. Бар — по точным значениям."""
     pct = round(100 * consumed / goal) if goal else 0
-    nums = f"{_n(consumed)}/{_n(goal)}"
+    nums = f"{round(consumed)}/{round(goal)}"
     return f"{label:<10} {nums:<9} {_bar(consumed, goal)} {pct}%"
 
 
