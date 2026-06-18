@@ -61,6 +61,9 @@ class InMemoryProductRepo:
     async def all_keys(self) -> list[str]:
         return list(self._by_key.keys())
 
+    async def list_all(self) -> list[Product]:
+        return list(self._by_key.values())
+
     async def list_estimated(self, limit: int) -> list[Product]:
         return [p for p in self._by_key.values() if p.is_estimate][:limit]
 

@@ -154,6 +154,11 @@ class SqlProductRepo:
         res = await self._s.execute(select(ProductORM.canonical_key))
         return list(res.scalars().all())
 
+    async def list_all(self) -> list[Product]:
+        # ponytail: полный скан каталога; добавить pg_trgm/фильтр, если вырастет за тысячи
+        res = await self._s.execute(select(ProductORM))
+        return [_product_to_domain(o) for o in res.scalars().all()]
+
     async def list_estimated(self, limit: int) -> list[Product]:
         res = await self._s.execute(
             select(ProductORM)

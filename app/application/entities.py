@@ -55,6 +55,7 @@ class Meal:
     items: list[MealItem]
     source_confidence: float
     totals: Macros
+    estimated: bool = False  # транзиентный флаг: хоть одна позиция — AI-оценка (не персистится)
     id: int | None = None
     created_at: datetime | None = None
 

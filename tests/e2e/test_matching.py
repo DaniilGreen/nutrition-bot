@@ -1,13 +1,15 @@
-"""E2E на сопоставление продуктов: защита от слияния разных продуктов в один.
+"""E2E на сопоставление продуктов: защита от слияния разных продуктов + RAG-матч.
 
 Воспроизводит реальный баг: LLM вернула canonical_key="unknown" для разных
-продуктов → все наследовали плотность первого (апельсиновый сок), и протеин
-показывал 0.9 г белка/100 г вместо ~75.
+продуктов → все наследовали плотность первого (сок). Плюс RAG: имя совпало с
+каталогом → берём выверенную строку, а не выдуманные LLM числа.
 """
 from __future__ import annotations
 
 from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
+from app.application.entities import Product
 from app.application.results import MealLogged
+from app.domain.value_objects import Density
 from tests.e2e.test_meal_flow import _build, _new_user
 from tests.fakes import StubNlu
 
@@ -45,13 +47,11 @@ async def test_junk_unknown_key_does_not_merge_foods() -> None:
     result = await assistant.process(user, "протеин 100 г")
 
     assert isinstance(result, MealLogged)
-    # белок протеина (75 на 100 г), а не унаследованный от сока (0.9)
     assert result.meal.items[0].macros.protein == 75.0
-    assert len(await products.all_keys()) == 2  # два разных продукта, не слились
+    assert len(await products.all_keys()) == 2
 
 
 async def test_clean_key_same_food_still_merges_and_pins() -> None:
-    # Детерминизм не сломан: чистый ключ переиспользуется, плотность пиннится.
     assistant, users, products = _build(
         StubNlu(_item("курица", "chicken", 165, 31), _item("курица", "chicken", 999, 80))
     )
@@ -64,3 +64,24 @@ async def test_clean_key_same_food_still_merges_and_pins() -> None:
     assert isinstance(r2, MealLogged)
     assert r1.meal.totals.kcal == r2.meal.totals.kcal == 165.0
     assert await products.all_keys() == ["chicken"]
+
+
+async def test_rag_prefers_catalog_over_llm_estimate() -> None:
+    # В каталоге уже есть выверенный «Борщ»; LLM дала другой ключ и абсурдные 999 ккал.
+    assistant, users, products = _build(StubNlu(_item("Борщ", "krasniy_borsch_x", 999, 80)))
+    user = await _new_user(users)
+    await products.create(
+        Product(
+            canonical_key="borscht",
+            display_name="Борщ",
+            density=Density(50, 2.5, 2.5, 5),
+            source="curated",
+            is_estimate=False,
+        )
+    )
+
+    result = await assistant.process(user, "борщ 100 г")
+
+    assert isinstance(result, MealLogged)
+    assert result.meal.totals.kcal == 50.0  # из каталога, не выдуманные 999
+    assert await products.all_keys() == ["borscht"]  # новый продукт не создан

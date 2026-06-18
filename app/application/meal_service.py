@@ -2,17 +2,18 @@
 
 Сердце модели «LLM наполняет, БД фиксирует»:
 - известный продукт → плотность из БД (LLM-числа игнорируются) → детерминизм;
-- новый продукт → создаём из оценки LLM и фиксируем навсегда.
+- RAG-страховка: совпало имя с каталогом → берём выверенную строку, не оценку LLM;
+- иначе → создаём из оценки LLM (флаг is_estimate) и фиксируем навсегда.
 Финальные КБЖУ считает domain.nutrition, не LLM.
 
-Идентичность продукта — canonical_key. LLM иногда возвращает мусор ("unknown" и
-т.п.); такой ключ нельзя считать идентичностью, иначе разные продукты сливаются
-в один (классический баг: всё с ключом "unknown" наследует плотность первого).
-Поэтому мусорные ключи нормализуем в стабильный slug из названия.
+Идентичность продукта — canonical_key. LLM иногда возвращает мусор ("unknown");
+такой ключ нормализуем в slug из названия, иначе разные продукты сливаются.
 """
 from __future__ import annotations
 
+import difflib
 import re
+from collections.abc import Sequence
 
 from app.application.dto import ParsedItem, ParsedMessage
 from app.application.entities import Meal, MealItem, Product, User
@@ -25,6 +26,7 @@ from app.domain.value_objects import Density, sum_macros
 # Ключи, которые LLM возвращает «от неуверенности» — не идентичность продукта.
 _JUNK_KEYS = frozenset({"", "unknown", "none", "null", "na", "n_a", "item", "product", "food", "еда"})
 _MIN_KEY_LEN = 3
+_MATCH_THRESHOLD = 0.82  # порог имени для RAG-совпадения с каталогом
 
 
 class MealService:
@@ -39,8 +41,10 @@ class MealService:
         user_id = _require_id(user)
 
         items: list[MealItem] = []
+        estimated = False
         for parsed_item in parsed.items:
             product = await self._resolve_product(parsed_item)
+            estimated = estimated or product.is_estimate
             resolution = resolve_grams(
                 unit=parsed_item.unit.value,
                 quantity=parsed_item.quantity,
@@ -69,6 +73,7 @@ class MealService:
             items=items,
             source_confidence=parsed.confidence,
             totals=sum_macros(item.macros for item in items),
+            estimated=estimated,
         )
         return await self._meals.add(meal)
 
@@ -89,6 +94,11 @@ class MealService:
         existing = await self._products.get_by_key(key)
         if existing is not None:
             return existing  # детерминизм: плотность из БД, LLM-числа игнорим
+
+        # RAG-страховка: имя совпало с реальной строкой каталога → берём её, не оценку LLM
+        match = best_product_match(parsed_item.name, await self._products.list_all())
+        if match is not None:
+            return match
 
         unique_key = await self._free_key(key)
         product = Product(
@@ -114,6 +124,24 @@ class MealService:
         return key
 
 
+def best_product_match(
+    name: str, products: Sequence[Product], threshold: float = _MATCH_THRESHOLD
+) -> Product | None:
+    """Лучшее имя-совпадение из каталога (RAG: предпочесть реальную строку выдумке LLM).
+
+    ponytail: difflib-ratio, грубо для русского — если начнёт мазать, на pg_trgm/эмбеддинги.
+    Порог высокий: матчим только почти точные имена, чтобы не путать варианты.
+    """
+    q = _norm(name)
+    best: Product | None = None
+    best_score = 0.0
+    for product in products:
+        score = difflib.SequenceMatcher(None, q, _norm(product.display_name)).ratio()
+        if score > best_score:
+            best, best_score = product, score
+    return best if best_score >= threshold else None
+
+
 def _canonical_key(llm_key: str, name: str) -> str:
     key = (llm_key or "").strip().lower()
     if key in _JUNK_KEYS or len(key) < _MIN_KEY_LEN:
@@ -124,6 +152,10 @@ def _canonical_key(llm_key: str, name: str) -> str:
 def _slug(name: str) -> str:
     slug = re.sub(r"[^\w]+", "_", name.strip().lower()).strip("_")
     return slug or "item"
+
+
+def _norm(text: str) -> str:
+    return text.strip().lower()
 
 
 def _require_id(user: User) -> int:
