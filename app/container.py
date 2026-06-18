@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.assistant import Assistant
 from app.application.meal_service import MealService
-from app.application.ports import NluPort
+from app.application.ports import NluPort, SttPort
 from app.application.stats_service import StatsService
 from app.application.weight_service import WeightService
 from app.clock import Clock, utcnow
@@ -43,11 +43,23 @@ def build_nlu(settings: Settings) -> NluPort:
     raise RuntimeError(f"Неизвестный LLM_PROVIDER: {settings.llm_provider}")
 
 
+def build_stt(settings: Settings) -> SttPort | None:
+    """STT (голос) доступен только при наличии OpenAI-ключа; иначе None."""
+    if not settings.openai_api_key:
+        return None
+    from openai import AsyncOpenAI
+
+    from app.infrastructure.stt.whisper_client import OpenAiStt
+
+    return OpenAiStt(AsyncOpenAI(api_key=settings.openai_api_key), settings.openai_stt_model)
+
+
 @dataclass
 class Container:
     settings: Settings
     db: Database
     nlu: NluPort
+    stt: SttPort | None = None
     clock: Clock = utcnow
 
     @classmethod
@@ -56,6 +68,7 @@ class Container:
             settings=settings,
             db=Database(settings.database_url, echo=settings.db_echo),
             nlu=build_nlu(settings),
+            stt=build_stt(settings),
         )
 
     def assistant_for(self, session: AsyncSession) -> tuple[Assistant, SqlUserRepo]:
@@ -67,5 +80,7 @@ class Container:
         meal_service = MealService(products, meals, self.clock)
         weight_service = WeightService(weights, self.clock)
         stats_service = StatsService(meals, users, self.settings.default_goal(), self.clock)
-        assistant = Assistant(self.nlu, products, meal_service, weight_service, stats_service)
+        assistant = Assistant(
+            self.nlu, products, meal_service, weight_service, stats_service, self.stt
+        )
         return assistant, users

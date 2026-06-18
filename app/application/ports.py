@@ -19,6 +19,10 @@ class NluPort(Protocol):
     async def parse(self, text: str, known_keys: Sequence[str]) -> ParsedMessage: ...
 
 
+class SttPort(Protocol):
+    async def transcribe(self, audio: bytes, *, filename: str = "voice.ogg") -> str: ...
+
+
 class UserRepo(Protocol):
     async def get_or_create(
         self, *, telegram_id: int, name: str | None, locale: str, timezone: str

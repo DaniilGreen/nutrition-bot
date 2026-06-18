@@ -1,4 +1,4 @@
-"""In-memory реализации портов + StubNlu для тестов без БД и без LLM."""
+"""In-memory реализации портов + StubNlu/StubStt для тестов без БД и без LLM."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -111,3 +111,13 @@ class StubNlu:
         idx = min(self._i, len(self._responses) - 1)
         self._i += 1
         return self._responses[idx]
+
+
+class StubStt:
+    """Возвращает фиксированный транскрипт для голоса."""
+
+    def __init__(self, transcript: str) -> None:
+        self._transcript = transcript
+
+    async def transcribe(self, audio: bytes, *, filename: str = "voice.ogg") -> str:
+        return self._transcript

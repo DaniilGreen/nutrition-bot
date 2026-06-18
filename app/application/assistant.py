@@ -8,7 +8,7 @@ from __future__ import annotations
 from app.application.dto import Intent, ParsedMessage, Unit
 from app.application.entities import User
 from app.application.meal_service import MealService
-from app.application.ports import NluPort, ProductRepo
+from app.application.ports import NluPort, ProductRepo, SttPort
 from app.application.results import (
     ClarificationNeeded,
     History,
@@ -31,12 +31,14 @@ class Assistant:
         meal_service: MealService,
         weight_service: WeightService,
         stats_service: StatsService,
+        stt: SttPort | None = None,
     ) -> None:
         self._nlu = nlu
         self._products = products
         self._meals = meal_service
         self._weights = weight_service
         self._stats = stats_service
+        self._stt = stt
 
     async def process(self, user: User, text: str, *, input_type: str = "text") -> Result:
         known_keys = await self._products.all_keys()
@@ -53,6 +55,12 @@ class Assistant:
             return await self._stats.daily(user)
 
         return Unknown(reason="не распознал приём пищи или вес")
+
+    async def transcribe(self, audio: bytes, *, filename: str = "voice.ogg") -> str | None:
+        """Голос → текст (M3). None, если STT не сконфигурирован (нет OpenAI-ключа)."""
+        if self._stt is None:
+            return None
+        return await self._stt.transcribe(audio, filename=filename)
 
     async def continue_meal(
         self, user: User, draft: ParsedMessage, *, raw_input: str, input_type: str = "text"

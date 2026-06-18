@@ -1,10 +1,11 @@
 """Хендлеры aiogram. Тонкий слой: парсинг -> Assistant -> форматтер.
 
 M2: уточнения порции (inline + FSM), недельная статистика, история, отмена.
+M3: голосовые — скачиваем OGG, Whisper -> текст -> тот же пайплайн.
 """
 from __future__ import annotations
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -22,7 +23,7 @@ router = Router()
 
 START_TEXT = (
     "👋 Привет! Я считаю КБЖУ по твоим сообщениям.\n\n"
-    "Просто напиши, что съел:\n"
+    "Просто напиши или наговори, что съел:\n"
     "• «курица 250 грамм»\n"
     "• «два банана»\n"
     "• «фо бо средняя порция»\n\n"
@@ -83,10 +84,26 @@ async def on_undo(message: Message, app_user: User, assistant: Assistant) -> Non
 
 
 @router.message(F.voice)
-async def on_voice(message: Message) -> None:
-    await message.answer(
-        "🎤 Голосовые будут в M3. Пока напиши текстом — например «фо бо средняя порция»."
-    )
+async def on_voice(
+    message: Message, bot: Bot, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
+    await state.clear()
+    if message.voice is None:
+        return
+
+    buffer = await bot.download(message.voice)
+    audio = buffer.read() if buffer is not None else b""
+    transcript = await assistant.transcribe(audio, filename="voice.ogg")
+
+    if not transcript:
+        await message.answer(
+            "🎤 Не смог распознать голос. Для голосовых нужен OpenAI-ключ — либо напиши текстом."
+        )
+        return
+
+    await message.answer(f"🎤 Распознал: «{transcript}»")
+    result = await assistant.process(app_user, transcript, input_type="voice")
+    await _reply_message(message, result, state, raw=transcript)
 
 
 @router.message(F.text)
