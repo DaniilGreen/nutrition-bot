@@ -31,6 +31,19 @@ _MATCH_THRESHOLD = 0.82  # порог имени для RAG-совпадения
 _CORRECTION_LOOKBACK = 10  # сколько недавних записей просматриваем для «удали X»
 _CORRECTION_NAME_THRESHOLD = 0.8  # порог нечёткого совпадения имени при удалении
 _HISTORY_WINDOW_DAYS = 90  # окно истории для выбора варианта generic-имени (FR-20)
+# Квалификаторы вариантов семейств (FR-20): подстрока в тексте → юзер назвал вариант явно.
+# Детерминированный детект specific/generic (вместо нестабильного флага LLM `ambiguous`).
+# ponytail: ведём руками рядом с семействами из seed.py; для нескольких семейств — ок.
+_VARIANT_QUALIFIERS = {
+    "tvorog_5": "5%",
+    "tvorog_9": "9%",
+    "chicken_breast_boiled": "отварн",
+    "chicken_breast_fried": "жарен",
+    "chicken_grilled": "гриль",
+    "oatmeal_water": "вод",
+    "oatmeal_milk": "молок",
+    "cutlet_chicken": "курин",  # стем «куриная» (котлета)
+}
 
 
 class MealService:
@@ -124,19 +137,26 @@ class MealService:
         """Разрешение варианта generic-имени (FR-20). Возвращает (kind, products):
 
         normal — обычный путь; use — взять products[0]; clarify — спросить (products = варианты).
+        Детект specific/generic — детерминированный: квалификатор варианта в тексте (5%/гриль),
+        НЕ флаг LLM (он нестабилен — творог/овсянка не флажились).
         """
         key = _canonical_key(item.canonical_key, item.name)
         concrete = await self._products.get_by_key(key)
-        if concrete is not None and not item.ambiguous:
-            return ("normal", [])  # точный продукт назван явно
         category = concrete.category if concrete is not None else key
         if not category:
             return ("normal", [])
         variants = await self._products.list_by_category(category)
-        if not variants:
-            return ("normal", [])  # семейства нет — обычный путь (LLM-оценка/RAG)
-        if len(variants) == 1:
-            return ("use", variants)  # единственный вариант семейства
+        if len(variants) < 2:
+            return ("normal", [])  # семейства/выбора нет — обычный путь (LLM-оценка/RAG)
+        text = _norm(item.name)
+        matched = [
+            v for v in variants
+            if (q := _VARIANT_QUALIFIERS.get(v.canonical_key)) and q in text
+        ]
+        if len(matched) == 1:
+            return ("use", matched)  # назван квалификатор → ровно этот вариант (переопределяет LLM)
+        if len(matched) >= 2:
+            return ("clarify", variants)  # назвал несколько квалификаторов — уточнить
         since = self._clock() - timedelta(days=_HISTORY_WINDOW_DAYS)
         ids = [v.id for v in variants if v.id is not None]
         dominant_id = await self._meals.most_frequent_item(user_id, ids, since)
@@ -144,7 +164,7 @@ class MealService:
             chosen = next((v for v in variants if v.id == dominant_id), None)
             if chosen is not None:
                 return ("use", [chosen])  # «как обычно» — из истории юзера
-        return ("clarify", variants)  # истории нет → спросить
+        return ("clarify", variants)  # generic без истории → спросить
 
     async def _resolve_product(self, parsed_item: ParsedItem) -> Product:
         key = _canonical_key(parsed_item.canonical_key, parsed_item.name)
