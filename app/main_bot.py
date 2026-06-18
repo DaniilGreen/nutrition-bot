@@ -15,6 +15,7 @@ from app.bot.middlewares import ServicesMiddleware
 from app.bot.reminders import run_reminder_loop
 from app.config import get_settings
 from app.container import Container
+from app.infrastructure.products.seed import seed_curated
 from app.logging import setup_logging
 
 
@@ -36,6 +37,7 @@ async def main() -> None:
     dp.include_router(router)
 
     await setup_bot_commands(bot)
+    await seed_curated(container.db.session_factory)
 
     reminder_task: asyncio.Task[None] | None = None
     if settings.reminder_enabled:
