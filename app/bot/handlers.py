@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import suppress
+from html import escape
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
@@ -189,7 +190,7 @@ async def on_voice(
         )
         return
 
-    await message.answer(f"🎤 Распознал: «{transcript}»")
+    await message.answer(f"🎤 Распознал: «{escape(transcript, quote=False)}»")
     await _send_typing(message)
     result = await assistant.process(app_user, transcript, input_type="voice")
     await _reply_message(message, result, state, raw=transcript)

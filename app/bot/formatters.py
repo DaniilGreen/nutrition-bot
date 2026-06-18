@@ -1,6 +1,12 @@
-"""Рендер Result -> HTML-текст ответа бота."""
+"""Рендер Result -> HTML-текст ответа бота.
+
+Динамика (имена продуктов от LLM, транскрипты) экранируется — иначе символы
+вроде & < > ломают HTML-разметку Telegram. Прогресс-бары рисуются текстом (█░),
+без зависимостей — это и есть «псевдо-дашборд».
+"""
 from __future__ import annotations
 
+from html import escape
 from zoneinfo import ZoneInfo
 
 from app.application.results import (
@@ -42,7 +48,7 @@ def _format_meal(r: MealLogged) -> str:
     for it in r.meal.items:
         m = it.macros
         lines.append(
-            f"• {it.name_snapshot} — {_n(it.grams)} г · {_n(m.kcal)} ккал · "
+            f"• {_esc(it.name_snapshot)} — {_n(it.grams)} г · {_n(m.kcal)} ккал · "
             f"Б{_n(m.protein)} Ж{_n(m.fat)} У{_n(m.carb)}"
         )
     t = r.meal.totals
@@ -56,7 +62,7 @@ def _format_meal(r: MealLogged) -> str:
 
 
 def _format_clarification(r: ClarificationNeeded) -> str:
-    return f"🤔 «{r.item_name}» — какая порция?"
+    return f"🤔 «{_esc(r.item_name)}» — какая порция?"
 
 
 def _format_weight(r: WeightLogged) -> str:
@@ -68,17 +74,23 @@ def _format_weight(r: WeightLogged) -> str:
 
 
 def _format_stats(rem: Remaining, meals_count: int) -> str:
-    return f"📊 Сегодня (приёмов пищи: {meals_count})\n\n{_remaining_block(rem)}"
+    return (
+        f"📊 Сегодня · приёмов: {meals_count}\n\n"
+        f"{_kcal_line(rem)}\n\n"
+        f"{_macro_line('🥩 Б', rem.consumed.protein, rem.goal.protein_g)}\n"
+        f"{_macro_line('🧈 Ж', rem.consumed.fat, rem.goal.fat_g)}\n"
+        f"{_macro_line('🍞 У', rem.consumed.carb, rem.goal.carb_g)}"
+    )
 
 
 def _format_weekly(r: WeeklyStats) -> str:
     avg = round(r.consumed.kcal / r.days_logged) if r.days_logged else 0
     c = r.consumed
     return (
-        "📈 За неделю:\n"
-        f"Калории: <b>{_n(c.kcal)}</b> · в среднем {_n(avg)}/день за {r.days_logged} дн.\n"
-        f"Б{_n(c.protein)} Ж{_n(c.fat)} У{_n(c.carb)} · приёмов: {r.meals_count}\n"
-        f"Цель: {_n(r.goal.daily_kcal)} ккал/день"
+        "📈 За неделю\n\n"
+        f"🔥 Всего {_n(c.kcal)} ккал · в среднем <b>{_n(avg)}/день</b> ({r.days_logged} дн.)\n"
+        f"{_bar(avg, r.goal.daily_kcal)}  цель {_n(r.goal.daily_kcal)}\n\n"
+        f"Б{_n(c.protein)} Ж{_n(c.fat)} У{_n(c.carb)} · приёмов: {r.meals_count}"
     )
 
 
@@ -89,7 +101,7 @@ def _format_history(r: History) -> str:
     lines = ["🗒 Последние записи:"]
     for m in r.meals:
         when = m.eaten_at.astimezone(tz).strftime("%d.%m %H:%M")
-        names = ", ".join(i.name_snapshot for i in m.items) or "—"
+        names = _esc(", ".join(i.name_snapshot for i in m.items) or "—")
         lines.append(f"• {when} — {_n(m.totals.kcal)} ккал ({names})")
     return "\n".join(lines)
 
@@ -97,15 +109,8 @@ def _format_history(r: History) -> str:
 def _format_deleted(r: MealDeleted) -> str:
     if r.meal is None:
         return "Нечего удалять."
-    names = ", ".join(i.name_snapshot for i in r.meal.items) or "запись"
+    names = _esc(", ".join(i.name_snapshot for i in r.meal.items) or "запись")
     return f"🗑 Удалил: {names} ({_n(r.meal.totals.kcal)} ккал)."
-
-
-def _remaining_block(rem: Remaining) -> str:
-    return (
-        f"Осталось: <b>{_n(rem.kcal_left)} / {_n(rem.goal.daily_kcal)} ккал</b>\n"
-        f"Б: {_n(rem.protein_left)} · Ж: {_n(rem.fat_left)} · У: {_n(rem.carb_left)}"
-    )
 
 
 def _format_unknown() -> str:
@@ -116,6 +121,45 @@ def _format_unknown() -> str:
         "• «вес 86.8»\n"
         "• «сколько осталось»"
     )
+
+
+def _kcal_line(rem: Remaining) -> str:
+    consumed = rem.consumed.kcal
+    goal = rem.goal.daily_kcal
+    pct = round(100 * consumed / goal) if goal else 0
+    head = f"🔥 <b>{_n(consumed)} / {_n(goal)} ккал</b>"
+    if rem.kcal_left >= 0:
+        head += f" · осталось {_n(rem.kcal_left)}"
+    else:
+        head += f" · ⚠️ +{_n(-rem.kcal_left)} сверх"
+    return f"{head}\n{_bar(consumed, goal)}  {pct}%"
+
+
+def _macro_line(label: str, consumed: float, goal: float) -> str:
+    return f"{label} {_n(consumed)}/{_n(goal)}  {_bar(consumed, goal)}"
+
+
+def _remaining_block(rem: Remaining) -> str:
+    return (
+        f"{_kcal_line(rem)}\n"
+        f"🥩 Б {_n(rem.consumed.protein)}/{_n(rem.goal.protein_g)} · "
+        f"🧈 Ж {_n(rem.consumed.fat)}/{_n(rem.goal.fat_g)} · "
+        f"🍞 У {_n(rem.consumed.carb)}/{_n(rem.goal.carb_g)}"
+    )
+
+
+def _bar(value: float, goal: float, width: int = 10) -> str:
+    if goal <= 0:
+        return "░" * width
+    ratio = value / goal
+    ratio = 0.0 if ratio < 0 else (1.0 if ratio > 1 else ratio)
+    filled = round(ratio * width)
+    return "█" * filled + "░" * (width - filled)
+
+
+def _esc(text: str) -> str:
+    # Только & < > — в теле HTML-сообщения Telegram этого достаточно; кавычки не трогаем.
+    return escape(text, quote=False)
 
 
 def _n(x: float) -> str:
