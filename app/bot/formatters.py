@@ -118,9 +118,11 @@ def _format_stats(rem: Remaining, meals_count: int) -> str:
     return (
         f"📊 Сегодня · приёмов: {meals_count}\n\n"
         f"{_kcal_line(rem)}\n\n"
+        "<pre>"
         f"{_macro_line('🥩 Белок', rem.consumed.protein, rem.goal.protein_g)}\n"
         f"{_macro_line('🧈 Жир', rem.consumed.fat, rem.goal.fat_g)}\n"
         f"{_macro_line('🍞 Углеводы', rem.consumed.carb, rem.goal.carb_g)}"
+        "</pre>"
     )
 
 
@@ -179,7 +181,7 @@ def _format_unknown() -> str:
     )
 
 
-def _kcal_line(rem: Remaining, fill: str = "●", empty: str = "○") -> str:
+def _kcal_line(rem: Remaining, fill: str = "▰", empty: str = "▱") -> str:
     consumed = rem.consumed.kcal
     goal = rem.goal.daily_kcal
     pct = round(100 * consumed / goal) if goal else 0
@@ -191,11 +193,11 @@ def _kcal_line(rem: Remaining, fill: str = "●", empty: str = "○") -> str:
     return f"{head}\n{_bar(consumed, goal, fill, empty)} {pct}%"
 
 
-def _macro_line(
-    label: str, consumed: float, goal: float, fill: str = "●", empty: str = "○"
-) -> str:
+def _macro_line(label: str, consumed: float, goal: float) -> str:
+    """Строка макроса с фикс-шириной колонок — для выравнивания внутри <pre> (моноширинно)."""
     pct = round(100 * consumed / goal) if goal else 0
-    return f"{label} {_n(consumed)}/{_n(goal)} {_bar(consumed, goal, fill, empty)} {pct}%"
+    nums = f"{_n(consumed)}/{_n(goal)}"
+    return f"{label:<10} {nums:<9} {_bar(consumed, goal)} {pct}%"
 
 
 def _remaining_block(rem: Remaining) -> str:
@@ -207,8 +209,8 @@ def _remaining_block(rem: Remaining) -> str:
     )
 
 
-def _bar(value: float, goal: float, fill: str = "●", empty: str = "○", width: int = 10) -> str:
-    """Текстовая полоска (стиль E ●○ по умолчанию); fill/empty параметризованы (FR-9)."""
+def _bar(value: float, goal: float, fill: str = "▰", empty: str = "▱", width: int = 10) -> str:
+    """Текстовая полоска (стиль C ▰▱ по умолчанию); fill/empty параметризованы (FR-9)."""
     if goal <= 0:
         return empty * width
     ratio = 0.0 if value < 0 else min(1.0, value / goal)
