@@ -14,7 +14,6 @@ from __future__ import annotations
 import difflib
 import re
 from collections.abc import Sequence
-from datetime import timedelta
 
 from app.application.dto import ParsedItem, ParsedMessage
 from app.application.entities import Meal, MealItem, Product, User
@@ -30,7 +29,6 @@ _MIN_KEY_LEN = 3
 _MATCH_THRESHOLD = 0.82  # порог имени для RAG-совпадения с каталогом
 _CORRECTION_LOOKBACK = 10  # сколько недавних записей просматриваем для «удали X»
 _CORRECTION_NAME_THRESHOLD = 0.8  # порог нечёткого совпадения имени при удалении
-_HISTORY_WINDOW_DAYS = 90  # окно истории для выбора варианта generic-имени (FR-20)
 # Квалификаторы вариантов семейств (FR-20): подстрока в тексте → юзер назвал вариант явно.
 # Детерминированный детект specific/generic (вместо нестабильного флага LLM `ambiguous`).
 # ponytail: ведём руками рядом с семействами из seed.py; для нескольких семейств — ок.
@@ -156,17 +154,8 @@ class MealService:
             if (q := _VARIANT_QUALIFIERS.get(v.canonical_key)) and q in text
         ]
         if len(matched) == 1:
-            return ("use", matched)  # назван квалификатор → ровно этот вариант (переопределяет LLM)
-        if len(matched) >= 2:
-            return ("clarify", variants)  # назвал несколько квалификаторов — уточнить
-        since = self._clock() - timedelta(days=_HISTORY_WINDOW_DAYS)
-        ids = [v.id for v in variants if v.id is not None]
-        dominant_id = await self._meals.most_frequent_item(user_id, ids, since)
-        if dominant_id is not None:
-            chosen = next((v for v in variants if v.id == dominant_id), None)
-            if chosen is not None:
-                return ("use", [chosen])  # «как обычно» — из истории юзера
-        return ("clarify", variants)  # generic без истории → спросить
+            return ("use", matched)  # квалификатор → ровно этот вариант (переопределяет LLM)
+        return ("clarify", variants)  # нет квалификатора → ВСЕГДА вопрос, без памяти
 
     async def _resolve_product(self, parsed_item: ParsedItem) -> Product:
         key = _canonical_key(parsed_item.canonical_key, parsed_item.name)

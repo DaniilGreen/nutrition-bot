@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
 from app.application.entities import Product
-from app.application.results import MealLogged, VariantClarificationNeeded
+from app.application.results import ClarificationNeeded, MealLogged, VariantClarificationNeeded
 from app.domain.value_objects import Density
 from tests.e2e.test_meal_flow import _build, _new_user
 from tests.fakes import InMemoryProductRepo, StubNlu
@@ -111,42 +111,71 @@ async def test_variant_pick_sticks() -> None:
     final = await assistant.continue_meal(user, draft, raw_input="творог 150")
 
     assert isinstance(final, MealLogged)
-    assert final.meal.totals.kcal == 320.0  # выбранный tvorog_9 (160/100*200), без повторного вопроса
+    assert final.meal.totals.kcal == 320.0  # выбранный tvorog_9 (160/100*200), без повтора
 
 
-async def test_history_default() -> None:
-    # ел «курица отварная» 2× (квалификатор отварн → boiled) → «курица» молча boiled (130*2=260)
+async def test_repeat_generic_asks_again() -> None:
+    # памяти нет: «творог» спрашивает КАЖДЫЙ раз, даже после прошлого выбора
+    # (два свежих парса — StubNlu отдаёт один и тот же объект, а первый мы мутируем)
     assistant, users, products = _build(
-        StubNlu(
-            _item("курица отварная", "chicken_breast_boiled"),
-            _item("курица отварная", "chicken_breast_boiled"),
-            _item("курица", "chicken"),
-        )
+        StubNlu(_item("творог", "tvorog_5"), _item("творог", "tvorog_5"))
     )
+    await _seed(products, _TVOROG, "tvorog")
+    user = await _new_user(users)
+
+    first = await assistant.process(user, "творог 150")
+    # эмулируем выбор tvorog_9 и запись
+    first.draft.items[first.item_index].canonical_key = "tvorog_9"
+    first.draft.items[first.item_index].variant_locked = True
+    await assistant.continue_meal(user, first.draft, raw_input="творог 150")
+    # снова «творог» → снова вопрос (память не ведём)
+    second = await assistant.process(user, "творог 150")
+
+    assert isinstance(first, VariantClarificationNeeded)
+    assert isinstance(second, VariantClarificationNeeded)
+
+
+async def test_no_quantity_asks_size_and_scales() -> None:
+    # «овсянка» без количества → unit=portion/null/типичная → вопрос размера → масштаб (FR-21/D-7)
+    oat = ParsedMessage(
+        intent=Intent.MEAL,
+        confidence=0.9,
+        items=[
+            ParsedItem(
+                name="овсянка",
+                canonical_key="oatmeal_x",  # вне семейства — только вопрос размера, без варианта
+                unit=Unit.PORTION,
+                portion_hint=None,
+                grams=250,  # типичная порция от LLM
+                kcal_per_100g=90,
+                protein_per_100g=3,
+                fat_per_100g=2,
+                carb_per_100g=15,
+                confidence=0.9,
+            )
+        ],
+    )
+    assistant, users, _ = _build(StubNlu(oat))
+    user = await _new_user(users)
+
+    result = await assistant.process(user, "овсянка")
+    assert isinstance(result, ClarificationNeeded)  # спросили размер, не угадали
+
+    result.draft.items[0].portion_hint = "small"
+    final = await assistant.continue_meal(user, result.draft, raw_input="овсянка")
+
+    assert isinstance(final, MealLogged)
+    assert final.meal.items[0].grams == 175  # типичная 250 × 0.7 (маленькая)
+    assert final.meal.totals.kcal == 157.5  # 90/100 * 175
+
+
+async def test_chicken_qualifier_picks_grilled() -> None:
+    # «курица гриль» — квалификатор гриль → grilled (400), даже если LLM промахнулся ключом
+    assistant, users, products = _build(StubNlu(_item("курица гриль", "chicken_breast_boiled")))
     await _seed(products, _CHICKEN, "chicken")
     user = await _new_user(users)
 
-    await assistant.process(user, "курица отварная 200")
-    await assistant.process(user, "курица отварная 200")
-    result = await assistant.process(user, "курица 200")
-
-    assert isinstance(result, MealLogged)
-    assert result.meal.totals.kcal == 260.0  # boiled, не grilled (400)
-
-
-async def test_specific_not_overridden_by_history() -> None:
-    # история boiled не перетирает явный «курица гриль» (квалификатор гриль → grilled, 200*2=400)
-    assistant, users, products = _build(
-        StubNlu(
-            _item("курица отварная", "chicken_breast_boiled"),
-            _item("курица гриль", "chicken_grilled"),
-        )
-    )
-    await _seed(products, _CHICKEN, "chicken")
-    user = await _new_user(users)
-
-    await assistant.process(user, "курица отварная 200")
     result = await assistant.process(user, "курица гриль 200")
 
     assert isinstance(result, MealLogged)
-    assert result.meal.totals.kcal == 400.0  # grilled, не boiled (260)
+    assert result.meal.totals.kcal == 400.0

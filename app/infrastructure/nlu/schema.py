@@ -15,7 +15,9 @@ class NluItem(BaseModel):
     unit: Literal["g", "ml", "piece", "portion", "unknown"]
     quantity: float | None = Field(default=None, description="Число штук для штучных продуктов")
     grams: float | None = Field(default=None, description="Оценка общего веса порции в граммах")
-    portion_hint: Literal["small", "medium", "large"] | None = None
+    portion_hint: Literal["small", "medium", "large"] | None = Field(
+        default=None, description="размер порции; СТРОГО null, если размер не назван словом"
+    )
     unit_weight_g: float | None = Field(default=None, description="Вес одной штуки в граммах")
     ambiguous: bool = Field(
         default=False,

@@ -64,11 +64,13 @@ def test_final_default() -> None:
     assert r.assumed is True
 
 
-def test_explicit_grams_beats_portion_fallback() -> None:
-    # «30 грамм одна порция», у продукта нет курируемых размеров → 30 г, не дефолт 300
-    r = _call(unit="portion", portion_hint="medium", grams_estimate=30)
-    assert r.grams == 30
-    assert r.assumed is False
+def test_portion_scales_typical_grams() -> None:
+    # «овсянка» без количества → unit=portion, grams=типичная (250); размер S/M/L масштабирует её
+    assert _call(unit="portion", portion_hint="medium", grams_estimate=250).grams == 250
+    small = _call(unit="portion", portion_hint="small", grams_estimate=250)
+    assert small.grams == 250 * 0.7
+    assert small.assumed is True
+    assert _call(unit="portion", portion_hint="large", grams_estimate=250).grams == 250 * 1.4
 
 
 def test_pieces_without_weight_use_grams_estimate() -> None:

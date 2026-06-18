@@ -1,11 +1,11 @@
 """Разрешение веса порции в граммы.
 
 Самый большой рычаг калорийности и самый неопределённый вход. Приоритет:
-явный вес → счёт штук → курируемый размер порции → явные граммы-оценка →
-порция-дефолт → дефолт. Флаг `assumed` показывает, что вес угадан.
+явный вес → счёт штук → курируемый размер порции → порция × множитель размера
+(база — типичная порция от LLM) → явные граммы → дефолт. `assumed` = вес угадан.
 
-Важно: явные граммы из текста («30 грамм») идут ВЫШЕ дефолтной порции — иначе
-слово «порция» затирает явный вес (баг: «30 грамм одна порция» → 300 г).
+При unit=portion размер (S/M/L) масштабирует базу: «овсянка» без количества →
+вопрос размера → типичная_порция × множитель (FR-21/D-7).
 """
 from __future__ import annotations
 
@@ -57,15 +57,16 @@ def resolve_grams(
     ):
         return GramsResolution(grams=product_portion_sizes[portion_hint], assumed=False)
 
-    # 4. Явные граммы из текста — важнее дефолтной порции ("30 грамм одна порция").
-    if grams_estimate is not None:
-        return GramsResolution(grams=grams_estimate, assumed=False)
-
-    # 5. Порция без курируемых размеров → дефолт × множитель.
+    # 4. Порция с размером, без курируемых пресетов: масштабируем базу по размеру.
+    #    База — типичная порция от LLM (grams) или дефолт продукта; иначе общий дефолт.
     if unit == "portion" and portion_hint is not None:
-        base = product_default_portion_g or DEFAULT_PORTION_G
+        base = product_default_portion_g or grams_estimate or DEFAULT_PORTION_G
         factor = PORTION_FALLBACK_FACTOR.get(portion_hint, 1.0)
         return GramsResolution(grams=base * factor, assumed=True)
+
+    # 5. Явные граммы (не порция) — страховка для unit=unknown с числом.
+    if grams_estimate is not None:
+        return GramsResolution(grams=grams_estimate, assumed=False)
 
     # 6. Последний дефолт.
     base = product_default_portion_g or DEFAULT_PORTION_G
