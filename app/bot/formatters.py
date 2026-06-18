@@ -118,11 +118,11 @@ def _format_stats(rem: Remaining, meals_count: int) -> str:
     return (
         f"📊 Сегодня · приёмов: {meals_count}\n\n"
         f"{_kcal_line(rem)}\n\n"
-        "<pre>"
+        "<code>"
         f"{_macro_line('🥩 Белок', rem.consumed.protein, rem.goal.protein_g)}\n"
         f"{_macro_line('🧈 Жир', rem.consumed.fat, rem.goal.fat_g)}\n"
         f"{_macro_line('🍞 Углеводы', rem.consumed.carb, rem.goal.carb_g)}"
-        "</pre>"
+        "</code>"
     )
 
 
