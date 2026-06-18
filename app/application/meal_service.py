@@ -4,8 +4,15 @@
 - известный продукт → плотность из БД (LLM-числа игнорируются) → детерминизм;
 - новый продукт → создаём из оценки LLM и фиксируем навсегда.
 Финальные КБЖУ считает domain.nutrition, не LLM.
+
+Идентичность продукта — canonical_key. LLM иногда возвращает мусор ("unknown" и
+т.п.); такой ключ нельзя считать идентичностью, иначе разные продукты сливаются
+в один (классический баг: всё с ключом "unknown" наследует плотность первого).
+Поэтому мусорные ключи нормализуем в стабильный slug из названия.
 """
 from __future__ import annotations
+
+import re
 
 from app.application.dto import ParsedItem, ParsedMessage
 from app.application.entities import Meal, MealItem, Product, User
@@ -14,6 +21,10 @@ from app.clock import Clock, utcnow
 from app.domain.nutrition import macros_for_grams
 from app.domain.portions import resolve_grams
 from app.domain.value_objects import Density, sum_macros
+
+# Ключи, которые LLM возвращает «от неуверенности» — не идентичность продукта.
+_JUNK_KEYS = frozenset({"", "unknown", "none", "null", "na", "n_a", "item", "product", "food", "еда"})
+_MIN_KEY_LEN = 3
 
 
 class MealService:
@@ -74,12 +85,14 @@ class MealService:
         return await self._meals.remove_item(_require_id(user), meal_id, item_id)
 
     async def _resolve_product(self, parsed_item: ParsedItem) -> Product:
-        existing = await self._products.get_by_key(parsed_item.canonical_key)
+        key = _canonical_key(parsed_item.canonical_key, parsed_item.name)
+        existing = await self._products.get_by_key(key)
         if existing is not None:
-            return existing
+            return existing  # детерминизм: плотность из БД, LLM-числа игнорим
 
+        unique_key = await self._free_key(key)
         product = Product(
-            canonical_key=parsed_item.canonical_key,
+            canonical_key=unique_key,
             display_name=parsed_item.name,
             density=Density(
                 kcal_per_100g=parsed_item.kcal_per_100g,
@@ -92,6 +105,25 @@ class MealService:
             is_estimate=True,
         )
         return await self._products.create(product)
+
+    async def _free_key(self, base: str) -> str:
+        key, suffix = base, 2
+        while await self._products.get_by_key(key) is not None:
+            key = f"{base}_{suffix}"
+            suffix += 1
+        return key
+
+
+def _canonical_key(llm_key: str, name: str) -> str:
+    key = (llm_key or "").strip().lower()
+    if key in _JUNK_KEYS or len(key) < _MIN_KEY_LEN:
+        return _slug(name)
+    return key
+
+
+def _slug(name: str) -> str:
+    slug = re.sub(r"[^\w]+", "_", name.strip().lower()).strip("_")
+    return slug or "item"
 
 
 def _require_id(user: User) -> int:
