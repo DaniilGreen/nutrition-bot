@@ -7,11 +7,12 @@ from app.domain.value_objects import Macros
 
 
 def test_bar_fill_levels() -> None:
-    assert _bar(0, 100, width=10) == "░" * 10
-    assert _bar(100, 100, width=10) == "█" * 10
-    assert _bar(50, 100, width=10) == "█" * 5 + "░" * 5
-    assert _bar(200, 100, width=10) == "█" * 10  # перебор — бар заполнен, не длиннее
-    assert _bar(50, 0, width=10) == "░" * 10  # нулевая цель безопасна
+    # цветная палитра-стадия: 🟦<40 · 🟨40–75 · 🟩75–100 · 🟧100–120 · 🟥>120, пусто ⬜
+    assert _bar(0, 100, width=10) == "⬜" * 10
+    assert _bar(100, 100, width=10) == "🟩" * 10  # 100% → в цель (зелёный)
+    assert _bar(50, 100, width=10) == "🟨" * 5 + "⬜" * 5  # 50% → набираешь (жёлтый)
+    assert _bar(200, 100, width=10) == "🟥" * 10  # перебор → красный, не длиннее
+    assert _bar(50, 0, width=10) == "⬜" * 10  # нулевая цель безопасна
 
 
 def test_escape_dynamic() -> None:
@@ -31,5 +32,5 @@ def test_daily_card_has_bar_and_remaining() -> None:
     rem = remaining(Macros(500, 40, 20, 50), Goal(2000, 150, 65, 250))
     text = format_result(DailyStats(remaining=rem, meals_count=2))
     assert "📊 Сегодня" in text
-    assert "█" in text and "░" in text
+    assert "⬜" in text and ("🟦" in text or "🟨" in text or "🟩" in text)  # цветной бар
     assert "1500" in text

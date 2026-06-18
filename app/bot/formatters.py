@@ -118,9 +118,9 @@ def _format_stats(rem: Remaining, meals_count: int) -> str:
     return (
         f"📊 Сегодня · приёмов: {meals_count}\n\n"
         f"{_kcal_line(rem)}\n\n"
-        f"{_macro_line('🥩 Б', rem.consumed.protein, rem.goal.protein_g)}\n"
-        f"{_macro_line('🧈 Ж', rem.consumed.fat, rem.goal.fat_g)}\n"
-        f"{_macro_line('🍞 У', rem.consumed.carb, rem.goal.carb_g)}"
+        f"{_macro_line('🥩 Белок', rem.consumed.protein, rem.goal.protein_g)}\n"
+        f"{_macro_line('🧈 Жир', rem.consumed.fat, rem.goal.fat_g)}\n"
+        f"{_macro_line('🍞 Углеводы', rem.consumed.carb, rem.goal.carb_g)}"
     )
 
 
@@ -188,11 +188,12 @@ def _kcal_line(rem: Remaining) -> str:
         head += f" · осталось {_n(rem.kcal_left)}"
     else:
         head += f" · ⚠️ +{_n(-rem.kcal_left)} сверх"
-    return f"{head}\n{_bar(consumed, goal)}  {pct}%"
+    return f"{head}\n{_bar(consumed, goal)} {pct}%"
 
 
 def _macro_line(label: str, consumed: float, goal: float) -> str:
-    return f"{label} {_n(consumed)}/{_n(goal)}  {_bar(consumed, goal)}"
+    pct = round(100 * consumed / goal) if goal else 0
+    return f"{label} {_n(consumed)}/{_n(goal)} {_bar(consumed, goal)} {pct}%"
 
 
 def _remaining_block(rem: Remaining) -> str:
@@ -205,12 +206,27 @@ def _remaining_block(rem: Remaining) -> str:
 
 
 def _bar(value: float, goal: float, width: int = 10) -> str:
+    """Цветная полоска (FR-9): вся заполненная часть = цвет стадии по % к цели.
+
+    🟦 <40 · 🟨 40–75 · 🟩 75–100 · 🟧 100–120 · 🟥 >120. Пустые ячейки — ⬜.
+    """
+    empty = "⬜"
     if goal <= 0:
-        return "░" * width
-    ratio = value / goal
-    ratio = 0.0 if ratio < 0 else (1.0 if ratio > 1 else ratio)
-    filled = round(ratio * width)
-    return "█" * filled + "░" * (width - filled)
+        return empty * width
+    pct = 100 * value / goal
+    if pct < 40:
+        color = "🟦"
+    elif pct < 75:
+        color = "🟨"
+    elif pct <= 100:
+        color = "🟩"
+    elif pct <= 120:
+        color = "🟧"
+    else:
+        color = "🟥"
+    ratio = 0.0 if value < 0 else min(1.0, value / goal)
+    filled = max(0, min(width, round(ratio * width)))
+    return color * filled + empty * (width - filled)
 
 
 def _sparkline(values: list[float]) -> str:
