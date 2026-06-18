@@ -46,6 +46,7 @@ def _to_dto(result: NluResult) -> ParsedMessage:
                 grams=i.grams,
                 portion_hint=i.portion_hint,
                 unit_weight_g=i.unit_weight_g,
+                ambiguous=i.ambiguous,
                 kcal_per_100g=i.kcal_per_100g,
                 protein_per_100g=i.protein_per_100g,
                 fat_per_100g=i.fat_per_100g,

@@ -17,6 +17,11 @@ class NluItem(BaseModel):
     grams: float | None = Field(default=None, description="Оценка общего веса порции в граммах")
     portion_hint: Literal["small", "medium", "large"] | None = None
     unit_weight_g: float | None = Field(default=None, description="Вес одной штуки в граммах")
+    ambiguous: bool = Field(
+        default=False,
+        description="true, если способ/часть/тип не уточнены и заметно влияют на КБЖУ "
+        "(«курица», «мясо», «кофе»); false для уточнённых («грудка отварная», «эспрессо»)",
+    )
     kcal_per_100g: float = Field(
         description="Оценка КБЖУ на 100 г (нужна только для новых продуктов)"
     )
