@@ -117,10 +117,10 @@ def _format_weight_trend(t: WeightTrend) -> str:
 def _format_stats(rem: Remaining, meals_count: int) -> str:
     return (
         f"📊 Сегодня · приёмов: {meals_count}\n\n"
-        f"{_kcal_line(rem)}\n\n"
-        f"{_macro_line('🥩 Белок', rem.consumed.protein, rem.goal.protein_g)}\n"
-        f"{_macro_line('🧈 Жир', rem.consumed.fat, rem.goal.fat_g)}\n"
-        f"{_macro_line('🍞 Углеводы', rem.consumed.carb, rem.goal.carb_g)}"
+        f"{_kcal_line(rem, '▓', '░')} (b)\n\n"
+        f"{_macro_line('🥩 Белок', rem.consumed.protein, rem.goal.protein_g, '▰', '▱')} (c)\n"
+        f"{_macro_line('🧈 Жир', rem.consumed.fat, rem.goal.fat_g, '●', '○')} (e)\n"
+        f"{_macro_line('🍞 Углеводы', rem.consumed.carb, rem.goal.carb_g, '▮', '▯')} (f)"
     )
 
 
@@ -179,7 +179,7 @@ def _format_unknown() -> str:
     )
 
 
-def _kcal_line(rem: Remaining) -> str:
+def _kcal_line(rem: Remaining, fill: str = "█", empty: str = "░") -> str:
     consumed = rem.consumed.kcal
     goal = rem.goal.daily_kcal
     pct = round(100 * consumed / goal) if goal else 0
@@ -188,12 +188,14 @@ def _kcal_line(rem: Remaining) -> str:
         head += f" · осталось {_n(rem.kcal_left)}"
     else:
         head += f" · ⚠️ +{_n(-rem.kcal_left)} сверх"
-    return f"{head}\n{_bar(consumed, goal)} {pct}%"
+    return f"{head}\n{_bar(consumed, goal, fill, empty)} {pct}%"
 
 
-def _macro_line(label: str, consumed: float, goal: float) -> str:
+def _macro_line(
+    label: str, consumed: float, goal: float, fill: str = "█", empty: str = "░"
+) -> str:
     pct = round(100 * consumed / goal) if goal else 0
-    return f"{label} {_n(consumed)}/{_n(goal)} {_bar(consumed, goal)} {pct}%"
+    return f"{label} {_n(consumed)}/{_n(goal)} {_bar(consumed, goal, fill, empty)} {pct}%"
 
 
 def _remaining_block(rem: Remaining) -> str:
@@ -205,28 +207,13 @@ def _remaining_block(rem: Remaining) -> str:
     )
 
 
-def _bar(value: float, goal: float, width: int = 10) -> str:
-    """Цветная полоска (FR-9): вся заполненная часть = цвет стадии по % к цели.
-
-    🟦 <40 · 🟨 40–75 · 🟩 75–100 · 🟧 100–120 · 🟥 >120. Пустые ячейки — ⬜.
-    """
-    empty = "⬜"
+def _bar(value: float, goal: float, fill: str = "█", empty: str = "░", width: int = 10) -> str:
+    """Текстовая полоска; символы fill/empty параметризованы (выбор стиля для FR-9)."""
     if goal <= 0:
         return empty * width
-    pct = 100 * value / goal
-    if pct < 40:
-        color = "🟦"
-    elif pct < 75:
-        color = "🟨"
-    elif pct <= 100:
-        color = "🟩"
-    elif pct <= 120:
-        color = "🟧"
-    else:
-        color = "🟥"
     ratio = 0.0 if value < 0 else min(1.0, value / goal)
     filled = max(0, min(width, round(ratio * width)))
-    return color * filled + empty * (width - filled)
+    return fill * filled + empty * (width - filled)
 
 
 def _sparkline(values: list[float]) -> str:
