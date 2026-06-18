@@ -118,13 +118,21 @@ def _format_stats(rem: Remaining, meals_count: int) -> str:
 
 
 def _format_weekly(r: WeeklyStats) -> str:
-    avg = round(r.consumed.kcal / r.days_logged) if r.days_logged else 0
+    days = r.days_logged or 1
     c = r.consumed
+    g = r.goal
+    rows = "\n".join(
+        [
+            _macro_line("🔥 Ккал", round(c.kcal / days), g.daily_kcal),
+            _macro_line("🥩 Белок", round(c.protein / days), g.protein_g),
+            _macro_line("🧈 Жир", round(c.fat / days), g.fat_g),
+            _macro_line("🍞 Углеводы", round(c.carb / days), g.carb_g),
+        ]
+    )
     return (
-        "📈 За неделю\n\n"
-        f"🔥 Всего {_n(c.kcal)} ккал · в среднем <b>{_n(avg)}/день</b> ({r.days_logged} дн.)\n"
-        f"{_bar(avg, r.goal.daily_kcal)}  цель {_n(r.goal.daily_kcal)}\n\n"
-        f"Б{_n(c.protein)} Ж{_n(c.fat)} У{_n(c.carb)} · приёмов: {r.meals_count}"
+        f"📈 Неделя · {r.days_logged} дн · приёмов {r.meals_count}\n"
+        "среднее в день:\n"
+        f"<code>{rows}</code>"
     )
 
 
@@ -132,14 +140,14 @@ def _format_history(r: History) -> str:
     if not r.meals:
         return "🗒 История пуста."
     tz = ZoneInfo(r.timezone)
-    lines = ["🗒 Последние записи:"]
+    rows = []
     for m in r.meals:
         when = m.eaten_at.astimezone(tz).strftime("%d.%m %H:%M")
-        raw_names = ", ".join(i.name_snapshot for i in m.items) or "—"
-        if len(raw_names) > 60:
-            raw_names = raw_names[:59] + "…"  # ponytail: обрезка под лимит Telegram 4096
-        lines.append(f"• {when} — {_n(m.totals.kcal)} ккал ({_esc(raw_names)})")
-    return "\n".join(lines)
+        names = ", ".join(i.name_snapshot for i in m.items) or "—"
+        if len(names) > 28:
+            names = names[:27] + "…"  # ponytail: обрезка под выровненную колонку
+        rows.append(f"{when} {_n(m.totals.kcal):>5} · {_esc(names)}")
+    return "🗒 Последние записи:\n<code>" + "\n".join(rows) + "</code>"
 
 
 def _format_deleted(r: MealDeleted) -> str:
@@ -172,24 +180,17 @@ def _format_unknown() -> str:
     )
 
 
-def _kcal_remaining(rem: Remaining) -> str:
-    left = rem.kcal_left
-    if left >= 0:
-        return f"осталось {_n(left)} ккал"
-    return f"⚠️ +{_n(-left)} ккал сверх"
-
-
 def _dashboard(rem: Remaining) -> str:
-    """Выровненная сетка B (моноширинно <code>): ккал-строка + пустая строка + БЖУ; ниже остаток."""
-    macros = "\n".join(
+    """Выровненная сетка B (моноширинно <code>): ккал + БЖУ слитно, в одной колонке."""
+    rows = "\n".join(
         [
+            _macro_line("🔥 Ккал", rem.consumed.kcal, rem.goal.daily_kcal),
             _macro_line("🥩 Белок", rem.consumed.protein, rem.goal.protein_g),
             _macro_line("🧈 Жир", rem.consumed.fat, rem.goal.fat_g),
             _macro_line("🍞 Углеводы", rem.consumed.carb, rem.goal.carb_g),
         ]
     )
-    kcal = _macro_line("🔥 Ккал", rem.consumed.kcal, rem.goal.daily_kcal)
-    return f"<code>{kcal}\n\n{macros}</code>\n{_kcal_remaining(rem)}"
+    return f"<code>{rows}</code>"
 
 
 def _macro_line(label: str, consumed: float, goal: float) -> str:
