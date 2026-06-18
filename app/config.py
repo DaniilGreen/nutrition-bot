@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     default_goal_carb: float = 250
     confidence_auto_threshold: float = 0.6
 
+    reminder_enabled: bool = True
+    reminder_hour: int = 21  # локальный час вечернего итога
+
     log_level: str = "INFO"
     db_echo: bool = False
 

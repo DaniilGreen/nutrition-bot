@@ -34,6 +34,9 @@ class InMemoryUserRepo:
     async def set_goal(self, user_id: int, goal: Goal) -> None:
         self._goals[user_id] = goal
 
+    async def list_active(self) -> list[User]:
+        return list(self._users.values())
+
 
 class InMemoryProductRepo:
     def __init__(self) -> None:
