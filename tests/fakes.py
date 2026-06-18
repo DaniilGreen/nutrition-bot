@@ -149,6 +149,11 @@ class InMemoryWeightRepo:
         ]
         return max(xs, key=lambda log: log.measured_at) if xs else None
 
+    async def history(self, user_id: int, limit: int) -> list[WeightLog]:
+        xs = [log for log in self._logs if log.user_id == user_id]
+        xs.sort(key=lambda log: log.measured_at, reverse=True)
+        return xs[:limit]
+
 
 class StubNlu:
     """Возвращает заранее заданные ответы по порядку (последний повторяется)."""

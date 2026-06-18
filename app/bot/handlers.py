@@ -76,9 +76,17 @@ async def on_error(event: ErrorEvent) -> bool:
 
 
 @router.message(CommandStart())
-async def on_start(message: Message, state: FSMContext) -> None:
+async def on_start(
+    message: Message, app_user: User, users: UserRepo, state: FSMContext
+) -> None:
     await state.clear()
-    await message.answer(START_TEXT, reply_markup=main_menu_keyboard())
+    text = START_TEXT
+    if app_user.id is not None and await users.get_goal(app_user.id) is None:
+        text += (
+            "\n\n⚙️ Сначала задай цель: жми «⚙️ Профиль» или <code>/goal 1800</code> — "
+            "иначе остаток считаю от 2000 ккал по умолчанию."
+        )
+    await message.answer(text, reply_markup=main_menu_keyboard())
 
 
 @router.message(Command("help"))
@@ -173,9 +181,11 @@ async def btn_history(
 
 
 @router.message(F.text == BTN_WEIGHT)
-async def btn_weight(message: Message, state: FSMContext) -> None:
+async def btn_weight(
+    message: Message, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
     await state.clear()
-    await message.answer("⚖️ Напиши свой вес цифрой, например: «вес 86.8».")
+    await message.answer(format_result(await assistant.weight_trend(app_user)))
 
 
 @router.message(F.text == BTN_GOAL)

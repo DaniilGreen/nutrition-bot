@@ -297,6 +297,18 @@ class SqlWeightRepo:
             id=orm.id, user_id=orm.user_id, measured_at=orm.measured_at, weight_kg=orm.weight_kg
         )
 
+    async def history(self, user_id: int, limit: int) -> list[WeightLog]:
+        res = await self._s.execute(
+            select(WeightLogORM)
+            .where(WeightLogORM.user_id == user_id)
+            .order_by(WeightLogORM.measured_at.desc())
+            .limit(limit)
+        )
+        return [
+            WeightLog(id=o.id, user_id=o.user_id, measured_at=o.measured_at, weight_kg=o.weight_kg)
+            for o in res.scalars().all()
+        ]
+
     async def latest(self, user_id: int, before: datetime | None = None) -> WeightLog | None:
         stmt = select(WeightLogORM).where(WeightLogORM.user_id == user_id)
         if before is not None:

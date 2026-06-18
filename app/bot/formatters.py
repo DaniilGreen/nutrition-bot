@@ -1,8 +1,7 @@
 """Рендер Result -> HTML-текст ответа бота.
 
-Динамика (имена продуктов от LLM, транскрипты) экранируется — иначе символы
-вроде & < > ломают HTML-разметку Telegram. Прогресс-бары рисуются текстом (█░),
-без зависимостей — это и есть «псевдо-дашборд».
+Динамика (имена продуктов от LLM, транскрипты) экранируется. Прогресс-бары и
+спарклайн веса рисуются текстом (█░ / ▁▂▃) — псевдо-дашборд без зависимостей.
 """
 from __future__ import annotations
 
@@ -19,8 +18,12 @@ from app.application.results import (
     Unknown,
     WeeklyStats,
     WeightLogged,
+    WeightTrend,
 )
 from app.domain.goals import Remaining
+
+_LOW_CONFIDENCE = 0.6  # ниже — помечаем разбор как сомнительный
+_SPARK = "▁▂▃▄▅▆▇█"
 
 
 def format_result(result: Result) -> str:
@@ -30,6 +33,8 @@ def format_result(result: Result) -> str:
         return _format_clarification(result)
     if isinstance(result, WeightLogged):
         return _format_weight(result)
+    if isinstance(result, WeightTrend):
+        return _format_weight_trend(result)
     if isinstance(result, DailyStats):
         return _format_stats(result.remaining, result.meals_count)
     if isinstance(result, WeeklyStats):
@@ -58,6 +63,13 @@ def _format_meal(r: MealLogged) -> str:
         "",
         _remaining_block(r.remaining),
     ]
+    notes = []
+    if r.meal.estimated:
+        notes.append("≈ часть цифр — AI-оценка. Неверно? /products")
+    if r.meal.source_confidence < _LOW_CONFIDENCE:
+        notes.append("⚠️ не уверен в распознавании — проверь")
+    if notes:
+        lines += ["", *notes]
     return "\n".join(lines)
 
 
@@ -70,6 +82,22 @@ def _format_weight(r: WeightLogged) -> str:
     if r.delta_kg is not None:
         sign = "+" if r.delta_kg > 0 else ""
         text += f" ({sign}{_n(r.delta_kg)} кг с прошлого раза)"
+    return text
+
+
+def _format_weight_trend(t: WeightTrend) -> str:
+    if not t.logs:
+        return "⚖️ Пока нет записей веса. Напиши: «вес 86.8»."
+    newest = t.logs[0]
+    text = f"⚖️ <b>{_n(newest.weight_kg)} кг</b>"
+    if len(t.logs) >= 2:
+        chrono = list(reversed(t.logs))  # старые → новые, чтобы спарклайн шёл по времени
+        spark = _sparkline([log.weight_kg for log in chrono])
+        delta = round(newest.weight_kg - chrono[0].weight_kg, 1)
+        days = (newest.measured_at - chrono[0].measured_at).days
+        sign = "+" if delta > 0 else ""
+        text += f"\nΔ {sign}{_n(delta)} кг за {days} дн.  {spark}"
+    text += f"\nЗаписей: {len(t.logs)} · обновить: «вес 86.5»"
     return text
 
 
@@ -157,8 +185,17 @@ def _bar(value: float, goal: float, width: int = 10) -> str:
     return "█" * filled + "░" * (width - filled)
 
 
+def _sparkline(values: list[float]) -> str:
+    if not values:
+        return ""
+    lo, hi = min(values), max(values)
+    if hi == lo:
+        return _SPARK[0] * len(values)
+    span = hi - lo
+    return "".join(_SPARK[round((v - lo) / span * (len(_SPARK) - 1))] for v in values)
+
+
 def _esc(text: str) -> str:
-    # Только & < > — в теле HTML-сообщения Telegram этого достаточно; кавычки не трогаем.
     return escape(text, quote=False)
 
 

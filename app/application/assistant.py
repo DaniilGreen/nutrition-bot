@@ -19,6 +19,7 @@ from app.application.results import (
     Unknown,
     WeeklyStats,
     WeightLogged,
+    WeightTrend,
 )
 from app.application.stats_service import StatsService
 from app.application.weight_service import WeightService
@@ -83,6 +84,10 @@ class Assistant:
     async def history(self, user: User, limit: int = 10) -> History:
         meals = await self._meals.recent(user, limit)
         return History(meals=meals, timezone=user.timezone)
+
+    async def weight_trend(self, user: User, limit: int = 14) -> WeightTrend:
+        logs = await self._weights.history(user, limit)
+        return WeightTrend(logs=logs, timezone=user.timezone)
 
     async def log_weight(self, user: User, weight_kg: float) -> tuple[WeightLog, float | None]:
         return await self._weights.log(user, weight_kg)

@@ -31,6 +31,12 @@ class WeightLogged:
 
 
 @dataclass
+class WeightTrend:
+    logs: list[WeightLog]  # newest-first
+    timezone: str
+
+
+@dataclass
 class DailyStats:
     remaining: Remaining
     meals_count: int
@@ -64,6 +70,7 @@ Result = (
     MealLogged
     | ClarificationNeeded
     | WeightLogged
+    | WeightTrend
     | DailyStats
     | WeeklyStats
     | History
