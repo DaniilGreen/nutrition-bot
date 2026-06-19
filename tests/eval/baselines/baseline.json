@@ -1,26 +1,26 @@
 {
-  "runs": 5,
+  "runs": 3,
   "metrics": {
     "pct_within_item": {
-      "mean": 0.9262,
-      "std": 0.0255
+      "mean": 0.8713,
+      "std": 0.013
     },
     "abstention_recall": {
       "mean": 1.0,
       "std": 0.0
     },
     "false_abstain_rate": {
-      "mean": 0.136,
-      "std": 0.0
+      "mean": 0.09,
+      "std": 0.0127
     },
     "kcal_mape_median": {
-      "mean": 0.015,
-      "std": 0.0
+      "mean": 0.0463,
+      "std": 0.0037
     },
     "kcal_mape_p90": {
-      "mean": 0.2724,
-      "std": 0.0225
+      "mean": 0.2693,
+      "std": 0.0131
     }
   },
-  "created": "2026-06-19T13:16:32.739786+00:00"
+  "created": "2026-06-19T16:45:41.230239+00:00"
 }
