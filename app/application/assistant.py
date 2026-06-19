@@ -16,6 +16,7 @@ from app.application.results import (
     CorrectionFailed,
     DailyStats,
     History,
+    ItemAdjusted,
     ItemRemoved,
     MealDeleted,
     MealLogged,
@@ -156,8 +157,10 @@ class Assistant:
         return MealLogged(meal=meal, remaining=stats.remaining)
 
     async def _handle_correction(self, user: User, parsed: ParsedMessage) -> Result:
-        """FR-14: MVP — только «удали X». Прочие правки (replace/adjust) — вежливый отказ."""
+        """FR-14: «удали X» (delete) и «поправь граммы у X» (adjust). Замена (replace) — отказ."""
         op = parsed.correction_op or "delete"
+        if op == "adjust":
+            return await self._handle_adjust(user, parsed)
         if op != "delete":
             return CorrectionFailed(target="", reason="unsupported")
         targets = [it.name for it in parsed.items if it.name.strip()]
@@ -170,6 +173,21 @@ class Assistant:
             return CorrectionFailed(target=", ".join(targets), reason="not_found")
         stats = await self._stats.daily(user)
         return ItemRemoved(items=removed, remaining=stats.remaining)
+
+    async def _handle_adjust(self, user: User, parsed: ParsedMessage) -> Result:
+        """FR-14.2 «поправь рис на 180»: items[] несут новый вес (grams) для целевых имён."""
+        adjusted: list[tuple[MealItem, float]] = []
+        for it in parsed.items:
+            if it.name.strip() and it.grams is not None:
+                res = await self._meals.adjust_item_by_name(user, it.name, it.grams)
+                if res is not None:
+                    adjusted.append(res)
+        if not adjusted:
+            targets = ", ".join(it.name for it in parsed.items if it.name.strip())
+            return CorrectionFailed(target=targets, reason="not_found")
+        item, old_grams = adjusted[-1]
+        stats = await self._stats.daily(user)
+        return ItemAdjusted(item=item, old_grams=old_grams, remaining=stats.remaining)
 
 
 def _is_blank_item(i: ParsedItem) -> bool:

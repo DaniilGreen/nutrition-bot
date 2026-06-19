@@ -80,6 +80,15 @@ class ItemRemoved:
 
 
 @dataclass
+class ItemAdjusted:
+    """Коррекция «поправь граммы у X»: позиция пересчитана под новый вес, остаток обновлён."""
+
+    item: MealItem
+    old_grams: float
+    remaining: Remaining
+
+
+@dataclass
 class CorrectionFailed:
     """Коррекция не выполнена: не нашли цель (not_found) или op не поддержан (unsupported)."""
 
@@ -103,6 +112,7 @@ Result = (
     | History
     | MealDeleted
     | ItemRemoved
+    | ItemAdjusted
     | CorrectionFailed
     | Unknown
 )

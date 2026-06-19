@@ -13,7 +13,7 @@ from typing import Protocol
 from app.application.dto import ParsedMessage
 from app.application.entities import Meal, Product, User, WeightLog
 from app.domain.goals import Goal
-from app.domain.value_objects import Density
+from app.domain.value_objects import Density, Macros
 
 
 class NluPort(Protocol):
@@ -79,6 +79,12 @@ class MealRepo(Protocol):
     async def delete(self, user_id: int, meal_id: int) -> Meal | None: ...
 
     async def remove_item(self, user_id: int, meal_id: int, item_id: int) -> Meal | None: ...
+
+    async def update_item(
+        self, user_id: int, meal_id: int, item_id: int, *, grams: float, macros: Macros
+    ) -> Meal | None:
+        """Обновить вес+КБЖУ одной позиции (коррекция граммовки) и пересчитать тоталы приёма."""
+        ...
 
 
 class WeightRepo(Protocol):

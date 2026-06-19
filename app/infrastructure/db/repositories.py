@@ -295,6 +295,29 @@ class SqlMealRepo:
         await self._s.flush()
         return _meal_to_domain(orm)
 
+    async def update_item(
+        self, user_id: int, meal_id: int, item_id: int, *, grams: float, macros: Macros
+    ) -> Meal | None:
+        res = await self._s.execute(
+            select(MealORM).where(MealORM.id == meal_id, MealORM.user_id == user_id)
+        )
+        orm = res.scalar_one_or_none()
+        if orm is None:
+            return None
+        item = next((i for i in orm.items if i.id == item_id), None)
+        if item is None:
+            return _meal_to_domain(orm)
+        item.grams = grams
+        item.kcal, item.protein, item.fat, item.carb = (
+            macros.kcal, macros.protein, macros.fat, macros.carb,
+        )
+        orm.total_kcal = round(sum(i.kcal for i in orm.items), 1)
+        orm.total_protein = round(sum(i.protein for i in orm.items), 1)
+        orm.total_fat = round(sum(i.fat for i in orm.items), 1)
+        orm.total_carb = round(sum(i.carb for i in orm.items), 1)
+        await self._s.flush()
+        return _meal_to_domain(orm)
+
     async def _delete_orm(self, orm: MealORM | None) -> Meal | None:
         if orm is None:
             return None

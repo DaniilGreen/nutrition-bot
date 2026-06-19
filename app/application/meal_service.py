@@ -157,6 +157,42 @@ class MealService:
                     return item
         return None
 
+    async def adjust_item_by_name(
+        self, user: User, name: str, new_grams: float
+    ) -> tuple[MealItem, float] | None:
+        """Коррекция «поправь граммы у X» (FR-14.2): пересчитать самую свежую подходящую позицию
+        под новый вес. Снапшот масштабируется пропорционально — для оценок плотности это ТОЧНО
+        (снапшот = плотность×граммы). Стейтед-позиции без веса (граммы 0) править нельзя → None.
+        """
+        user_id = _require_id(user)
+        new_grams = round(clamp_grams(new_grams), 1)
+        recent = await self._meals.list_recent(user_id, _CORRECTION_LOOKBACK)
+        for meal in recent:
+            for item in meal.items:
+                if _name_matches(name, item.name_snapshot) and item.grams and item.grams > 0:
+                    assert meal.id is not None and item.id is not None
+                    factor = new_grams / item.grams
+                    old_grams, m = item.grams, item.macros
+                    new_macros = Macros(
+                        round(m.kcal * factor, 1),
+                        round(m.protein * factor, 1),
+                        round(m.fat * factor, 1),
+                        round(m.carb * factor, 1),
+                    )
+                    await self._meals.update_item(
+                        user_id, meal.id, item.id, grams=new_grams, macros=new_macros
+                    )
+                    updated = MealItem(
+                        name_snapshot=item.name_snapshot,
+                        grams=new_grams,
+                        macros=new_macros,
+                        product_id=item.product_id,
+                        is_estimate=item.is_estimate,
+                        id=item.id,
+                    )
+                    return (updated, old_grams)
+        return None
+
     async def variant_options_if_needed(
         self, user: User, item: ParsedItem
     ) -> list[Product] | None:

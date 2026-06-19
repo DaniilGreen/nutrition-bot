@@ -14,6 +14,7 @@ from app.application.results import (
     CorrectionFailed,
     DailyStats,
     History,
+    ItemAdjusted,
     ItemRemoved,
     MealDeleted,
     MealLogged,
@@ -51,6 +52,8 @@ def format_result(result: Result) -> str:
         return _format_deleted(result)
     if isinstance(result, ItemRemoved):
         return _format_item_removed(result)
+    if isinstance(result, ItemAdjusted):
+        return _format_item_adjusted(result)
     if isinstance(result, CorrectionFailed):
         return _format_correction_failed(result)
     if isinstance(result, Unknown):
@@ -195,9 +198,17 @@ def _format_item_removed(r: ItemRemoved) -> str:
     return f"🗑 Убрал: {names} (−{_n(kcal)} ккал)\n\n{_remaining_block(r.remaining)}"
 
 
+def _format_item_adjusted(r: ItemAdjusted) -> str:
+    it = r.item
+    return (
+        f"✏️ Поправил: {_esc(it.name_snapshot)} {_n(r.old_grams)}→{_n(it.grams)} г "
+        f"({_n(it.macros.kcal)} ккал)\n\n{_remaining_block(r.remaining)}"
+    )
+
+
 def _format_correction_failed(r: CorrectionFailed) -> str:
     if r.reason == "unsupported":
-        return "Пока умею только удаление: напиши «удали рис». Замена и правка граммов — позже."
+        return "Умею удаление («удали рис») и правку веса («рис не 250 а 180»). Замену X→Y — позже."
     target = f"«{_esc(r.target)}»" if r.target else "это"
     return f"Не нашёл {target} в недавних записях. Что удалить? Или /undo — снять последнюю запись."
 

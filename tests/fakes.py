@@ -6,7 +6,7 @@ from datetime import datetime
 from app.application.dto import ParsedMessage
 from app.application.entities import Meal, Product, User, WeightLog
 from app.domain.goals import Goal
-from app.domain.value_objects import Density, sum_macros
+from app.domain.value_objects import Density, Macros, sum_macros
 
 
 class InMemoryUserRepo:
@@ -137,6 +137,20 @@ class InMemoryMealRepo:
         if not meal.items:
             self._meals.remove(meal)
             return None
+        meal.totals = sum_macros(i.macros for i in meal.items)
+        return meal
+
+    async def update_item(
+        self, user_id: int, meal_id: int, item_id: int, *, grams: float, macros: Macros
+    ) -> Meal | None:
+        meal = next((m for m in self._meals if m.id == meal_id and m.user_id == user_id), None)
+        if meal is None:
+            return None
+        item = next((i for i in meal.items if i.id == item_id), None)
+        if item is None:
+            return meal
+        item.grams = grams
+        item.macros = macros
         meal.totals = sum_macros(i.macros for i in meal.items)
         return meal
 

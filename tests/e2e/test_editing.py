@@ -3,9 +3,20 @@ from __future__ import annotations
 
 from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
 from app.application.meal_service import _name_matches
-from app.application.results import CorrectionFailed, ItemRemoved, MealLogged
+from app.application.results import CorrectionFailed, ItemAdjusted, ItemRemoved, MealLogged
 from tests.e2e.test_meal_flow import _build, _new_user
 from tests.fakes import StubNlu
+
+
+def _adjust(name: str, key: str, grams: float) -> ParsedMessage:
+    return ParsedMessage(
+        intent=Intent.CORRECTION,
+        correction_op="adjust",
+        confidence=0.9,
+        items=[
+            ParsedItem(name=name, canonical_key=key, unit=Unit.GRAM, grams=grams, confidence=0.9)
+        ],
+    )
 
 
 def _delete(name: str, key: str) -> ParsedMessage:
@@ -131,6 +142,34 @@ async def test_correction_replace_is_unsupported() -> None:
 
     assert isinstance(result, CorrectionFailed)
     assert result.reason == "unsupported"
+
+
+async def test_adjust_item_grams() -> None:
+    # FR-14.2: «поправь рис на 100» → снапшот масштабируется 150→100, тоталы пересчитаны
+    assistant, users, _ = _build(StubNlu(_chicken_and_rice(), _adjust("рис", "rice", 100)))
+    user = await _new_user(users)
+
+    await assistant.process(user, "курица 200 и рис 150")
+    result = await assistant.process(user, "поправь рис на 100")
+
+    assert isinstance(result, ItemAdjusted)
+    assert result.item.name_snapshot == "рис"
+    assert result.item.grams == 100
+    assert result.item.macros.kcal == 130.0  # 195 × (100/150)
+    assert result.old_grams == 150
+    today = await assistant.today(user)
+    assert today.remaining.consumed.kcal == 460.0  # курица 330 + рис 130
+
+
+async def test_adjust_not_found() -> None:
+    assistant, users, _ = _build(StubNlu(_chicken_and_rice(), _adjust("гречка", "buckwheat", 100)))
+    user = await _new_user(users)
+
+    await assistant.process(user, "курица и рис")
+    result = await assistant.process(user, "поправь гречку на 100")
+
+    assert isinstance(result, CorrectionFailed)
+    assert result.reason == "not_found"
 
 
 def test_name_matches_substring_and_fuzzy() -> None:
