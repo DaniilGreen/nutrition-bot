@@ -30,7 +30,10 @@ async def build_eval_assistant() -> tuple[Assistant, User]:
     if not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY не задан — eval-прогон бьёт реальный OpenAI")
 
-    nlu = OpenAiNlu(AsyncOpenAI(api_key=settings.openai_api_key), settings.openai_model)
+    # sample_k=1: eval мерит ТОЧНОСТЬ (within/MAPE), а не abstention — один вызов на позицию.
+    # Сэмплинг/воздержание (D-15) проверяется юнит/e2e-тестами; k=5 в eval лишь ×5 тратит TPM и
+    # уводит метрики от замороженного k=1-baseline. Прод остаётся на settings.sample_k (=5).
+    nlu = OpenAiNlu(AsyncOpenAI(api_key=settings.openai_api_key), settings.openai_model, sample_k=1)
     users = InMemoryUserRepo()
     products = InMemoryProductRepo()
     meals = InMemoryMealRepo()
