@@ -44,6 +44,7 @@ class MealItem:
     grams: float
     macros: Macros  # снапшот на момент логирования — история не «плывёт» при правках каталога
     product_id: int | None = None
+    is_estimate: bool = False  # AI-оценка плотности (снапшот) → метка «≈» в карточке (INV-13)
     id: int | None = None
 
 

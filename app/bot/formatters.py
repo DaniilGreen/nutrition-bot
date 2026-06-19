@@ -8,6 +8,7 @@ from __future__ import annotations
 from html import escape
 from zoneinfo import ZoneInfo
 
+from app.application.entities import MealItem
 from app.application.results import (
     ClarificationNeeded,
     CorrectionFailed,
@@ -57,13 +58,27 @@ def format_result(result: Result) -> str:
     return "Что-то пошло не так."
 
 
+def _is_stated(it: MealItem) -> bool:
+    """Названные пользователем тоталы (FR-22): не из каталога и НЕ AI-оценка → «📋»."""
+    return it.product_id is None and not it.is_estimate
+
+
+def _item_mark(it: MealItem) -> str:
+    """Метка строки позиции (INV-13): «≈» для AI-оценки, «📋» для цифр юзера."""
+    if it.is_estimate:
+        return "≈ "
+    if _is_stated(it):
+        return "📋 "
+    return ""
+
+
 def _format_meal(r: MealLogged) -> str:
     lines = ["✅ Записал:"]
     for it in r.meal.items:
         m = it.macros
         grams_part = f"{_n(it.grams)} г · " if it.grams else ""  # блюда с готовыми КБЖУ — без граммов
         lines.append(
-            f"• {_esc(it.name_snapshot)} — {grams_part}{_n(m.kcal)} ккал · "
+            f"• {_item_mark(it)}{_esc(it.name_snapshot)} — {grams_part}{_n(m.kcal)} ккал · "
             f"Б{_n(m.protein)} Ж{_n(m.fat)} У{_n(m.carb)}"
         )
     if len(r.meal.items) > 1:  # для одной позиции «Итого» дублирует строку — не показываем
@@ -73,8 +88,10 @@ def _format_meal(r: MealLogged) -> str:
         )
     lines += ["", _remaining_block(r.remaining)]
     notes = []
-    if r.meal.estimated:
-        notes.append("≈ часть цифр — AI-оценка. Неверно? /products")
+    if any(it.is_estimate for it in r.meal.items):  # INV-13: метка per-item, сноска поясняет
+        notes.append("≈ — AI-оценка КБЖУ. Неверно? /products")
+    if any(_is_stated(it) for it in r.meal.items):
+        notes.append("📋 — по твоим цифрам (меню/этикетка)")
     if r.meal.source_confidence < _LOW_CONFIDENCE:
         notes.append("⚠️ не уверен в распознавании — проверь")
     if notes:

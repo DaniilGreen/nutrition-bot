@@ -36,7 +36,6 @@ class ParsedItem:
     portion_hint: str | None = None
     portion_options: dict[str, float] | None = None  # реальные граммы S/M/L пер-блюдо от LLM (FR-21)
     unit_weight_g: float | None = None
-    ambiguous: bool = False  # generic-имя без уточнения способа/части (FR-20, deprecated-детект)
     variant_locked: bool = False  # вариант выбран юзером (callback) — детект не переспрашивает
     kcal_per_100g: float = 0.0
     protein_per_100g: float = 0.0

@@ -1,8 +1,6 @@
 """In-memory реализации портов + StubNlu/StubStt для тестов без БД и без LLM."""
 from __future__ import annotations
 
-from collections import Counter
-from collections.abc import Sequence
 from datetime import datetime
 
 from app.application.dto import ParsedMessage
@@ -141,26 +139,6 @@ class InMemoryMealRepo:
             return None
         meal.totals = sum_macros(i.macros for i in meal.items)
         return meal
-
-    async def most_frequent_item(
-        self, user_id: int, product_ids: Sequence[int], since: datetime
-    ) -> int | None:
-        ids = set(product_ids)
-        hits: list[tuple[int, datetime]] = []
-        for m in self._meals:
-            if m.user_id != user_id or m.eaten_at < since:
-                continue
-            for it in m.items:
-                if it.product_id in ids:
-                    hits.append((it.product_id, m.eaten_at))
-        if not hits:
-            return None
-        counts = Counter(pid for pid, _ in hits)
-        latest: dict[int, datetime] = {}
-        for pid, when in hits:
-            if pid not in latest or when > latest[pid]:
-                latest[pid] = when
-        return max(counts, key=lambda pid: (counts[pid], latest[pid]))
 
 
 class InMemoryWeightRepo:

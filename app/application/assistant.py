@@ -52,8 +52,17 @@ class Assistant:
         known_keys = await self._products.all_keys()
         parsed = await self._nlu.parse(text, known_keys=known_keys)
         if parsed.intent is Intent.MEAL and any(_blank_estimate(i) for i in parsed.items):
-            # LLM иногда отдаёт нулевую оценку (рыба за 0 ккал) — один ретрай, обычно помогает.
-            parsed = await self._nlu.parse(text, known_keys=known_keys)
+            # INV-9: один ретрай при пустой оценке. Принимаем его ТОЛЬКО если он строго лучше
+            # (meal, непустой, без blank) — иначе оставляем первый разбор, не теряя корректные
+            # позиции мульти-итема (AC-46). При temperature=0 ретрай часто = тот же ответ;
+            # осмысленный механизм — self-consistency сэмплинг (D-15, отдельная волна).
+            retry = await self._nlu.parse(text, known_keys=known_keys)
+            if (
+                retry.intent is Intent.MEAL
+                and retry.items
+                and not any(_blank_estimate(i) for i in retry.items)
+            ):
+                parsed = retry
 
         if parsed.intent is Intent.MEAL and parsed.items:
             return await self._handle_meal(user, parsed, raw_input=text, input_type=input_type)

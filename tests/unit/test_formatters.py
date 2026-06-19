@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from app.application.results import DailyStats
+from datetime import datetime
+
+from app.application.entities import Meal, MealItem
+from app.application.results import DailyStats, MealLogged
 from app.bot.formatters import _bar, _esc, _sparkline, format_result
 from app.domain.goals import Goal, remaining
 from app.domain.value_objects import Macros
@@ -34,3 +37,30 @@ def test_daily_card_has_bar_and_remaining() -> None:
     assert "▰" in text or "▱" in text  # полоска стиля C
     assert "<code>" in text  # выровненная сетка моноширинно
     assert "2000" in text  # цель ккал в строке грида (500/2000)
+
+
+def test_meal_card_per_item_marks() -> None:
+    # INV-13 / AC-41/42: «≈» на оценочной строке, «📋» на стейтед, каталог — без метки
+    rem = remaining(Macros(1012, 99, 47, 44), Goal(2000, 150, 65, 250))
+    meal = Meal(
+        user_id=1,
+        eaten_at=datetime(2026, 6, 18, 12, 0),  # _format_meal не использует eaten_at
+        input_type="text",
+        raw_input="x",
+        source_confidence=0.9,
+        items=[
+            MealItem(
+                "куриная грудка", 250, Macros(412, 77, 9, 0), product_id=1, is_estimate=False
+            ),
+            MealItem("том ям", 400, Macros(280, 12, 18, 14), product_id=2, is_estimate=True),
+            MealItem(
+                "салат из кафе", 0, Macros(320, 10, 20, 30), product_id=None, is_estimate=False
+            ),
+        ],
+        totals=Macros(1012, 99, 47, 44),
+    )
+    text = format_result(MealLogged(meal=meal, remaining=rem))
+    assert "≈ том ям" in text  # оценка
+    assert "📋 салат из кафе" in text  # цифры юзера
+    assert "• куриная грудка" in text  # каталог — без метки
+    assert "≈ — AI-оценка" in text and "📋 — по твоим цифрам" in text  # сноски

@@ -180,3 +180,73 @@ async def test_retry_recovers_blank_estimate() -> None:
     assert result.meal.totals.kcal == 480.0
     pinned = await products.get_by_key("pangasius")
     assert pinned is not None and pinned.density.kcal_per_100g == 120
+
+
+async def test_stated_kcal_only_splits_macros() -> None:
+    # INV-11.4 / AC-39: «хумус 150 ккал» — LLM не дал БЖУ → раскладка, НЕ Б0Ж0У0, помечено оценкой
+    meal = ParsedMessage(
+        intent=Intent.MEAL,
+        confidence=0.9,
+        items=[
+            ParsedItem(
+                name="хумус", canonical_key="hummus", unit=Unit.PORTION,
+                total_kcal=150, confidence=0.9,  # total_protein/fat/carb = None
+            )
+        ],
+    )
+    assistant, users, products = _build(StubNlu(meal))
+    user = await _new_user(users)
+
+    result = await assistant.process(user, "хумус 150 ккал")
+
+    assert isinstance(result, MealLogged)
+    it = result.meal.items[0]
+    assert it.macros.kcal == 150  # ккал юзера — главная
+    assert it.macros.protein > 0 and it.macros.fat > 0 and it.macros.carb > 0  # НЕ 0/0/0
+    assert it.is_estimate is True  # БЖУ оценены → метка «≈»
+    assert it.product_id is None
+    assert await products.get_by_key("hummus") is None  # стейтед не пиннится
+
+
+async def test_partial_stated_not_split() -> None:
+    # частичный набор («400 ккал 30 белка») НЕ раскладываем — доверяем цифрам юзера как есть
+    meal = ParsedMessage(
+        intent=Intent.MEAL,
+        confidence=0.9,
+        items=[
+            ParsedItem(
+                name="блюдо", canonical_key="dish", unit=Unit.PORTION,
+                total_kcal=400, total_protein=30, confidence=0.9,  # fat/carb None
+            )
+        ],
+    )
+    assistant, users, _ = _build(StubNlu(meal))
+    user = await _new_user(users)
+
+    result = await assistant.process(user, "блюдо 400 ккал 30 белка")
+
+    it = result.meal.items[0]
+    assert (it.macros.kcal, it.macros.protein, it.macros.fat, it.macros.carb) == (400, 30, 0, 0)
+    assert it.is_estimate is False  # явные цифры юзера, не оценка → метка «📋», не «≈»
+
+
+async def test_water_with_syrup_not_zeroed() -> None:
+    # AC-40: «вода с сиропом» с пустой оценкой — калорийная основа бьёт «вода» → фолбэк, не 0
+    meal = ParsedMessage(
+        intent=Intent.MEAL,
+        confidence=0.9,
+        items=[
+            ParsedItem(
+                name="вода с сиропом", canonical_key="water_syrup", unit=Unit.ML, grams=250,
+                kcal_per_100g=0, protein_per_100g=0, fat_per_100g=0, carb_per_100g=0,
+                confidence=0.9,
+            )
+        ],
+    )
+    assistant, users, _ = _build(StubNlu(meal))
+    user = await _new_user(users)
+
+    result = await assistant.process(user, "вода с сиропом 250")
+
+    assert isinstance(result, MealLogged)
+    assert result.meal.totals.kcal > 0  # «сироп» в калорийной основе → не зануляем

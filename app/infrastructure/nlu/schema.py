@@ -35,11 +35,6 @@ class NluItem(BaseModel):
         default=None, description="Вес БОЛЬШОЙ одиночной порции этого блюда, г (круассан ~160, суп ~450)"
     )
     unit_weight_g: float | None = Field(default=None, description="Вес одной штуки в граммах")
-    ambiguous: bool = Field(
-        default=False,
-        description="true, если способ/часть/тип не уточнены и заметно влияют на КБЖУ "
-        "(«курица», «мясо», «кофе»); false для уточнённых («грудка отварная», «эспрессо»)",
-    )
     kcal_per_100g: float = Field(
         description="Оценка КБЖУ на 100 г (нужна только для новых продуктов)"
     )

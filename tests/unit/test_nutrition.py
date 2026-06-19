@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.domain.nutrition import atwater_kcal, macros_for_grams, reconcile_density
+from app.domain.nutrition import (
+    atwater_kcal,
+    macros_for_grams,
+    reconcile_density,
+    split_macros_from_kcal,
+)
 from app.domain.value_objects import Density
 
 CHICKEN = Density(kcal_per_100g=165, protein_per_100g=31, fat_per_100g=3.6, carb_per_100g=0)
@@ -47,3 +52,18 @@ def test_reconcile_keeps_consistent_estimate() -> None:
 def test_reconcile_ignores_blank() -> None:
     blank = Density(kcal_per_100g=0, protein_per_100g=0, fat_per_100g=0, carb_per_100g=0)
     assert reconcile_density(blank) == blank  # пустую отдаём как есть (blank-retry разберётся)
+
+
+def test_split_macros_from_kcal_atwater_consistent() -> None:
+    # INV-11.4: раскладка названной ккал по долям — Атвотер ≈ ккал, БЖУ > 0 (не Б0Ж0У0)
+    m = split_macros_from_kcal(150)
+    assert m.kcal == 150
+    assert m.protein > 0 and m.fat > 0 and m.carb > 0
+    assert abs(atwater_kcal(m.protein, m.fat, m.carb) - 150) <= 3  # сбалансированно по Атвотеру
+    big = split_macros_from_kcal(600)  # масштабируемо
+    assert abs(atwater_kcal(big.protein, big.fat, big.carb) - 600) <= 6
+
+
+def test_split_macros_from_kcal_zero() -> None:
+    m = split_macros_from_kcal(0)
+    assert (m.kcal, m.protein, m.fat, m.carb) == (0, 0, 0, 0)

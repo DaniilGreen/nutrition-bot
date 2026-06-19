@@ -73,10 +73,6 @@ class MealRepo(Protocol):
 
     async def remove_item(self, user_id: int, meal_id: int, item_id: int) -> Meal | None: ...
 
-    async def most_frequent_item(
-        self, user_id: int, product_ids: Sequence[int], since: datetime
-    ) -> int | None: ...
-
 
 class WeightRepo(Protocol):
     async def add(self, log: WeightLog) -> WeightLog: ...

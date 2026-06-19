@@ -115,6 +115,9 @@ class MealItemORM(Base):
     protein: Mapped[float] = mapped_column(Float)
     fat: Mapped[float] = mapped_column(Float)
     carb: Mapped[float] = mapped_column(Float)
+    is_estimate: Mapped[bool] = mapped_column(  # AI-оценка (снапшот) → метка «≈» (INV-13)
+        Boolean, default=False, server_default="false"
+    )
 
     meal: Mapped[MealORM] = relationship(back_populates="items")
 

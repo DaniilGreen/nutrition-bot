@@ -19,7 +19,7 @@ from app.application.dto import ParsedItem, ParsedMessage
 from app.application.entities import Meal, MealItem, Product, User
 from app.application.ports import MealRepo, ProductRepo
 from app.clock import Clock, utcnow
-from app.domain.nutrition import macros_for_grams, reconcile_density
+from app.domain.nutrition import macros_for_grams, reconcile_density, split_macros_from_kcal
 from app.domain.plausibility import (
     FALLBACK_DENSITY,
     clamp_density,
@@ -67,23 +67,28 @@ class MealService:
         for parsed_item in parsed.items:
             if parsed_item.total_kcal:  # truthy: не None и не 0 (0 → обычный путь, INV-11.3)
                 # FR-22: пользователь явно назвал КБЖУ (меню/этикетка) — доверяем как есть,
-                # без каталога/оценки. INV-11.2: только границы (clamp), БЕЗ Атвотер-сверки —
-                # его явные цифры не перетираем (в т.ч. частичный набор «400 ккал 30 белка»).
+                # без каталога/оценки. INV-11.2: только границы (clamp), БЕЗ Атвотер-сверки.
+                p, f, c = parsed_item.total_protein, parsed_item.total_fat, parsed_item.total_carb
+                if not p and not f and not c:
+                    # INV-11.4: названа ТОЛЬКО ккал (LLM не оценил БЖУ) — НЕ пишем Б0Ж0У0,
+                    # раскладываем ккал по долям и помечаем оценкой. Частичный набор сюда не идёт.
+                    stated_macros = split_macros_from_kcal(parsed_item.total_kcal)
+                    stated_estimate = True
+                else:
+                    # частичный/полный явный набор — доверяем цифрам юзера, не перетираем Атвотером.
+                    stated_macros = Macros(parsed_item.total_kcal, p or 0.0, f or 0.0, c or 0.0)
+                    stated_estimate = False
+                grams = clamp_grams(parsed_item.grams) if parsed_item.grams else 0.0
                 items.append(
                     MealItem(
                         name_snapshot=parsed_item.name,
-                        grams=round(parsed_item.grams or 0.0, 1),
-                        macros=clamp_macros(
-                            Macros(
-                                kcal=parsed_item.total_kcal,
-                                protein=parsed_item.total_protein or 0.0,
-                                fat=parsed_item.total_fat or 0.0,
-                                carb=parsed_item.total_carb or 0.0,
-                            )
-                        ),
+                        grams=round(grams, 1),
+                        macros=clamp_macros(stated_macros),
                         product_id=None,
+                        is_estimate=stated_estimate,
                     )
                 )
+                estimated = estimated or stated_estimate
                 continue
             product = await self._resolve_product_for(user_id, parsed_item)
             estimated = estimated or product.is_estimate
@@ -112,6 +117,7 @@ class MealService:
                     grams=round(grams, 1),
                     macros=macros,
                     product_id=product.id,
+                    is_estimate=product.is_estimate,  # INV-13: метка «≈» на оценочной позиции
                 )
             )
 
@@ -290,21 +296,22 @@ def _is_blank_density(d: Density) -> bool:
 _CALORIC_BASE = (
     "молок", "слив", "кокос", "сироп", "мёд", "мед", "орех", "какао",
     "миндал", "овс", "соя", "соев", "латте", "раф", "банан", "сахар",
+    "варень", "сладк",  # «вода с вареньем», «сладкая вода» — калорийны, не зануляем (AC-40)
 )
 
 
 def _looks_zero_calorie(name: str) -> bool:
     """Осознанно нулевые: вода, чёрный кофе/чай без добавок (FR-25) — им фолбэк не нужен.
 
-    Узкая граница для INV-11.3, чтобы вода не стала 150 ккал. Калорийная основа в названии
-    («кофе с молоком без сахара») → НЕ нулевой (иначе ложно занулим реальный напиток).
-    ponytail: пара ключей; станет шире — выносить в каталог zero-продуктов.
+    Узкая граница для INV-11.3, чтобы вода не стала 150 ккал. КАЛОРИЙНАЯ ОСНОВА проверяется
+    ПЕРВОЙ и бьёт подстроку «вода» — иначе «вода с сиропом/мёдом/вареньем» ложно занулялась бы
+    (AC-40). ponytail: пара ключей; станет шире — выносить в каталог zero-продуктов.
     """
     n = name.strip().lower()
+    if any(base in n for base in _CALORIC_BASE):
+        return False  # калорийная основа — точно не нулевой (даже «вода с сиропом»)
     if "вода" in n or "water" in n:
         return True
-    if any(base in n for base in _CALORIC_BASE):
-        return False  # есть калорийная основа — точно не нулевой
     return ("кофе" in n or "чай" in n) and ("чёрн" in n or "черн" in n or "без" in n)
 
 
