@@ -21,7 +21,7 @@ from app.application.ports import MealRepo, ProductRepo
 from app.clock import Clock, utcnow
 from app.domain.nutrition import macros_for_grams
 from app.domain.portions import resolve_grams
-from app.domain.value_objects import Density, sum_macros
+from app.domain.value_objects import Density, Macros, sum_macros
 
 # Ключи, которые LLM возвращает «от неуверенности» — не идентичность продукта.
 _JUNK_KEYS = frozenset({"", "unknown", "none", "null", "na", "n_a", "item", "product", "food", "еда"})
@@ -58,6 +58,23 @@ class MealService:
         items: list[MealItem] = []
         estimated = False
         for parsed_item in parsed.items:
+            if parsed_item.total_kcal is not None:
+                # FR-22: пользователь сам назвал готовые КБЖУ (меню/этикетка) — пишем как есть,
+                # без каталога/оценки. Грамовка опциональна, в каталог не пиним.
+                items.append(
+                    MealItem(
+                        name_snapshot=parsed_item.name,
+                        grams=round(parsed_item.grams or 0.0, 1),
+                        macros=Macros(
+                            kcal=parsed_item.total_kcal,
+                            protein=parsed_item.total_protein or 0.0,
+                            fat=parsed_item.total_fat or 0.0,
+                            carb=parsed_item.total_carb or 0.0,
+                        ),
+                        product_id=None,
+                    )
+                )
+                continue
             product = await self._resolve_product_for(user_id, parsed_item)
             estimated = estimated or product.is_estimate
             resolution = resolve_grams(

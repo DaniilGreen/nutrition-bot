@@ -36,6 +36,13 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return builder.as_markup(resize_keyboard=True, is_persistent=True)
 
 
+def location_request_keyboard() -> ReplyKeyboardMarkup:
+    """Одноразовая клавиатура: запросить геолокацию для часового пояса (FR-23)."""
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="📍 Отправить геолокацию", request_location=True)
+    return builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
+
+
 def portion_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="Маленькая", callback_data=f"{PORTION_CALLBACK_PREFIX}:small")

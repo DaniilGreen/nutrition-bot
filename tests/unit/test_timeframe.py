@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
-from app.domain.timeframe import day_bounds_utc, reminder_due, week_bounds_utc
+from app.domain.timeframe import (
+    day_bounds_utc,
+    reminder_due,
+    tz_from_longitude,
+    week_bounds_utc,
+)
 
 
 def test_day_bounds_span_24h() -> None:
@@ -45,3 +51,18 @@ def test_reminder_not_due_wrong_hour() -> None:
     now = datetime(2026, 6, 18, 17, 0, tzinfo=timezone.utc)  # 20:00 МСК
     due, _ = reminder_due(now, "Europe/Moscow", 21, None)
     assert due is False
+
+
+def test_tz_from_longitude_sign_inversion() -> None:
+    # Москва (lon≈37.6) → восток → UTC+3; POSIX-инверсия: имя Etc/GMT-3
+    assert tz_from_longitude(37.6) == "Etc/GMT-3"
+    now = datetime(2026, 6, 18, 9, 0, tzinfo=timezone.utc)
+    moscow = now.astimezone(ZoneInfo("Europe/Moscow"))
+    derived = now.astimezone(ZoneInfo(tz_from_longitude(37.6)))
+    assert derived.utcoffset() == moscow.utcoffset()  # оба UTC+3
+
+
+def test_tz_from_longitude_west_and_zero() -> None:
+    assert tz_from_longitude(-75) == "Etc/GMT+5"  # восточное побережье США UTC-5
+    assert tz_from_longitude(0) == "UTC"
+    assert tz_from_longitude(5) == "UTC"  # round(5/15)=0

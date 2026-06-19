@@ -30,6 +30,14 @@ class NluItem(BaseModel):
     protein_per_100g: float
     fat_per_100g: float
     carb_per_100g: float
+    total_kcal: float | None = Field(
+        default=None,
+        description="Явно названный пользователем ИТОГ КБЖУ всей порции (меню/этикетка). "
+        "Если задан — приложение берёт его как есть, *_per_100g не нужны.",
+    )
+    total_protein: float | None = None
+    total_fat: float | None = None
+    total_carb: float | None = None
     confidence: float = Field(description="Уверенность по продукту, 0..1")
 
 

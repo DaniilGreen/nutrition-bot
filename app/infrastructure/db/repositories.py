@@ -112,6 +112,12 @@ class SqlUserRepo:
             g.carb_g = goal.carb_g
         await self._s.flush()
 
+    async def set_timezone(self, user_id: int, tzname: str) -> None:
+        orm = await self._s.get(UserORM, user_id)
+        if orm is not None:
+            orm.timezone = tzname
+            await self._s.flush()
+
     async def list_active(self) -> list[User]:
         res = await self._s.execute(select(UserORM).where(UserORM.is_active.is_(True)))
         return [_user_to_domain(o) for o in res.scalars().all()]

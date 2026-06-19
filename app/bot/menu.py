@@ -13,6 +13,7 @@ _COMMANDS = [
     BotCommand(command="goal", description="Цель по калориям"),
     BotCommand(command="profile", description="Настроить цель по профилю"),
     BotCommand(command="products", description="Поправить КБЖУ продукта"),
+    BotCommand(command="timezone", description="Часовой пояс (по геолокации)"),
     BotCommand(command="help", description="Помощь"),
 ]
 

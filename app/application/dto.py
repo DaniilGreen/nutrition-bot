@@ -41,6 +41,10 @@ class ParsedItem:
     protein_per_100g: float = 0.0
     fat_per_100g: float = 0.0
     carb_per_100g: float = 0.0
+    total_kcal: float | None = None  # явно названный юзером итог порции (меню/этикетка), FR-22
+    total_protein: float | None = None
+    total_fat: float | None = None
+    total_carb: float | None = None
     confidence: float = 1.0
 
 

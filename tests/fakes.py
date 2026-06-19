@@ -36,6 +36,10 @@ class InMemoryUserRepo:
     async def set_goal(self, user_id: int, goal: Goal) -> None:
         self._goals[user_id] = goal
 
+    async def set_timezone(self, user_id: int, tzname: str) -> None:
+        if user_id in self._users:
+            self._users[user_id].timezone = tzname
+
     async def list_active(self) -> list[User]:
         return list(self._users.values())
 

@@ -28,6 +28,20 @@ def week_bounds_utc(now_utc: datetime, tzname: str) -> tuple[datetime, datetime]
     return start_local.astimezone(_UTC), end_local.astimezone(_UTC)
 
 
+def tz_from_longitude(lon: float) -> str:
+    """Грубая таймзона из долготы (📍-локация Telegram): солнечный офсет round(lon/15) → Etc/GMT∓N.
+
+    POSIX-инверсия знака: Etc/GMT-3 == UTC+3 (восток). Политические границы TZ игнорируем —
+    для границ суток/напоминаний солнечного приближения достаточно.
+    ponytail: round(lon/15); нужна точная TZ по точке — timezonefinder/tzfpy.
+    """
+    offset = round(lon / 15)
+    if offset == 0:
+        return "UTC"
+    sign = "-" if offset > 0 else "+"  # инверсия: восток (UTC+) → Etc/GMT-
+    return f"Etc/GMT{sign}{abs(offset)}"
+
+
 def reminder_due(
     now_utc: datetime, tzname: str, hour: int, last_sent: date | None
 ) -> tuple[bool, date]:

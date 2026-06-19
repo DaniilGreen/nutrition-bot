@@ -168,6 +168,8 @@ class Assistant:
 
 def _blank_estimate(item: ParsedItem) -> bool:
     """Нулевая оценка КБЖУ от LLM — повод переспросить (для еды 0/0/0/0 это промах)."""
+    if item.total_kcal is not None:
+        return False  # FR-22: готовые КБЖУ названы — оценка плотности не нужна
     return (
         item.kcal_per_100g == 0
         and item.protein_per_100g == 0
@@ -179,6 +181,8 @@ def _blank_estimate(item: ParsedItem) -> bool:
 def _first_unclarified_index(parsed: ParsedMessage) -> int | None:
     """Первый продукт с порцией без размера — для него и зададим вопрос."""
     for i, item in enumerate(parsed.items):
+        if item.total_kcal is not None:
+            continue  # FR-22: готовые КБЖУ названы — размер/грамовка не нужны
         if item.unit is Unit.PORTION and item.portion_hint is None:
             return i
     return None

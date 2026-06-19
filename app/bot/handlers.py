@@ -40,6 +40,7 @@ from app.bot.keyboards import (
     BTN_WEIGHT,
     activity_keyboard,
     goal_type_keyboard,
+    location_request_keyboard,
     main_menu_keyboard,
     meal_actions_keyboard,
     portion_keyboard,
@@ -50,6 +51,7 @@ from app.bot.keyboards import (
 )
 from app.bot.states import MealStates, ProfileStates
 from app.domain.goals import Goal, goal_from_profile
+from app.domain.timeframe import tz_from_longitude
 from app.domain.value_objects import Density
 
 router = Router()
@@ -102,6 +104,29 @@ async def on_start(
 @router.message(Command("help"))
 async def on_help(message: Message) -> None:
     await message.answer(START_TEXT, reply_markup=main_menu_keyboard())
+
+
+@router.message(Command("timezone"))
+async def cmd_timezone(message: Message, app_user: User) -> None:
+    await message.answer(
+        f"🕒 Часовой пояс: <b>{escape(app_user.timezone, quote=False)}</b>\n"
+        "Чтобы уточнить «день» для статистики — пришли геолокацию кнопкой ниже 👇",
+        reply_markup=location_request_keyboard(),
+    )
+
+
+@router.message(F.location)
+async def on_location(message: Message, app_user: User, users: UserRepo) -> None:
+    """FR-23: 📍-локация → часовой пояс из долготы (round(lon/15) → Etc/GMT∓N)."""
+    loc = message.location
+    if loc is None or app_user.id is None:
+        return
+    tzname = tz_from_longitude(loc.longitude)
+    await users.set_timezone(app_user.id, tzname)
+    await message.answer(
+        f"🕒 Часовой пояс обновлён: <b>{escape(tzname, quote=False)}</b>",
+        reply_markup=main_menu_keyboard(),
+    )
 
 
 @router.message(Command("goal"))

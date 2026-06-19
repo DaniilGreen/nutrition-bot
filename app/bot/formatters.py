@@ -61,8 +61,9 @@ def _format_meal(r: MealLogged) -> str:
     lines = ["✅ Записал:"]
     for it in r.meal.items:
         m = it.macros
+        grams_part = f"{_n(it.grams)} г · " if it.grams else ""  # блюда с готовыми КБЖУ — без граммов
         lines.append(
-            f"• {_esc(it.name_snapshot)} — {_n(it.grams)} г · {_n(m.kcal)} ккал · "
+            f"• {_esc(it.name_snapshot)} — {grams_part}{_n(m.kcal)} ккал · "
             f"Б{_n(m.protein)} Ж{_n(m.fat)} У{_n(m.carb)}"
         )
     if len(r.meal.items) > 1:  # для одной позиции «Итого» дублирует строку — не показываем

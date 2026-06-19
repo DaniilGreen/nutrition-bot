@@ -51,6 +51,10 @@ def _to_dto(result: NluResult) -> ParsedMessage:
                 protein_per_100g=i.protein_per_100g,
                 fat_per_100g=i.fat_per_100g,
                 carb_per_100g=i.carb_per_100g,
+                total_kcal=i.total_kcal,
+                total_protein=i.total_protein,
+                total_fat=i.total_fat,
+                total_carb=i.total_carb,
                 confidence=i.confidence,
             )
             for i in result.items
