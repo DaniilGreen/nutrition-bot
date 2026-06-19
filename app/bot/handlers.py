@@ -447,6 +447,25 @@ async def on_item_del(callback: CallbackQuery, app_user: User, assistant: Assist
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("undo_item:"))
+async def on_undo_item(callback: CallbackQuery, app_user: User, assistant: Assistant) -> None:
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    parts = (callback.data or "undo_item:0:0").split(":")
+    meal_id, item_id = int(parts[1]), int(parts[2])
+    await assistant.remove_item(app_user, meal_id, item_id)  # удаляем одну позицию
+    await callback.answer("🗑 Убрано")
+    history = await assistant.history(app_user, limit=5)  # перерисовываем меню без неё
+    if history.meals:
+        markup = undo_picker_keyboard(history.meals, history.timezone)
+        with suppress(Exception):  # игнор «message is not modified»
+            await callback.message.edit_text("Что отменить? (по позициям)", reply_markup=markup)
+    else:
+        with suppress(Exception):
+            await callback.message.edit_text("🗒 Больше нечего отменять.")
+
+
 @router.callback_query(F.data.startswith("prod_fix:"))
 async def on_prod_fix(
     callback: CallbackQuery, app_user: User, assistant: Assistant, state: FSMContext
@@ -557,7 +576,7 @@ async def _show_undo_picker(message: Message, app_user: User, assistant: Assista
         await message.answer("Нечего отменять.")
         return
     await message.answer(
-        "Что отменить?",
+        "Что отменить? (по позициям)",
         reply_markup=undo_picker_keyboard(history.meals, history.timezone),
     )
 

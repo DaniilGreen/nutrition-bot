@@ -12,6 +12,7 @@ from app.application.entities import Meal, Product
 PORTION_CALLBACK_PREFIX = "portion"
 VARIANT_CALLBACK_PREFIX = "variant"
 MEAL_UNDO_PREFIX = "meal_undo"
+UNDO_ITEM_PREFIX = "undo_item"
 ITEM_DEL_PREFIX = "item_del"
 PROD_FIX_PREFIX = "prod_fix"
 
@@ -76,16 +77,17 @@ def meal_actions_keyboard(meal: Meal) -> InlineKeyboardMarkup:
 
 
 def undo_picker_keyboard(meals: Sequence[Meal], tz_name: str) -> InlineKeyboardMarkup:
-    """Меню «Отменить» вне контекста свежей записи — выбор, что именно отменить."""
+    """Меню «Отменить» вне контекста свежей записи — по ОТДЕЛЬНЫМ позициям (не приём целиком)."""
     tz = ZoneInfo(tz_name)
     builder = InlineKeyboardBuilder()
     for meal in meals:
         when = meal.eaten_at.astimezone(tz).strftime("%H:%M")
-        names = _short(", ".join(i.name_snapshot for i in meal.items) or "запись", 24)
-        builder.button(
-            text=f"🗑 {when} · {meal.totals.kcal:g} ккал · {names}",
-            callback_data=f"{MEAL_UNDO_PREFIX}:{meal.id}",
-        )
+        for item in meal.items:
+            if item.id is not None:
+                builder.button(
+                    text=f"🗑 {when} · {_short(item.name_snapshot, 22)} · {item.macros.kcal:g}",
+                    callback_data=f"{UNDO_ITEM_PREFIX}:{meal.id}:{item.id}",
+                )
     builder.adjust(1)
     return builder.as_markup()
 
