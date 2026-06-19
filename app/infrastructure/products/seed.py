@@ -53,6 +53,7 @@ CURATED: list[dict] = [
     {"key": "chicken_breast_fried", "name": "Куриная грудка жареная", "kcal": 200, "p": 30, "f": 8, "c": 0, "sizes": None, "cat": "chicken"},
     {"key": "chicken_grilled", "name": "Курица гриль", "kcal": 200, "p": 22, "f": 12, "c": 0, "sizes": None, "cat": "chicken"},
     {"key": "whey_protein", "name": "Протеин (сывороточный)", "kcal": 370, "p": 75, "f": 6, "c": 8, "sizes": None},
+    {"key": "gold_standard_whey", "name": "Gold Standard Whey", "kcal": 395, "p": 79, "f": 3, "c": 10, "sizes": None},
     {"key": "pangasius", "name": "Пангасиус", "kcal": 120, "p": 18, "f": 5, "c": 0, "sizes": None},
     {"key": "cod", "name": "Треска", "kcal": 80, "p": 18, "f": 0.7, "c": 0, "sizes": None},
     {"key": "tilapia", "name": "Тилапия", "kcal": 96, "p": 20, "f": 1.7, "c": 0, "sizes": None},
