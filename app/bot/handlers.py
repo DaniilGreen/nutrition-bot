@@ -442,6 +442,7 @@ async def on_portion_text(
 @router.message(MealStates.awaiting_variant, F.text)
 async def on_variant_text(
     message: Message,
+    bot: Bot,
     app_user: User,
     assistant: Assistant,
     session: AsyncSession,
@@ -455,6 +456,7 @@ async def on_variant_text(
     data = await state.get_data()
     draft = data.get("draft")
     raw = str(data.get("raw", ""))
+    q_msg_id = data.get("q_msg_id")  # сообщение-вопрос: уберём его «висящую» клавиатуру
     if draft is None:
         await state.clear()
         await message.answer("⏳ Запись устарела — отправь приём пищи заново.")
@@ -466,6 +468,11 @@ async def on_variant_text(
     await session.commit()
     await state.clear()
     await _reply_message(message, result, state, raw=raw)
+    if q_msg_id is not None:  # снять inline-кнопки старого вопроса (ответили текстом)
+        with suppress(Exception):
+            await bot.edit_message_reply_markup(
+                chat_id=message.chat.id, message_id=q_msg_id, reply_markup=None
+            )
 
 
 @router.message(ProfileStates.body, F.text)
@@ -799,8 +806,10 @@ async def _reply_message(
         await message.answer(format_result(result), reply_markup=portion_keyboard(options))
     elif isinstance(result, VariantClarificationNeeded):
         await state.set_state(MealStates.awaiting_variant)
-        await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
-        await message.answer(format_result(result), reply_markup=variant_keyboard(result.options))
+        sent = await message.answer(format_result(result), reply_markup=variant_keyboard(result.options))
+        await state.update_data(
+            draft=result.draft, item_index=result.item_index, raw=raw, q_msg_id=sent.message_id
+        )
     elif isinstance(result, MealLogged):
         await message.answer(format_result(result), reply_markup=meal_actions_keyboard(result.meal))
     else:
@@ -818,7 +827,9 @@ async def _render_after_continue(
         await _safe_edit(message, format_result(result), portion_keyboard(options))
     elif isinstance(result, VariantClarificationNeeded):
         await state.set_state(MealStates.awaiting_variant)
-        await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
+        await state.update_data(
+            draft=result.draft, item_index=result.item_index, raw=raw, q_msg_id=message.message_id
+        )
         await _safe_edit(message, format_result(result), variant_keyboard(result.options))
     else:
         await state.clear()

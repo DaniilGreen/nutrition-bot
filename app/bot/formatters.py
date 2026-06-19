@@ -113,7 +113,7 @@ def format_goal(goal: Goal) -> str:
 
 def _format_weight_trend(t: WeightTrend) -> str:
     if not t.logs:
-        return "⚖️ Пока нет записей веса. Напиши: «вес 86.8»."
+        return "⚖️ Вес ещё не записан.\n📌 Записать — напиши «вес 86.8»."
     newest = t.logs[0]
     text = f"⚖️ <b>{_n(newest.weight_kg)} кг</b>"
     if len(t.logs) >= 2:
@@ -124,7 +124,7 @@ def _format_weight_trend(t: WeightTrend) -> str:
         sign = "+" if delta > 0 else ""
         period = f"за {days} дн." if days >= 1 else "сегодня"
         text += f"\n{spark}  Δ {sign}{_n(delta)} кг {period}"
-    text += f"\nЗаписей: {len(t.logs)} · обновить: «вес 86.5»"
+    text += f"\nЗаписей: {len(t.logs)}\n📌 Новый замер — напиши «вес 86.5»"
     return text
 
 
