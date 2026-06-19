@@ -33,6 +33,7 @@ def resolve_grams(
     product_unit_weight_g: float | None,
     product_default_portion_g: float | None,
     product_portion_sizes: dict[str, float] | None,
+    parsed_portion_sizes: dict[str, float] | None = None,
 ) -> GramsResolution:
     # 1. Явный вес/объём ("250 грамм", "200 мл" ~ 200 г для MVP).
     if unit in ("g", "ml") and grams_estimate is not None:
@@ -57,8 +58,18 @@ def resolve_grams(
     ):
         return GramsResolution(grams=product_portion_sizes[portion_hint], assumed=False)
 
-    # 4. Порция с размером, без курируемых пресетов: масштабируем базу по размеру.
-    #    База — типичная порция от LLM (grams) или дефолт продукта; иначе общий дефолт.
+    # 3.5 Порция с LLM-размерами под конкретное блюдо (реальные граммы S/M/L, не множитель).
+    #     Нейронка предлагает размеры пер-блюдо (круассан 80/120/160 ≠ суп) — точнее множителя.
+    if (
+        unit == "portion"
+        and portion_hint is not None
+        and parsed_portion_sizes
+        and portion_hint in parsed_portion_sizes
+    ):
+        return GramsResolution(grams=parsed_portion_sizes[portion_hint], assumed=True)
+
+    # 4. Порция с размером, без пресетов (курируемых и LLM): масштабируем базу множителем.
+    #    Запасной путь — база (дефолт продукта/grams) × фактор. ponytail: грубо, если LLM не дал размеры.
     if unit == "portion" and portion_hint is not None:
         base = product_default_portion_g or grams_estimate or DEFAULT_PORTION_G
         factor = PORTION_FALLBACK_FACTOR.get(portion_hint, 1.0)

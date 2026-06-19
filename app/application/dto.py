@@ -34,6 +34,7 @@ class ParsedItem:
     quantity: float | None = None
     grams: float | None = None
     portion_hint: str | None = None
+    portion_options: dict[str, float] | None = None  # реальные граммы S/M/L пер-блюдо от LLM (FR-21)
     unit_weight_g: float | None = None
     ambiguous: bool = False  # generic-имя без уточнения способа/части (FR-20, deprecated-детект)
     variant_locked: bool = False  # вариант выбран юзером (callback) — детект не переспрашивает

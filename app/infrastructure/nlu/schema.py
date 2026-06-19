@@ -18,6 +18,17 @@ class NluItem(BaseModel):
     portion_hint: Literal["small", "medium", "large"] | None = Field(
         default=None, description="размер порции; СТРОГО null, если размер не назван словом"
     )
+    portion_small_g: float | None = Field(
+        default=None,
+        description="Вес МАЛЕНЬКОЙ одиночной порции ИМЕННО этого блюда, г. Заполняй для "
+        "unit=portion (нет явного веса): реалистично для блюда (круассан ~80, тарелка супа ~250).",
+    )
+    portion_medium_g: float | None = Field(
+        default=None, description="Вес СРЕДНЕЙ одиночной порции этого блюда, г (круассан ~120, суп ~350)"
+    )
+    portion_large_g: float | None = Field(
+        default=None, description="Вес БОЛЬШОЙ одиночной порции этого блюда, г (круассан ~160, суп ~450)"
+    )
     unit_weight_g: float | None = Field(default=None, description="Вес одной штуки в граммах")
     ambiguous: bool = Field(
         default=False,

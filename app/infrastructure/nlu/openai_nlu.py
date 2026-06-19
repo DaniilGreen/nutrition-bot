@@ -31,6 +31,20 @@ class OpenAiNlu:
         return _to_dto(parsed)
 
 
+def _portion_options(i: object) -> dict[str, float] | None:
+    """Тройка реальных размеров порции (S/M/L грамм) от LLM → dict; None, если не заданы."""
+    opts = {
+        size: grams
+        for size, grams in (
+            ("small", i.portion_small_g),
+            ("medium", i.portion_medium_g),
+            ("large", i.portion_large_g),
+        )
+        if grams is not None
+    }
+    return opts or None
+
+
 def _to_dto(result: NluResult) -> ParsedMessage:
     return ParsedMessage(
         intent=Intent(result.intent),
@@ -45,6 +59,7 @@ def _to_dto(result: NluResult) -> ParsedMessage:
                 quantity=i.quantity,
                 grams=i.grams,
                 portion_hint=i.portion_hint,
+                portion_options=_portion_options(i),
                 unit_weight_g=i.unit_weight_g,
                 ambiguous=i.ambiguous,
                 kcal_per_100g=i.kcal_per_100g,

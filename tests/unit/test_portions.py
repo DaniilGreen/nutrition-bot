@@ -89,3 +89,25 @@ def test_curated_portion_beats_explicit_grams() -> None:
         product_portion_sizes={"large": 650},
     )
     assert r.grams == 650
+
+
+def test_llm_portion_sizes_used_not_multiplier() -> None:
+    # LLM дал реальные размеры пер-блюдо (круассан 80/120/160) → берём их, а НЕ множитель базы
+    r = _call(unit="portion", portion_hint="large", parsed_portion_sizes={"small": 80, "medium": 120, "large": 160})
+    assert r.grams == 160
+    assert r.assumed is True
+    # medium тоже из LLM-размеров, не из дефолта
+    assert _call(unit="portion", portion_hint="medium",
+                 parsed_portion_sizes={"small": 80, "medium": 120, "large": 160}).grams == 120
+
+
+def test_curated_portion_beats_llm_sizes() -> None:
+    # Курируемый размер (выверен владельцем) важнее LLM-оценки размера
+    r = _call(
+        unit="portion",
+        portion_hint="medium",
+        product_portion_sizes={"medium": 350},
+        parsed_portion_sizes={"medium": 120},
+    )
+    assert r.grams == 350
+    assert r.assumed is False

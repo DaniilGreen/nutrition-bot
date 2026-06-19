@@ -43,11 +43,13 @@ def location_request_keyboard() -> ReplyKeyboardMarkup:
     return builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
 
 
-def portion_keyboard() -> InlineKeyboardMarkup:
+def portion_keyboard(options: dict[str, float] | None = None) -> InlineKeyboardMarkup:
+    """Кнопки размера. Если LLM дал реальные граммы пер-блюдо — показываем их (FR-21)."""
     builder = InlineKeyboardBuilder()
-    builder.button(text="Маленькая", callback_data=f"{PORTION_CALLBACK_PREFIX}:small")
-    builder.button(text="Средняя", callback_data=f"{PORTION_CALLBACK_PREFIX}:medium")
-    builder.button(text="Большая", callback_data=f"{PORTION_CALLBACK_PREFIX}:large")
+    for key, label in (("small", "Маленькая"), ("medium", "Средняя"), ("large", "Большая")):
+        grams = options.get(key) if options else None
+        text = f"{label} · {round(grams)} г" if grams else label
+        builder.button(text=text, callback_data=f"{PORTION_CALLBACK_PREFIX}:{key}")
     builder.adjust(3)
     return builder.as_markup()
 

@@ -86,6 +86,7 @@ class MealService:
                 product_unit_weight_g=product.unit_weight_g,
                 product_default_portion_g=product.default_portion_g,
                 product_portion_sizes=product.portion_sizes,
+                parsed_portion_sizes=parsed_item.portion_options,
             )
             macros = macros_for_grams(product.density, resolution.grams)
             # для выверенного каталога показываем чистое имя продукта (не искажённый ввод/STT)

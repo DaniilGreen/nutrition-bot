@@ -713,7 +713,8 @@ async def _reply_message(
     if isinstance(result, ClarificationNeeded):
         await state.set_state(MealStates.awaiting_portion)
         await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
-        await message.answer(format_result(result), reply_markup=portion_keyboard())
+        options = result.draft.items[result.item_index].portion_options
+        await message.answer(format_result(result), reply_markup=portion_keyboard(options))
     elif isinstance(result, VariantClarificationNeeded):
         await state.set_state(MealStates.awaiting_variant)
         await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
@@ -731,7 +732,8 @@ async def _render_after_continue(
     if isinstance(result, ClarificationNeeded):
         await state.set_state(MealStates.awaiting_portion)
         await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
-        await _safe_edit(message, format_result(result), portion_keyboard())
+        options = result.draft.items[result.item_index].portion_options
+        await _safe_edit(message, format_result(result), portion_keyboard(options))
     elif isinstance(result, VariantClarificationNeeded):
         await state.set_state(MealStates.awaiting_variant)
         await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
