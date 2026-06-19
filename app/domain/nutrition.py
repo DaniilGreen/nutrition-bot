@@ -24,22 +24,24 @@ def atwater_kcal(protein: float, fat: float, carb: float) -> float:
     return 4.0 * protein + 9.0 * fat + 4.0 * carb
 
 
-def reconcile_density(d: Density) -> Density:
-    """Авто-сверка правдоподобия LLM-оценки: ккал должны ≈ Атвотер(Б,Ж,У).
+def reconcile_kcal(kcal: float, protein: float, fat: float, carb: float) -> float:
+    """Ккал, согласованные с макросами по Атвотеру. Расхождение сверх допуска (0.3·ккал+20) →
+    доверяем макросам (физика: ккал ВЫВОДЯТСЯ из Б/Ж/У). Пустые макросы (Атвотер 0) — не трогаем.
 
-    Расходятся сверх допуска (0.3·ккал+20, как в seed.py) → доверяем макросам и пересчитываем
-    ккал из них (Атвотер физичен: ккал ВЫВОДЯТСЯ из Б/Ж/У). Согласованные оценки не трогаем.
-    Пустую оценку (все нули) не трогаем — это отдельный путь (blank-retry в assistant).
+    Единый источник правила сверки (используют reconcile_density и gate INV-11).
     """
-    expected = atwater_kcal(d.protein_per_100g, d.fat_per_100g, d.carb_per_100g)
-    if expected == 0:
-        return d
-    tol = 0.3 * max(d.kcal_per_100g, expected) + 20
-    if abs(d.kcal_per_100g - expected) <= tol:
-        return d
+    expected = atwater_kcal(protein, fat, carb)
+    if expected <= 0:
+        return kcal
+    tol = 0.3 * max(kcal, expected) + 20
+    return round(expected, 1) if abs(kcal - expected) > tol else kcal
+
+
+def reconcile_density(d: Density) -> Density:
+    """Авто-сверка правдоподобия LLM-оценки плотности (ккал ≈ Атвотер(Б,Ж,У))."""
     return Density(
-        kcal_per_100g=round(expected, 1),
-        protein_per_100g=d.protein_per_100g,
-        fat_per_100g=d.fat_per_100g,
-        carb_per_100g=d.carb_per_100g,
+        reconcile_kcal(d.kcal_per_100g, d.protein_per_100g, d.fat_per_100g, d.carb_per_100g),
+        d.protein_per_100g,
+        d.fat_per_100g,
+        d.carb_per_100g,
     )

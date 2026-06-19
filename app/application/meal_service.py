@@ -20,6 +20,13 @@ from app.application.entities import Meal, MealItem, Product, User
 from app.application.ports import MealRepo, ProductRepo
 from app.clock import Clock, utcnow
 from app.domain.nutrition import macros_for_grams, reconcile_density
+from app.domain.plausibility import (
+    FALLBACK_DENSITY,
+    clamp_density,
+    clamp_grams,
+    clamp_macros,
+    vet_macros,
+)
 from app.domain.portions import resolve_grams
 from app.domain.value_objects import Density, Macros, sum_macros
 
@@ -58,18 +65,21 @@ class MealService:
         items: list[MealItem] = []
         estimated = False
         for parsed_item in parsed.items:
-            if parsed_item.total_kcal is not None:
-                # FR-22: пользователь сам назвал готовые КБЖУ (меню/этикетка) — пишем как есть,
-                # без каталога/оценки. Грамовка опциональна, в каталог не пиним.
+            if parsed_item.total_kcal:  # truthy: не None и не 0 (0 → обычный путь, INV-11.3)
+                # FR-22: пользователь явно назвал КБЖУ (меню/этикетка) — доверяем как есть,
+                # без каталога/оценки. INV-11.2: только границы (clamp), БЕЗ Атвотер-сверки —
+                # его явные цифры не перетираем (в т.ч. частичный набор «400 ккал 30 белка»).
                 items.append(
                     MealItem(
                         name_snapshot=parsed_item.name,
                         grams=round(parsed_item.grams or 0.0, 1),
-                        macros=Macros(
-                            kcal=parsed_item.total_kcal,
-                            protein=parsed_item.total_protein or 0.0,
-                            fat=parsed_item.total_fat or 0.0,
-                            carb=parsed_item.total_carb or 0.0,
+                        macros=clamp_macros(
+                            Macros(
+                                kcal=parsed_item.total_kcal,
+                                protein=parsed_item.total_protein or 0.0,
+                                fat=parsed_item.total_fat or 0.0,
+                                carb=parsed_item.total_carb or 0.0,
+                            )
                         ),
                         product_id=None,
                     )
@@ -88,7 +98,8 @@ class MealService:
                 product_portion_sizes=product.portion_sizes,
                 parsed_portion_sizes=parsed_item.portion_options,
             )
-            macros = macros_for_grams(product.density, resolution.grams)
+            grams = clamp_grams(resolution.grams)  # INV-11.2: граммы в санитарные границы
+            macros = vet_macros(macros_for_grams(product.density, grams))  # INV-11 gate
             # для выверенного каталога показываем чистое имя продукта (не искажённый ввод/STT)
             display_name = (
                 product.display_name
@@ -98,7 +109,7 @@ class MealService:
             items.append(
                 MealItem(
                     name_snapshot=display_name,
-                    grams=round(resolution.grams, 1),
+                    grams=round(grams, 1),
                     macros=macros,
                     product_id=product.id,
                 )
@@ -193,15 +204,30 @@ class MealService:
             return match
 
         unique_key = await self._free_key(key)
-        # авто-сверка правдоподобия: ккал ≈ Атвотер(Б,Ж,У); грубое расхождение → чиним ккал
-        density = reconcile_density(
-            Density(
-                kcal_per_100g=parsed_item.kcal_per_100g,
-                protein_per_100g=parsed_item.protein_per_100g,
-                fat_per_100g=parsed_item.fat_per_100g,
-                carb_per_100g=parsed_item.carb_per_100g,
+        # gate INV-11: Атвотер-сверка ккал↔БЖУ + санитарные границы плотности
+        density = clamp_density(
+            reconcile_density(
+                Density(
+                    kcal_per_100g=parsed_item.kcal_per_100g,
+                    protein_per_100g=parsed_item.protein_per_100g,
+                    fat_per_100g=parsed_item.fat_per_100g,
+                    carb_per_100g=parsed_item.carb_per_100g,
+                )
             )
         )
+        if _is_blank_density(density):
+            # Пустая оценка (после ретрая INV-9) — НЕ пиним в каталог (иначе мусор навсегда:
+            # баг «пангасиус 0 ккал»). Что писать в саму запись — решает INV-11.3: вода/чёрный
+            # кофе → 0 как есть; реальная еда → консервативный фолбэк ≈150/100г, а не молчаливый 0.
+            fallback = density if _looks_zero_calorie(parsed_item.name) else FALLBACK_DENSITY
+            return Product(
+                canonical_key=unique_key,
+                display_name=parsed_item.name,
+                density=fallback,
+                unit_weight_g=parsed_item.unit_weight_g,
+                source="llm",
+                is_estimate=True,
+            )
         product = Product(
             canonical_key=unique_key,
             display_name=parsed_item.name,
@@ -210,10 +236,6 @@ class MealService:
             source="llm",
             is_estimate=True,
         )
-        if _is_blank_density(product.density):
-            # Пустая оценка (все макросы 0) — промах LLM либо 0-кал напиток. НЕ пиним:
-            # иначе закрепим мусор навсегда (баг: пангасиус за 0 ккал). Переоценим в след. раз.
-            return product
         return await self._products.create(product)
 
     async def _free_key(self, base: str) -> str:
@@ -262,6 +284,28 @@ def _is_blank_density(d: Density) -> bool:
         and d.fat_per_100g == 0
         and d.carb_per_100g == 0
     )
+
+
+# Калорийные основы: если есть в названии — продукт НЕ нулевой (страховка для _looks_zero_calorie).
+_CALORIC_BASE = (
+    "молок", "слив", "кокос", "сироп", "мёд", "мед", "орех", "какао",
+    "миндал", "овс", "соя", "соев", "латте", "раф", "банан", "сахар",
+)
+
+
+def _looks_zero_calorie(name: str) -> bool:
+    """Осознанно нулевые: вода, чёрный кофе/чай без добавок (FR-25) — им фолбэк не нужен.
+
+    Узкая граница для INV-11.3, чтобы вода не стала 150 ккал. Калорийная основа в названии
+    («кофе с молоком без сахара») → НЕ нулевой (иначе ложно занулим реальный напиток).
+    ponytail: пара ключей; станет шире — выносить в каталог zero-продуктов.
+    """
+    n = name.strip().lower()
+    if "вода" in n or "water" in n:
+        return True
+    if any(base in n for base in _CALORIC_BASE):
+        return False  # есть калорийная основа — точно не нулевой
+    return ("кофе" in n or "чай" in n) and ("чёрн" in n or "черн" in n or "без" in n)
 
 
 def _name_matches(query: str, candidate: str) -> bool:

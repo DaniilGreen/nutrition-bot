@@ -27,6 +27,7 @@ from app.application.results import (
 from app.application.stats_service import StatsService
 from app.application.weight_service import WeightService
 from app.domain.goals import Goal
+from app.domain.plausibility import clamp_density
 from app.domain.value_objects import Density
 
 
@@ -127,7 +128,8 @@ class Assistant:
         return await self._products.get_by_id(product_id)
 
     async def fix_product_density(self, product_id: int, density: Density) -> Product | None:
-        return await self._products.update_density(product_id, density)
+        # INV-11.2: ручную правку каталога тоже отсекаем по границам (защита от опечатки «310 г белка»)
+        return await self._products.update_density(product_id, clamp_density(density))
 
     async def _handle_meal(
         self, user: User, parsed: ParsedMessage, *, raw_input: str, input_type: str
@@ -168,8 +170,8 @@ class Assistant:
 
 def _blank_estimate(item: ParsedItem) -> bool:
     """Нулевая оценка КБЖУ от LLM — повод переспросить (для еды 0/0/0/0 это промах)."""
-    if item.total_kcal is not None:
-        return False  # FR-22: готовые КБЖУ названы — оценка плотности не нужна
+    if item.total_kcal:
+        return False  # FR-22: явные КБЖУ названы — оценка плотности не нужна (0 → обычный путь)
     return (
         item.kcal_per_100g == 0
         and item.protein_per_100g == 0
@@ -181,8 +183,8 @@ def _blank_estimate(item: ParsedItem) -> bool:
 def _first_unclarified_index(parsed: ParsedMessage) -> int | None:
     """Первый продукт с порцией без размера — для него и зададим вопрос."""
     for i, item in enumerate(parsed.items):
-        if item.total_kcal is not None:
-            continue  # FR-22: готовые КБЖУ названы — размер/грамовка не нужны
+        if item.total_kcal:
+            continue  # FR-22: явные КБЖУ названы — размер/грамовка не нужны
         if item.unit is Unit.PORTION and item.portion_hint is None:
             return i
     return None
