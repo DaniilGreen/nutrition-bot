@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4.1"
     openai_stt_model: str = "whisper-1"
     use_fake_nlu: bool = False
+    sample_k: int = 5  # self-consistency: сколько сэмплов оценки на новый продукт (D-15)
 
     default_timezone: str = "Europe/Moscow"
     default_goal_kcal: float = 2000

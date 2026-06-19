@@ -242,7 +242,12 @@ class MealService:
             source="llm",
             is_estimate=True,
         )
-        return await self._products.create(product)
+        # D-15/D-16: пиним ТОЛЬКО уверенную оценку (high, либо None — один сэмпл/легаси).
+        # Неуверенную (med/low по разбросу сэмплов) НЕ замораживаем навсегда — мягкий кэш:
+        # пересчитается при следующей встрече; в карточке помечена «≈».
+        if parsed_item.estimate_confidence in (None, "high"):
+            return await self._products.create(product)
+        return product
 
     async def _free_key(self, base: str) -> str:
         key, suffix = base, 2

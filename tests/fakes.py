@@ -178,6 +178,22 @@ class StubNlu:
         self._i += 1
         return self._responses[idx]
 
+    async def parse_samples(self, text: str, known_keys: object) -> list[ParsedMessage]:
+        return [await self.parse(text, known_keys)]  # один сэмпл → поведение как до D-15
+
+
+class SamplingStubNlu:
+    """parse_samples отдаёт заданный список сэмплов (тест self-consistency, D-15)."""
+
+    def __init__(self, samples: list[ParsedMessage]) -> None:
+        self._samples = list(samples)
+
+    async def parse(self, text: str, known_keys: object) -> ParsedMessage:
+        return self._samples[0]
+
+    async def parse_samples(self, text: str, known_keys: object) -> list[ParsedMessage]:
+        return list(self._samples)
+
 
 class StubStt:
     """Возвращает фиксированный транскрипт для голоса."""

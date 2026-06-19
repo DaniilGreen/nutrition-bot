@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+from statistics import median
+
 from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
 from app.application.entities import MealItem, Product, User, WeightLog
 from app.application.meal_service import MealService
@@ -26,6 +28,7 @@ from app.application.results import (
 )
 from app.application.stats_service import StatsService
 from app.application.weight_service import WeightService
+from app.domain.consensus import confidence_from_cv, median_cv
 from app.domain.goals import Goal
 from app.domain.plausibility import clamp_density
 from app.domain.value_objects import Density
@@ -50,19 +53,11 @@ class Assistant:
 
     async def process(self, user: User, text: str, *, input_type: str = "text") -> Result:
         known_keys = await self._products.all_keys()
-        parsed = await self._nlu.parse(text, known_keys=known_keys)
-        if parsed.intent is Intent.MEAL and any(_blank_estimate(i) for i in parsed.items):
-            # INV-9: один ретрай при пустой оценке. Принимаем его ТОЛЬКО если он строго лучше
-            # (meal, непустой, без blank) — иначе оставляем первый разбор, не теряя корректные
-            # позиции мульти-итема (AC-46). При temperature=0 ретрай часто = тот же ответ;
-            # осмысленный механизм — self-consistency сэмплинг (D-15, отдельная волна).
-            retry = await self._nlu.parse(text, known_keys=known_keys)
-            if (
-                retry.intent is Intent.MEAL
-                and retry.items
-                and not any(_blank_estimate(i) for i in retry.items)
-            ):
-                parsed = retry
+        # Self-consistency (D-15/INV-12): k сэмплов оценки → медиана + калиброванная уверенность.
+        # Заменяет фейковый ретрай при temperature=0 (был почти no-op). Адаптер сам решает k:
+        # для не-meal/стейтед — один сэмпл. Фейки возвращают один сэмпл → поведение тестов цело.
+        samples = await self._nlu.parse_samples(text, known_keys=known_keys)
+        parsed = _consolidate(samples)
 
         if parsed.intent is Intent.MEAL and parsed.items:
             return await self._handle_meal(user, parsed, raw_input=text, input_type=input_type)
@@ -177,16 +172,40 @@ class Assistant:
         return ItemRemoved(items=removed, remaining=stats.remaining)
 
 
-def _blank_estimate(item: ParsedItem) -> bool:
-    """Нулевая оценка КБЖУ от LLM — повод переспросить (для еды 0/0/0/0 это промах)."""
-    if item.total_kcal:
-        return False  # FR-22: явные КБЖУ названы — оценка плотности не нужна (0 → обычный путь)
+def _is_blank_item(i: ParsedItem) -> bool:
+    """Пустая оценка позиции (0/0/0/0) — промах сэмпла, исключаем из медианы."""
     return (
-        item.kcal_per_100g == 0
-        and item.protein_per_100g == 0
-        and item.fat_per_100g == 0
-        and item.carb_per_100g == 0
+        i.kcal_per_100g == 0
+        and i.protein_per_100g == 0
+        and i.fat_per_100g == 0
+        and i.carb_per_100g == 0
     )
+
+
+def _consolidate(samples: list[ParsedMessage]) -> ParsedMessage:
+    """Свести k сэмплов оценки в один разбор (D-15/INV-12): медиана плотности и веса штуки +
+    калиброванная уверенность из разброса (CV). Один сэмпл (фейки/не-meal) → как есть."""
+    base = samples[0]
+    if len(samples) < 2 or base.intent is not Intent.MEAL:
+        return base
+    for i, item in enumerate(base.items):
+        if item.total_kcal:  # стейтед (FR-22) — не сэмплируем
+            continue
+        col = [s.items[i] for s in samples if i < len(s.items)]
+        src = [c for c in col if not _is_blank_item(c)] or col  # пустые промахи отбрасываем
+        kmed, dcv = median_cv([c.kcal_per_100g for c in src])
+        item.kcal_per_100g = round(kmed, 1)
+        item.protein_per_100g = round(median([c.protein_per_100g for c in src]), 1)
+        item.fat_per_100g = round(median([c.fat_per_100g for c in src]), 1)
+        item.carb_per_100g = round(median([c.carb_per_100g for c in src]), 1)
+        gcv = 0.0
+        weights = [c.unit_weight_g for c in src if c.unit_weight_g]
+        if weights:
+            wmed, gcv = median_cv(weights)
+            item.unit_weight_g = round(wmed, 1)
+        # уверенность — по худшему разбросу (плотность ИЛИ вес штуки)
+        item.estimate_confidence = confidence_from_cv(max(dcv, gcv))
+    return base
 
 
 def _first_unclarified_index(parsed: ParsedMessage) -> int | None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
 from app.application.results import MealLogged
 from tests.e2e.test_meal_flow import _build, _new_user
-from tests.fakes import StubNlu
+from tests.fakes import SamplingStubNlu, StubNlu
 
 
 def _fish(kcal: float, p: float, f: float, c: float) -> ParsedMessage:
@@ -169,9 +169,38 @@ async def test_blank_coffee_with_milk_gets_fallback() -> None:
     assert result.meal.totals.kcal > 0  # «молок» в имени → не зануляем
 
 
-async def test_retry_recovers_blank_estimate() -> None:
-    # первый парс пустой, ретрай даёт норму → пинится корректно (120/100 * 400 = 480)
-    assistant, users, products = _build(StubNlu(_fish(0, 0, 0, 0), _fish(120, 20, 5, 0)))
+async def test_sampling_consensus_recovers_and_pins() -> None:
+    # D-15: один сэмпл пустой, два согласны (120) → медиана не-пустых, консенсус → пин; 400×1.2=480
+    samples = [_fish(0, 0, 0, 0), _fish(120, 20, 5, 0), _fish(120, 20, 5, 0)]
+    assistant, users, products = _build(SamplingStubNlu(samples))
+    user = await _new_user(users)
+
+    result = await assistant.process(user, "пангасиус 400")
+
+    assert isinstance(result, MealLogged)
+    assert result.meal.totals.kcal == 480.0
+    pinned = await products.get_by_key("pangasius")
+    assert pinned is not None and pinned.density.kcal_per_100g == 120  # уверенно → пин
+    assert result.meal.items[0].is_estimate is True  # llm-оценка → метка «≈»
+
+
+async def test_sampling_high_variance_not_pinned() -> None:
+    # D-15/D-16: большой разброс плотности → низкая уверенность → НЕ пиним (мягкий кэш)
+    samples = [_fish(100, 5, 2, 18), _fish(220, 12, 6, 30), _fish(340, 20, 10, 45)]
+    assistant, users, products = _build(SamplingStubNlu(samples))
+    user = await _new_user(users)
+
+    result = await assistant.process(user, "пангасиус 400")
+
+    assert isinstance(result, MealLogged)
+    assert result.meal.totals.kcal > 0  # запись есть (медиана), не молчаливый 0
+    assert await products.get_by_key("pangasius") is None  # не заморожено навсегда
+    assert result.meal.items[0].is_estimate is True
+
+
+async def test_single_sample_pins_as_before() -> None:
+    # один сэмпл (StubNlu/фейк) → уверенность None → пиннится как до D-15 (детерминизм цел)
+    assistant, users, products = _build(StubNlu(_fish(120, 20, 5, 0)))
     user = await _new_user(users)
 
     result = await assistant.process(user, "пангасиус 400")

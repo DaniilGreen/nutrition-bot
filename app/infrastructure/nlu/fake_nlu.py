@@ -15,6 +15,11 @@ _GRAMS_RE = re.compile(r"(\d+)\s*(?:г|гр|грамм|g)\b", re.IGNORECASE)
 
 
 class FakeNlu:
+    async def parse_samples(
+        self, text: str, known_keys: Sequence[str]
+    ) -> list[ParsedMessage]:
+        return [await self.parse(text, known_keys)]  # фолбэк без LLM — один сэмпл
+
     async def parse(self, text: str, known_keys: Sequence[str]) -> ParsedMessage:
         low = text.lower().strip()
 

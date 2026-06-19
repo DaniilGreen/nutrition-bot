@@ -46,6 +46,7 @@ class ParsedItem:
     total_fat: float | None = None
     total_carb: float | None = None
     confidence: float = 1.0
+    estimate_confidence: str | None = None  # high|med|low из разброса сэмплов (D-15)
 
 
 @dataclass

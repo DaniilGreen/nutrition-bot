@@ -19,6 +19,13 @@ from app.domain.value_objects import Density
 class NluPort(Protocol):
     async def parse(self, text: str, known_keys: Sequence[str]) -> ParsedMessage: ...
 
+    async def parse_samples(
+        self, text: str, known_keys: Sequence[str]
+    ) -> list[ParsedMessage]:
+        """k независимых сэмплов оценки (self-consistency, D-15). Адаптер решает k:
+        для не-meal/стейтед — один сэмпл; иначе k вызовов при temperature>0."""
+        ...
+
 
 class SttPort(Protocol):
     async def transcribe(self, audio: bytes, *, filename: str = "voice.ogg") -> str: ...

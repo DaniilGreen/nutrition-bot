@@ -38,7 +38,11 @@ def build_nlu(settings: Settings) -> NluPort:
 
         from app.infrastructure.nlu.openai_nlu import OpenAiNlu
 
-        return OpenAiNlu(AsyncOpenAI(api_key=settings.openai_api_key), settings.openai_model)
+        return OpenAiNlu(
+            AsyncOpenAI(api_key=settings.openai_api_key),
+            settings.openai_model,
+            sample_k=settings.sample_k,
+        )
 
     raise RuntimeError(f"Неизвестный LLM_PROVIDER: {settings.llm_provider}")
 
