@@ -16,6 +16,7 @@ UNDO_ITEM_PREFIX = "undo_item"
 ITEM_DEL_PREFIX = "item_del"
 PROD_FIX_PREFIX = "prod_fix"
 ONBOARD_PREFIX = "onb"
+WIZ_CANCEL = "wiz_cancel"  # «✖️ Отмена» в любом визарде (профиль/вариант) — сброс FSM
 
 # Тексты кнопок постоянного меню (они же приходят как обычные сообщения).
 BTN_TODAY = "📊 Сегодня"
@@ -73,6 +74,7 @@ def variant_keyboard(options: Sequence[Product]) -> InlineKeyboardMarkup:
                 text=f"{_short(product.display_name)} ({product.density.kcal_per_100g:g})",
                 callback_data=f"{VARIANT_CALLBACK_PREFIX}:{product.id}",
             )
+    builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
     builder.adjust(1)
     return builder.as_markup()
 
@@ -96,17 +98,26 @@ def meal_actions_keyboard(meal: Meal) -> InlineKeyboardMarkup:
 
 
 def undo_picker_keyboard(meals: Sequence[Meal], tz_name: str) -> InlineKeyboardMarkup:
-    """Меню «Отменить» вне контекста свежей записи — по ОТДЕЛЬНЫМ позициям (не приём целиком)."""
+    """Меню «Отменить» (FR-12/D-13): для каждого приёма — «весь приём» + позиции (если их >1).
+
+    Единый смысл с контекстной отменой под свежей записью: можно снять и приём целиком, и позицию.
+    """
     tz = ZoneInfo(tz_name)
     builder = InlineKeyboardBuilder()
     for meal in meals:
         when = meal.eaten_at.astimezone(tz).strftime("%H:%M")
-        for item in meal.items:
-            if item.id is not None:
-                builder.button(
-                    text=f"🗑 {when} · {_short(item.name_snapshot, 22)} · {item.macros.kcal:g}",
-                    callback_data=f"{UNDO_ITEM_PREFIX}:{meal.id}:{item.id}",
-                )
+        names = _short(", ".join(i.name_snapshot for i in meal.items), 24)
+        builder.button(
+            text=f"↩️ {when} · {names} · {meal.totals.kcal:g}",
+            callback_data=f"{MEAL_UNDO_PREFIX}:{meal.id}",
+        )
+        if len(meal.items) > 1:  # детализация по позициям только когда их несколько
+            for item in meal.items:
+                if item.id is not None:
+                    builder.button(
+                        text=f"   🗑 {_short(item.name_snapshot, 20)} · {item.macros.kcal:g}",
+                        callback_data=f"{UNDO_ITEM_PREFIX}:{meal.id}:{item.id}",
+                    )
     builder.adjust(1)
     return builder.as_markup()
 
@@ -128,7 +139,8 @@ def sex_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="♂️ Мужской", callback_data="prof_sex:male")
     builder.button(text="♀️ Женский", callback_data="prof_sex:female")
-    builder.adjust(2)
+    builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
+    builder.adjust(2, 1)
     return builder.as_markup()
 
 
@@ -137,7 +149,8 @@ def activity_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="🛋 Низкая", callback_data="prof_act:low")
     builder.button(text="🚶 Средняя", callback_data="prof_act:medium")
     builder.button(text="🏃 Высокая", callback_data="prof_act:high")
-    builder.adjust(3)
+    builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
+    builder.adjust(3, 1)
     return builder.as_markup()
 
 
@@ -146,6 +159,7 @@ def goal_type_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="🔻 Похудение", callback_data="prof_goal:cut")
     builder.button(text="⚖️ Поддержание", callback_data="prof_goal:maintain")
     builder.button(text="🔺 Набор", callback_data="prof_goal:bulk")
+    builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
     builder.adjust(1)
     return builder.as_markup()
 

@@ -40,6 +40,7 @@ from app.bot.keyboards import (
     BTN_WEEK,
     BTN_WEIGHT,
     ONBOARD_PREFIX,
+    WIZ_CANCEL,
     activity_keyboard,
     goal_type_keyboard,
     location_request_keyboard,
@@ -178,6 +179,17 @@ async def on_onboard_skip(
     await callback.answer()
 
 
+@router.callback_query(F.data == WIZ_CANCEL)
+async def on_wizard_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    """«✖️ Отмена» в любом визарде (профиль/вариант) — сброс FSM без записи (FR-17)."""
+    await state.clear()
+    if isinstance(callback.message, Message):
+        with suppress(Exception):
+            await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer("Ок, отменил. Меню — снизу 👇", reply_markup=main_menu_keyboard())
+    await callback.answer()
+
+
 @router.message(Command("help"))
 async def on_help(message: Message) -> None:
     await message.answer(HELP_TEXT, reply_markup=main_menu_keyboard())
@@ -257,7 +269,7 @@ async def on_goal(
         carb_g=round(kcal * 0.45 / 4),
     )
     await users.set_goal(app_user.id, goal)
-    await message.answer(f"🎯 Цель обновлена: {kcal:g} ккал/день.")
+    await message.answer(f"🎯 Цель обновлена:\n{format_goal(goal)}")
 
 
 @router.message(Command("today"))
