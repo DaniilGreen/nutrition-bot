@@ -22,9 +22,9 @@ def _mystery(kcal: float) -> ParsedMessage:
                 unit=Unit.GRAM,
                 grams=100,
                 kcal_per_100g=kcal,
-                protein_per_100g=5,
-                fat_per_100g=5,
-                carb_per_100g=5,
+                protein_per_100g=5,  # макросы согласованы с 300 ккал (Атвотер ≈305), чтобы
+                fat_per_100g=25,  # авто-сверка INV-10 не трогала оценку — тест про правку каталога
+                carb_per_100g=15,
                 confidence=0.9,
             )
         ],

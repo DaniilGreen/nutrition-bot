@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     llm_provider: str = "openai"
     openai_api_key: str = ""
-    openai_model: str = "gpt-4o-mini"
+    openai_model: str = "gpt-4.1"
     openai_stt_model: str = "whisper-1"
     use_fake_nlu: bool = False
 

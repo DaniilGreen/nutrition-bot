@@ -19,7 +19,7 @@ from app.application.dto import ParsedItem, ParsedMessage
 from app.application.entities import Meal, MealItem, Product, User
 from app.application.ports import MealRepo, ProductRepo
 from app.clock import Clock, utcnow
-from app.domain.nutrition import macros_for_grams
+from app.domain.nutrition import macros_for_grams, reconcile_density
 from app.domain.portions import resolve_grams
 from app.domain.value_objects import Density, Macros, sum_macros
 
@@ -192,15 +192,19 @@ class MealService:
             return match
 
         unique_key = await self._free_key(key)
-        product = Product(
-            canonical_key=unique_key,
-            display_name=parsed_item.name,
-            density=Density(
+        # авто-сверка правдоподобия: ккал ≈ Атвотер(Б,Ж,У); грубое расхождение → чиним ккал
+        density = reconcile_density(
+            Density(
                 kcal_per_100g=parsed_item.kcal_per_100g,
                 protein_per_100g=parsed_item.protein_per_100g,
                 fat_per_100g=parsed_item.fat_per_100g,
                 carb_per_100g=parsed_item.carb_per_100g,
-            ),
+            )
+        )
+        product = Product(
+            canonical_key=unique_key,
+            display_name=parsed_item.name,
+            density=density,
             unit_weight_g=parsed_item.unit_weight_g,
             source="llm",
             is_estimate=True,
