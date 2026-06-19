@@ -11,6 +11,7 @@ import logging
 import re
 from contextlib import suppress
 from html import escape
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -51,20 +52,57 @@ from app.bot.keyboards import (
 )
 from app.bot.states import MealStates, ProfileStates
 from app.domain.goals import Goal, goal_from_profile
-from app.domain.timeframe import tz_from_longitude
+from app.domain.timeframe import tz_from_longitude, tz_from_utc_offset
 from app.domain.value_objects import Density
 
 router = Router()
 logger = logging.getLogger(__name__)
 
 START_TEXT = (
-    "👋 Привет! Я считаю КБЖУ по твоим сообщениям.\n\n"
-    "Просто напиши или наговори, что съел:\n"
-    "• «курица 250 грамм»\n"
+    "👋 Привет! Я считаю КБЖУ — просто расскажи, что съел.\n\n"
+    "Текстом или голосом:\n"
+    "• «куриная грудка 250 г»\n"
     "• «два банана»\n"
     "• «фо бо средняя порция»\n\n"
-    "Вес тела: «вес 86.8».\n"
+    "⚖️ Вес тела: «вес 86.8»\n"
+    "📖 Полная инструкция — /help\n"
     "Кнопки меню — снизу 👇"
+)
+
+HELP_TEXT = (
+    "📖 <b>Как пользоваться</b>\n\n"
+    "Я считаю калории, белки, жиры и углеводы по твоим сообщениям и показываю, "
+    "сколько осталось до дневной цели. Пиши или наговаривай свободно — разберу сам.\n\n"
+    "🍽 <b>Записать еду</b>\n"
+    "• «куриная грудка 250 г» — точный вес\n"
+    "• «два банана», «3 яйца» — штуки\n"
+    "• «ложка мёда», «стакан кефира» — бытовые меры\n"
+    "• «фо бо», «шакшука» — хватит и одного названия блюда\n"
+    "🎤 Голос работает так же — наговори как удобно.\n\n"
+    "🤚 <b>Не указал сколько?</b>\n"
+    "На «овсянку» или «рис» без количества спрошу размер — жми «немного / средне / много». "
+    "Можно сразу словом: «большая тарелка борща».\n\n"
+    "🏷 <b>Знаешь КБЖУ из меню/этикетки?</b>\n"
+    "Назови цифры прямо: «рис с гречей из кафе, 400 ккал, 30 белка, 10 жира, 50 углеводов» — "
+    "запишу ровно так, без пересчёта.\n\n"
+    "🤔 <b>Уточню вариант</b>\n"
+    "Для «творог» или «курица» спрошу: 5% / 9%, гриль / отварная — способ влияет на калории. "
+    "Можно уточнить сразу: «творог 9%», «курица гриль».\n\n"
+    "⚖️ <b>Вес тела</b>\n"
+    "«вес 86.8» — запишу и покажу тренд (кнопка ⚖️ Вес).\n\n"
+    "✏️ <b>Исправить</b>\n"
+    "• «удали рис» — уберу позицию\n"
+    "• ↩️ Отменить — снять последнюю запись или отдельный продукт из неё\n\n"
+    "📊 <b>Посмотреть</b>\n"
+    "• 📊 Сегодня — съедено и остаток\n"
+    "• 📈 Неделя — среднее за 7 дней\n"
+    "• 🗒 История — последние записи\n\n"
+    "🎯 <b>Настрой под себя</b> — так остаток будет точным:\n"
+    "• ⚙️ Профиль — пол, вес, рост, возраст, цель → посчитаю норму\n"
+    "• /goal 1800 — задать цель вручную\n"
+    "• /products — поправить КБЖУ, если оценил неточно (помечено «≈»)\n"
+    "• /timezone — часовой пояс по геолокации, чтобы «день» совпадал с твоим\n\n"
+    "💡 Чем точнее профиль и каталог — тем точнее учёт. Сомневаешься в цифре? Глянь /products."
 )
 
 
@@ -103,14 +141,46 @@ async def on_start(
 
 @router.message(Command("help"))
 async def on_help(message: Message) -> None:
-    await message.answer(START_TEXT, reply_markup=main_menu_keyboard())
+    await message.answer(HELP_TEXT, reply_markup=main_menu_keyboard())
+
+
+def _resolve_tz_arg(arg: str) -> str | None:
+    """«+7»/«7»/«-5» → Etc/GMT∓N (UTC-офсет), либо имя IANA. None — не распознал/невалидно."""
+    arg = arg.strip()
+    try:
+        tzname = tz_from_utc_offset(int(arg))
+    except ValueError:
+        tzname = arg  # не число — пробуем как имя зоны (Asia/Ho_Chi_Minh)
+    with suppress(KeyError, ValueError, ZoneInfoNotFoundError):
+        ZoneInfo(tzname)
+        return tzname
+    return None
 
 
 @router.message(Command("timezone"))
-async def cmd_timezone(message: Message, app_user: User) -> None:
+async def cmd_timezone(
+    message: Message, command: CommandObject, app_user: User, users: UserRepo
+) -> None:
+    arg = (command.args or "").strip()
+    if arg:
+        tzname = _resolve_tz_arg(arg)
+        if tzname is None:
+            await message.answer(
+                "Не понял пояс. Примеры: <code>/timezone +7</code>, "
+                "<code>/timezone Asia/Ho_Chi_Minh</code> — или пришли 📍 геолокацию."
+            )
+            return
+        if app_user.id is not None:
+            await users.set_timezone(app_user.id, tzname)
+        await message.answer(
+            f"🕒 Часовой пояс обновлён: <b>{escape(tzname, quote=False)}</b>",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
     await message.answer(
         f"🕒 Часовой пояс: <b>{escape(app_user.timezone, quote=False)}</b>\n"
-        "Чтобы уточнить «день» для статистики — пришли геолокацию кнопкой ниже 👇",
+        "Уточни «день» для статистики: пришли 📍 геолокацию кнопкой ниже, "
+        "или вручную — <code>/timezone +7</code> (твой UTC-офсет).",
         reply_markup=location_request_keyboard(),
     )
 

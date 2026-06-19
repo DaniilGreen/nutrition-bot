@@ -28,18 +28,24 @@ def week_bounds_utc(now_utc: datetime, tzname: str) -> tuple[datetime, datetime]
     return start_local.astimezone(_UTC), end_local.astimezone(_UTC)
 
 
+def tz_from_utc_offset(hours: int) -> str:
+    """UTC-офсет в часах (+7 = Вьетнам) → имя зоны. POSIX-инверсия знака: +7 → Etc/GMT-7.
+
+    Может вернуть невалидное имя при |hours|>14 — вызывающий валидирует через ZoneInfo.
+    """
+    if hours == 0:
+        return "UTC"
+    sign = "-" if hours > 0 else "+"  # инверсия: восток (UTC+) → Etc/GMT-
+    return f"Etc/GMT{sign}{abs(hours)}"
+
+
 def tz_from_longitude(lon: float) -> str:
     """Грубая таймзона из долготы (📍-локация Telegram): солнечный офсет round(lon/15) → Etc/GMT∓N.
 
-    POSIX-инверсия знака: Etc/GMT-3 == UTC+3 (восток). Политические границы TZ игнорируем —
-    для границ суток/напоминаний солнечного приближения достаточно.
+    Политические границы TZ игнорируем — для границ суток/напоминаний солнечного приближения хватает.
     ponytail: round(lon/15); нужна точная TZ по точке — timezonefinder/tzfpy.
     """
-    offset = round(lon / 15)
-    if offset == 0:
-        return "UTC"
-    sign = "-" if offset > 0 else "+"  # инверсия: восток (UTC+) → Etc/GMT-
-    return f"Etc/GMT{sign}{abs(offset)}"
+    return tz_from_utc_offset(round(lon / 15))
 
 
 def reminder_due(

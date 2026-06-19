@@ -7,6 +7,7 @@ from app.domain.timeframe import (
     day_bounds_utc,
     reminder_due,
     tz_from_longitude,
+    tz_from_utc_offset,
     week_bounds_utc,
 )
 
@@ -66,3 +67,13 @@ def test_tz_from_longitude_west_and_zero() -> None:
     assert tz_from_longitude(-75) == "Etc/GMT+5"  # восточное побережье США UTC-5
     assert tz_from_longitude(0) == "UTC"
     assert tz_from_longitude(5) == "UTC"  # round(5/15)=0
+
+
+def test_tz_from_utc_offset_vietnam() -> None:
+    # Вьетнам UTC+7: имя Etc/GMT-7, по факту даёт +7 часов
+    assert tz_from_utc_offset(7) == "Etc/GMT-7"
+    now = datetime(2026, 6, 18, 9, 0, tzinfo=timezone.utc)
+    local = now.astimezone(ZoneInfo(tz_from_utc_offset(7)))
+    assert local.utcoffset() == timedelta(hours=7)
+    assert tz_from_utc_offset(-5) == "Etc/GMT+5"
+    assert tz_from_utc_offset(0) == "UTC"
