@@ -71,9 +71,15 @@ class MealService:
                 product_portion_sizes=product.portion_sizes,
             )
             macros = macros_for_grams(product.density, resolution.grams)
+            # для выверенного каталога показываем чистое имя продукта (не искажённый ввод/STT)
+            display_name = (
+                product.display_name
+                if product.source in ("curated", "manual")
+                else parsed_item.name
+            )
             items.append(
                 MealItem(
-                    name_snapshot=parsed_item.name,
+                    name_snapshot=display_name,
                     grams=round(resolution.grams, 1),
                     macros=macros,
                     product_id=product.id,
