@@ -1,0 +1,26 @@
+{
+  "runs": 5,
+  "metrics": {
+    "pct_within_item": {
+      "mean": 0.9262,
+      "std": 0.0255
+    },
+    "abstention_recall": {
+      "mean": 1.0,
+      "std": 0.0
+    },
+    "false_abstain_rate": {
+      "mean": 0.136,
+      "std": 0.0
+    },
+    "kcal_mape_median": {
+      "mean": 0.015,
+      "std": 0.0
+    },
+    "kcal_mape_p90": {
+      "mean": 0.2724,
+      "std": 0.0225
+    }
+  },
+  "created": "2026-06-19T13:16:32.739786+00:00"
+}

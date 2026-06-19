@@ -98,4 +98,81 @@ def metrics(evals: list[ItemEval], tol_by_id: dict[str, float]) -> dict:
             3,
         ),
         "by_mechanism": by_mech,
+        "rows": [
+            {
+                "id": e.gid,
+                "mechanism": e.mechanism,
+                "clarified": e.clarified,
+                "within": None if e.clarified else within(e.est_kcal, e.true_kcal, tol(e.gid)),
+                "est": e.est_kcal,
+                "true": e.true_kcal,
+                "expected_clarify": e.expected_clarify,
+            }
+            for e in evals
+        ],
     }
+
+
+# --- baseline как распределение + регрессионный гейт (NFR-1, D-15) ---
+
+# Плоские числовые метрики для baseline/gate; True = «больше — лучше».
+_GATED = {
+    "pct_within_item": True,
+    "abstention_recall": True,
+    "false_abstain_rate": False,
+    "kcal_mape_median": False,
+    "kcal_mape_p90": False,
+}
+
+
+def scalars(m: dict) -> dict[str, float]:
+    """Плоский срез метрик прогона для сравнения с baseline."""
+    km = m.get("kcal_mape") or {}
+    return {
+        "pct_within_item": m.get("pct_within_item") or 0.0,
+        "abstention_recall": m.get("abstention_recall") or 0.0,
+        "false_abstain_rate": m.get("false_abstain_rate") or 0.0,
+        "kcal_mape_median": km.get("median") or 0.0,
+        "kcal_mape_p90": km.get("p90") or 0.0,
+    }
+
+
+def aggregate_runs(run_metrics: list[dict]) -> dict:
+    """Baseline = распределение по N прогонам: mean±std каждой метрики (отделяем шум LLM)."""
+    cols = [scalars(m) for m in run_metrics]
+    agg = {}
+    for k in _GATED:
+        xs = [c[k] for c in cols]
+        agg[k] = {
+            "mean": round(statistics.mean(xs), 4),
+            "std": round(statistics.pstdev(xs), 4) if len(xs) > 1 else 0.0,
+        }
+    return {"runs": len(run_metrics), "metrics": agg}
+
+
+def gate_check(current: dict, baseline: dict, abs_floor: float = 0.03) -> tuple[bool, list[str]]:
+    """Регрессия засчитывается, только если метрика хуже baseline сверх max(abs_floor, 2σ) —
+    т.е. перекрывает естественный разброс модели (а не шумит). Возвращает (ok, список провалов).
+    """
+    cur = scalars(current)
+    base = baseline.get("metrics", {})
+    fails: list[str] = []
+    for k, higher_better in _GATED.items():
+        b = base.get(k)
+        if not b:
+            continue
+        margin = max(abs_floor, 2 * b["std"])
+        if higher_better and cur[k] < b["mean"] - margin:
+            fails.append(f"{k}: {cur[k]:.3f} < {b['mean']:.3f}−{margin:.3f}")
+        elif not higher_better and cur[k] > b["mean"] + margin:
+            fails.append(f"{k}: {cur[k]:.3f} > {b['mean']:.3f}+{margin:.3f}")
+    return (not fails, fails)
+
+
+def flaky_rows(run_metrics: list[dict]) -> list[str]:
+    """id строк, чей вердикт within менялся между прогонами — кандидаты на воздержание (D-15)."""
+    by_id: dict[str, set] = {}
+    for m in run_metrics:
+        for r in m.get("rows", []):
+            by_id.setdefault(r["id"], set()).add(r["within"])
+    return sorted(i for i, verdicts in by_id.items() if len(verdicts) > 1)
