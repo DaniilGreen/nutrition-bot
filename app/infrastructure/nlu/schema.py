@@ -12,6 +12,11 @@ class NluItem(BaseModel):
         description="Стабильный английский slug в snake_case, одинаковый для разных "
         "формулировок одного продукта (напр. chicken_breast_grilled)"
     )
+    est_note: str = Field(
+        description="СНАЧАЛА (до всех чисел) вспомни РЕАЛЬНЫЙ продукт из своих знаний: вес одной "
+        "типичной штуки и плотность КБЖУ. 4–12 слов. Числа ниже ДОЛЖНЫ следовать отсюда, а НЕ из "
+        "шаблонов/примеров. Напр.: «личи — мелкая ягода, ~15 г/шт, ~66 ккал/100 г, вода 82%»."
+    )
     unit: Literal["g", "ml", "piece", "portion", "unknown"]
     quantity: float | None = Field(default=None, description="Число штук для штучных продуктов")
     grams: float | None = Field(default=None, description="Оценка общего веса порции в граммах")
