@@ -15,6 +15,7 @@ MEAL_UNDO_PREFIX = "meal_undo"
 UNDO_ITEM_PREFIX = "undo_item"
 ITEM_DEL_PREFIX = "item_del"
 PROD_FIX_PREFIX = "prod_fix"
+ONBOARD_PREFIX = "onb"
 
 # Тексты кнопок постоянного меню (они же приходят как обычные сообщения).
 BTN_TODAY = "📊 Сегодня"
@@ -34,6 +35,15 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
         builder.button(text=text)
     builder.adjust(3, 3, 1)
     return builder.as_markup(resize_keyboard=True, is_persistent=True)
+
+
+def onboarding_intro_keyboard() -> InlineKeyboardMarkup:
+    """Первый запуск (FR-24): настроить профиль сейчас или отложить."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⚙️ Настроить (30 сек)", callback_data=f"{ONBOARD_PREFIX}:setup")
+    builder.button(text="⏭ Позже", callback_data=f"{ONBOARD_PREFIX}:skip")
+    builder.adjust(1)
+    return builder.as_markup()
 
 
 def location_request_keyboard() -> ReplyKeyboardMarkup:

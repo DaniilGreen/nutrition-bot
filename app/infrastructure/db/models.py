@@ -32,6 +32,9 @@ class UserORM(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    onboarded_at: Mapped[datetime | None] = mapped_column(  # прошёл ли первый визард (FR-24)
+        DateTime(timezone=True), nullable=True
+    )
 
     goal: Mapped[UserGoalORM | None] = relationship(
         back_populates="user", uselist=False, cascade="all, delete-orphan"

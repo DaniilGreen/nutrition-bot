@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +29,7 @@ def _user_to_domain(o: UserORM) -> User:
         timezone=o.timezone,
         role=o.role,
         is_active=o.is_active,
+        onboarded_at=o.onboarded_at,
     )
 
 
@@ -116,6 +117,12 @@ class SqlUserRepo:
         orm = await self._s.get(UserORM, user_id)
         if orm is not None:
             orm.timezone = tzname
+            await self._s.flush()
+
+    async def set_onboarded(self, user_id: int) -> None:
+        orm = await self._s.get(UserORM, user_id)
+        if orm is not None and orm.onboarded_at is None:
+            orm.onboarded_at = datetime.now(timezone.utc)  # реальный datetime, не SQL-выражение
             await self._s.flush()
 
     async def list_active(self) -> list[User]:

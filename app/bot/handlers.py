@@ -39,11 +39,13 @@ from app.bot.keyboards import (
     BTN_UNDO,
     BTN_WEEK,
     BTN_WEIGHT,
+    ONBOARD_PREFIX,
     activity_keyboard,
     goal_type_keyboard,
     location_request_keyboard,
     main_menu_keyboard,
     meal_actions_keyboard,
+    onboarding_intro_keyboard,
     portion_keyboard,
     products_fix_keyboard,
     sex_keyboard,
@@ -125,18 +127,55 @@ async def on_error(event: ErrorEvent) -> bool:
 # --- команды ------------------------------------------------------------------
 
 
+ONBOARD_PROMPT = (
+    "Сначала настроим твою <b>дневную норму</b> — это 30 секунд "
+    "(пол, вес, рост, возраст, цель). Так остаток будет точным."
+)
+
+
 @router.message(CommandStart())
 async def on_start(
     message: Message, app_user: User, users: UserRepo, state: FSMContext
 ) -> None:
     await state.clear()
-    text = START_TEXT
-    if app_user.id is not None and await users.get_goal(app_user.id) is None:
-        text += (
-            "\n\n⚙️ Сначала задай цель: жми «⚙️ Профиль» или <code>/goal 1800</code> — "
-            "иначе остаток считаю от 2000 ккал по умолчанию."
+    if app_user.onboarded_at is None and app_user.id is not None:
+        # первый запуск (FR-24/D-12): приветствие + предложение настроить профиль-визард
+        await message.answer(START_TEXT, reply_markup=main_menu_keyboard())
+        await message.answer(ONBOARD_PROMPT, reply_markup=onboarding_intro_keyboard())
+        return
+    await message.answer(START_TEXT, reply_markup=main_menu_keyboard())
+
+
+@router.callback_query(F.data == f"{ONBOARD_PREFIX}:setup")
+async def on_onboard_setup(
+    callback: CallbackQuery, app_user: User, users: UserRepo, state: FSMContext
+) -> None:
+    if app_user.id is not None:
+        await users.set_onboarded(app_user.id)  # отмечаем сразу — визард можно не доводить (не зацикливать /start)
+    if isinstance(callback.message, Message):
+        with suppress(Exception):
+            await callback.message.edit_reply_markup(reply_markup=None)  # убрать кнопки интро
+        await _start_profile(callback.message, state)
+        await state.update_data(onboarding=True)  # по завершении покажем «запиши первый приём»
+    await callback.answer()
+
+
+@router.callback_query(F.data == f"{ONBOARD_PREFIX}:skip")
+async def on_onboard_skip(
+    callback: CallbackQuery, app_user: User, users: UserRepo, state: FSMContext
+) -> None:
+    await state.clear()
+    if app_user.id is not None:
+        await users.set_onboarded(app_user.id)
+    if isinstance(callback.message, Message):
+        with suppress(Exception):
+            await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(
+            "Ок! Пока считаю остаток от 2000 ккал/день. Настроить позже — кнопка ⚙️ Профиль.\n"
+            "Запиши первый приём, например «куриная грудка 250 г». Полная инструкция — /help",
+            reply_markup=main_menu_keyboard(),
         )
-    await message.answer(text, reply_markup=main_menu_keyboard())
+    await callback.answer()
 
 
 @router.message(Command("help"))
@@ -361,11 +400,9 @@ async def on_portion_text(
     data = await state.get_data()
     draft = data.get("draft")
     raw = str(data.get("raw", ""))
-    if draft is None:  # черновик потерян — обрабатываем как обычный ввод
+    if draft is None:  # черновик потерян — как в callback: просим заново (не реобрабатываем текст)
         await state.clear()
-        result = await assistant.process(app_user, message.text or "", input_type="text")
-        await session.commit()
-        await _reply_message(message, result, state, raw=message.text or "")
+        await message.answer("⏳ Запись устарела — отправь приём пищи заново.")
         return
 
     item = draft.items[int(data.get("item_index", 0))]
@@ -384,6 +421,35 @@ async def on_portion_text(
         item.grams = grams
         item.portion_hint = None
 
+    result = await assistant.continue_meal(app_user, draft, raw_input=raw)
+    await session.commit()
+    await state.clear()
+    await _reply_message(message, result, state, raw=raw)
+
+
+@router.message(MealStates.awaiting_variant, F.text)
+async def on_variant_text(
+    message: Message,
+    app_user: User,
+    assistant: Assistant,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    """Ответ на вопрос о варианте ТЕКСТОМ («9%», «гриль») — не теряем черновик (AC-32).
+
+    Вмёрживаем уточнение в имя позиции → детерминированный детект квалификатора (FR-20)
+    подхватит его как обычно; если не распознан — переспросим, но мультипозиция цела.
+    """
+    data = await state.get_data()
+    draft = data.get("draft")
+    raw = str(data.get("raw", ""))
+    if draft is None:
+        await state.clear()
+        await message.answer("⏳ Запись устарела — отправь приём пищи заново.")
+        return
+
+    item = draft.items[int(data.get("item_index", 0))]
+    item.name = f"{item.name} {message.text}".strip()
     result = await assistant.continue_meal(app_user, draft, raw_input=raw)
     await session.commit()
     await state.clear()
@@ -635,12 +701,16 @@ async def on_profile_goal(
     )
     await users.set_goal(app_user.id, goal)
     await assistant.log_weight(app_user, float(data["weight"]))
+    await users.set_onboarded(app_user.id)  # профиль пройден → юзер онбординнут (FR-24)
 
-    await callback.message.answer(
-        "✅ Готово! Дневная цель:\n"
-        f"{format_goal(goal)}\n\n"
-        "Поменять: <code>/goal 1800</code>"
-    )
+    if data.get("onboarding"):  # первый запуск → передаём к записи еды + справке
+        tail = (
+            "\n\n🎉 Всё готово! Запиши первый приём — например «куриная грудка 250 г».\n"
+            "Полная инструкция — /help"
+        )
+    else:
+        tail = "\n\nПоменять: <code>/goal 1800</code>"
+    await callback.message.answer(f"✅ Дневная цель:\n{format_goal(goal)}{tail}")
     await callback.answer()
 
 

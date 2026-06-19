@@ -40,6 +40,10 @@ class InMemoryUserRepo:
         if user_id in self._users:
             self._users[user_id].timezone = tzname
 
+    async def set_onboarded(self, user_id: int) -> None:
+        if user_id in self._users and self._users[user_id].onboarded_at is None:
+            self._users[user_id].onboarded_at = datetime(2026, 1, 1)  # сентинел «онбординнут»
+
     async def list_active(self) -> list[User]:
         return list(self._users.values())
 

@@ -21,6 +21,7 @@ class User:
     role: str = "user"
     is_active: bool = True
     id: int | None = None
+    onboarded_at: datetime | None = None  # None → первый запуск, показать визард (FR-24)
 
 
 @dataclass
