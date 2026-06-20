@@ -36,7 +36,7 @@ class ParsedItem:
     portion_hint: str | None = None
     portion_options: dict[str, float] | None = None  # реальные граммы S/M/L пер-блюдо от LLM (FR-21)
     unit_weight_g: float | None = None
-    variant_locked: bool = False  # вариант выбран юзером (callback) — детект не переспрашивает
+    clarify_options: list[str] | None = None  # D-19: варианты-кнопки от LLM (неточный запрос)
     kcal_per_100g: float = 0.0
     protein_per_100g: float = 0.0
     fat_per_100g: float = 0.0

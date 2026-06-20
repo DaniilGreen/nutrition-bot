@@ -37,21 +37,6 @@ _MIN_KEY_LEN = 3
 _MATCH_THRESHOLD = 0.82  # порог имени для RAG-совпадения с каталогом
 _CORRECTION_LOOKBACK = 10  # сколько недавних записей просматриваем для «удали X»
 _CORRECTION_NAME_THRESHOLD = 0.8  # порог нечёткого совпадения имени при удалении
-# Квалификаторы вариантов семейств (FR-20): подстрока в тексте → юзер назвал вариант явно.
-# Детерминированный детект specific/generic (вместо нестабильного флага LLM `ambiguous`).
-# ponytail: ведём руками рядом с семействами из seed.py; для нескольких семейств — ок.
-_VARIANT_QUALIFIERS = {
-    "tvorog_5": "5%",
-    "tvorog_9": "9%",
-    "chicken_breast_boiled": "отварн",
-    "chicken_breast_fried": "жарен",
-    "chicken_grilled": "гриль",
-    "oatmeal_water": "вод",
-    "oatmeal_milk": "молок",
-    "cutlet_chicken": "курин",  # стем «куриная» (котлета)
-}
-
-
 class MealService:
     def __init__(self, products: ProductRepo, meals: MealRepo, clock: Clock = utcnow) -> None:
         self._products = products
@@ -91,7 +76,7 @@ class MealService:
                 )
                 estimated = estimated or stated_estimate
                 continue
-            product = await self._resolve_product_for(user_id, parsed_item)
+            product = await self._resolve_product(parsed_item)
             estimated = estimated or product.is_estimate
             resolution = resolve_grams(
                 unit=parsed_item.unit.value,
@@ -199,47 +184,6 @@ class MealService:
                     )
                     return (updated, old_grams)
         return None
-
-    async def variant_options_if_needed(
-        self, user: User, item: ParsedItem
-    ) -> list[Product] | None:
-        """FR-20: если generic-имя неоднозначно и истории нет — варианты для вопроса; иначе None."""
-        kind, products = await self._variant_resolution(_require_id(user), item)
-        return products if kind == "clarify" else None
-
-    async def _resolve_product_for(self, user_id: int, item: ParsedItem) -> Product:
-        kind, products = await self._variant_resolution(user_id, item)
-        if kind == "use" and products:
-            return products[0]  # вариант выбран по истории/единственный в семействе
-        return await self._resolve_product(item)
-
-    async def _variant_resolution(
-        self, user_id: int, item: ParsedItem
-    ) -> tuple[str, list[Product]]:
-        """Разрешение варианта generic-имени (FR-20). Возвращает (kind, products):
-
-        normal — обычный путь; use — взять products[0]; clarify — спросить (products = варианты).
-        Детект specific/generic — детерминированный: квалификатор варианта в тексте (5%/гриль),
-        НЕ флаг LLM (он нестабилен — творог/овсянка не флажились).
-        """
-        if item.variant_locked:
-            return ("normal", [])  # вариант выбран юзером (callback) — не переспрашивать
-        key = _canonical_key(item.canonical_key, item.name)
-        concrete = await self._products.get_by_key(key)
-        category = concrete.category if concrete is not None else key
-        if not category:
-            return ("normal", [])
-        variants = await self._products.list_by_category(category)
-        if len(variants) < 2:
-            return ("normal", [])  # семейства/выбора нет — обычный путь (LLM-оценка/RAG)
-        text = _norm(item.name)
-        matched = [
-            v for v in variants
-            if (q := _VARIANT_QUALIFIERS.get(v.canonical_key)) and q in text
-        ]
-        if len(matched) == 1:
-            return ("use", matched)  # квалификатор → ровно этот вариант (переопределяет LLM)
-        return ("clarify", variants)  # нет квалификатора → ВСЕГДА вопрос, без памяти
 
     async def _resolve_product(self, parsed_item: ParsedItem) -> Product:
         key = _canonical_key(parsed_item.canonical_key, parsed_item.name)

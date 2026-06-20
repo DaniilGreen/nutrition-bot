@@ -108,6 +108,27 @@ class Assistant:
         """Продолжить запись приёма пищи после ответа на уточняющий вопрос."""
         return await self._handle_meal(user, draft, raw_input=raw_input, input_type=input_type)
 
+    async def resolve_clarification(
+        self, user: User, draft: ParsedMessage, item_index: int, new_name: str, *, raw_input: str
+    ) -> Result:
+        """D-19: ответ на уточнение → ставим уточнённое имя, ПЕРЕоцениваем плотность и продолжаем.
+
+        new_name — полное имя: кнопка передаёт вариант целиком, текст — имя+дописку (склеивает
+        хендлер). Одно clarify-уточнение на позицию (+ размер порции = ≤2 вопроса)."""
+        item = draft.items[item_index]
+        item.name = new_name.strip() or item.name
+        item.clarify_options = None  # consumed — эту позицию больше не переспрашиваем
+        known_keys = await self._products.all_keys()
+        reparsed = await self._nlu.parse(item.name, known_keys=known_keys)
+        if reparsed.items:  # свежая плотность под уточнённое имя; вес/штуки оставляем как были
+            ni = reparsed.items[0]
+            item.canonical_key = ni.canonical_key
+            item.kcal_per_100g = ni.kcal_per_100g
+            item.protein_per_100g = ni.protein_per_100g
+            item.fat_per_100g = ni.fat_per_100g
+            item.carb_per_100g = ni.carb_per_100g
+        return await self._handle_meal(user, draft, raw_input=raw_input, input_type="text")
+
     async def today(self, user: User) -> DailyStats:
         return await self._stats.daily(user)
 
@@ -158,18 +179,18 @@ class Assistant:
     async def _handle_meal(
         self, user: User, parsed: ParsedMessage, *, raw_input: str, input_type: str
     ) -> Result:
-        idx = _first_unclarified_index(parsed)
+        # D-19: сперва уточняем СОСТАВ (начинка/тип/жирность) — влияет и на плотность, и на размер.
+        for i, item in enumerate(parsed.items):
+            if item.clarify_options and not item.total_kcal:
+                return VariantClarificationNeeded(
+                    draft=parsed, item_index=i, item_name=item.name, options=item.clarify_options
+                )
+
+        idx = _first_unclarified_index(parsed)  # затем размер порции (FR-21)
         if idx is not None:
             return ClarificationNeeded(
                 draft=parsed, item_index=idx, item_name=parsed.items[idx].name
             )
-
-        for i, item in enumerate(parsed.items):  # FR-20: неоднозначное generic-имя без истории
-            options = await self._meals.variant_options_if_needed(user, item)
-            if options:
-                return VariantClarificationNeeded(
-                    draft=parsed, item_index=i, item_name=item.name, options=options
-                )
 
         meal = await self._meals.log(user, parsed, raw_input=raw_input, input_type=input_type)
         stats = await self._stats.daily(user)

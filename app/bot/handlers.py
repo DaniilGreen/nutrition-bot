@@ -484,10 +484,10 @@ async def on_variant_text(
     session: AsyncSession,
     state: FSMContext,
 ) -> None:
-    """Ответ на вопрос о варианте ТЕКСТОМ («9%», «гриль») — не теряем черновик (AC-32).
+    """Ответ на уточнение ТЕКСТОМ — свой вариант (D-19), не теряем черновик (AC-32).
 
-    Вмёрживаем уточнение в имя позиции → детерминированный детект квалификатора (FR-20)
-    подхватит его как обычно; если не распознан — переспросим, но мультипозиция цела.
+    Текст вмёрживается в имя позиции и плотность ПЕРЕоценивается под уточнённое блюдо
+    (resolve_clarification). Так юзер не ограничен кнопками — впишет «с фалафелем» и т.п.
     """
     data = await state.get_data()
     draft = data.get("draft")
@@ -498,9 +498,11 @@ async def on_variant_text(
         await message.answer("⏳ Запись устарела — отправь приём пищи заново.")
         return
 
-    item = draft.items[int(data.get("item_index", 0))]
-    item.name = f"{item.name} {message.text}".strip()
-    result = await assistant.continue_meal(app_user, draft, raw_input=raw)
+    item_index = int(data.get("item_index", 0))
+    new_name = f"{draft.items[item_index].name} {message.text or ''}".strip()  # имя + дописка
+    result = await assistant.resolve_clarification(
+        app_user, draft, item_index, new_name, raw_input=raw
+    )
     await session.commit()
     await state.clear()
     await _reply_message(message, result, state, raw=raw)
@@ -616,15 +618,15 @@ async def on_variant(
 
     item_index = int(data.get("item_index", 0))
     raw = str(data.get("raw", ""))
-    product_id = int((callback.data or "variant:0").split(":", 1)[1])
-    product = await assistant.get_product(product_id)
-    if product is None:
+    options = draft.items[item_index].clarify_options or []
+    idx = int((callback.data or "variant:0").split(":", 1)[1])
+    if idx >= len(options):
         await callback.answer("Вариант не найден — отправь заново.")
         return
 
-    draft.items[item_index].canonical_key = product.canonical_key
-    draft.items[item_index].variant_locked = True  # выбор сделан явно → детект не переспрашивает
-    result = await assistant.continue_meal(app_user, draft, raw_input=raw)
+    result = await assistant.resolve_clarification(
+        app_user, draft, item_index, options[idx], raw_input=raw
+    )
     await session.commit()
     await _render_after_continue(callback.message, result, state, raw=raw)
     await callback.answer()

@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.application.dto import ParsedMessage
-from app.application.entities import Meal, MealItem, Product, WeightLog
+from app.application.entities import Meal, MealItem, WeightLog
 from app.domain.goals import Goal, Remaining
 from app.domain.value_objects import Macros
 
@@ -26,12 +26,12 @@ class ClarificationNeeded:
 
 @dataclass
 class VariantClarificationNeeded:
-    """FR-20: generic-имя неоднозначно, истории нет — выбрать вариант из семейства."""
+    """D-19: запрос неточен по КБЖУ-важной оси — LLM предложил варианты (строки) для кнопок."""
 
     draft: ParsedMessage
     item_index: int
     item_name: str
-    options: list[Product]
+    options: list[str]  # готовые замены имени от LLM («с курицей», «с говядиной»)
 
 
 @dataclass

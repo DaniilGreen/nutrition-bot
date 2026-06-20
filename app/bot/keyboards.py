@@ -68,15 +68,11 @@ def portion_keyboard(options: dict[str, float] | None = None) -> InlineKeyboardM
     return builder.as_markup()
 
 
-def variant_keyboard(options: Sequence[Product]) -> InlineKeyboardMarkup:
-    """FR-20: выбор варианта неоднозначного generic-имени (кнопка на продукт семейства)."""
+def variant_keyboard(options: Sequence[str]) -> InlineKeyboardMarkup:
+    """D-19: кнопки-варианты от LLM (callback = индекс в options). Свой вариант — впиши текстом."""
     builder = InlineKeyboardBuilder()
-    for product in options:
-        if product.id is not None:
-            builder.button(
-                text=f"{_short(product.display_name)} ({product.density.kcal_per_100g:g})",
-                callback_data=f"{VARIANT_CALLBACK_PREFIX}:{product.id}",
-            )
+    for i, opt in enumerate(options):
+        builder.button(text=_short(opt), callback_data=f"{VARIANT_CALLBACK_PREFIX}:{i}")
     builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
     builder.adjust(1)
     return builder.as_markup()

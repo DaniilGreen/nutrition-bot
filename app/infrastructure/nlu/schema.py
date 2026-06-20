@@ -49,6 +49,12 @@ class NluItem(BaseModel):
     total_protein: float | None = None
     total_fat: float | None = None
     total_carb: float | None = None
+    clarify_options: list[str] | None = Field(
+        default=None,
+        description="2–4 варианта-кнопки для УТОЧНЕНИЯ, когда запрос неточен по оси, заметно "
+        "меняющей КБЖУ. Каждый — готовая замена имени («шаверма с говядиной»). Правила — в "
+        "системном промте. null, если уточнять нечего.",
+    )
     confidence: float = Field(description="Уверенность по продукту, 0..1")
 
 

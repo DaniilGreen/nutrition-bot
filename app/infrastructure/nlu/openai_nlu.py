@@ -104,6 +104,7 @@ def _to_dto(result: NluResult) -> ParsedMessage:
                 total_protein=i.total_protein,
                 total_fat=i.total_fat,
                 total_carb=i.total_carb,
+                clarify_options=i.clarify_options or None,
                 confidence=i.confidence,
             )
             for i in result.items

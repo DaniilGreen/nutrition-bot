@@ -1,40 +1,22 @@
-"""E2E FR-20: детерминированный детект варианта (квалификатор в тексте) + резолв по истории."""
+"""E2E D-19: LLM-driven уточнения — clarify_options → кнопки/текст → переоценка плотности."""
 from __future__ import annotations
 
 from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
-from app.application.entities import Product
 from app.application.results import ClarificationNeeded, MealLogged, VariantClarificationNeeded
-from app.domain.value_objects import Density
 from tests.e2e.test_meal_flow import _build, _new_user
-from tests.fakes import InMemoryProductRepo, StubNlu
-
-_CHICKEN = [
-    ("chicken_breast_boiled", "Куриная грудка отварная", 130, 29, 1.8),
-    ("chicken_breast_fried", "Куриная грудка жареная", 200, 30, 8),
-    ("chicken_grilled", "Курица гриль", 200, 22, 12),
-]
-_TVOROG = [
-    ("tvorog_5", "Творог 5%", 120, 16, 5),
-    ("tvorog_9", "Творог 9%", 160, 16, 9),
-]
+from tests.fakes import StubNlu
 
 
-async def _seed(products: InMemoryProductRepo, rows: list, category: str) -> None:
-    for key, name, kcal, p, f in rows:
-        await products.create(
-            Product(
-                canonical_key=key,
-                display_name=name,
-                category=category,
-                density=Density(kcal, p, f, 0),
-                source="curated",
-                is_estimate=False,
-            )
-        )
-
-
-def _item(name: str, key: str) -> ParsedMessage:
-    # kcal_per_100g != 0 — чтобы не триггерить ретрай нулевой оценки
+def _meal(
+    name: str,
+    key: str,
+    kcal: float,
+    *,
+    clarify: list[str] | None = None,
+    unit: Unit = Unit.GRAM,
+    grams: float | None = 200,
+    portion_hint: str | None = None,
+) -> ParsedMessage:
     return ParsedMessage(
         intent=Intent.MEAL,
         confidence=0.9,
@@ -42,97 +24,100 @@ def _item(name: str, key: str) -> ParsedMessage:
             ParsedItem(
                 name=name,
                 canonical_key=key,
-                unit=Unit.GRAM,
-                grams=200,
-                kcal_per_100g=165,
-                protein_per_100g=31,
-                fat_per_100g=3.6,
-                carb_per_100g=0,
+                unit=unit,
+                grams=grams,
+                portion_hint=portion_hint,
+                kcal_per_100g=kcal,
+                protein_per_100g=0,
+                fat_per_100g=0,
+                carb_per_100g=round(kcal / 4, 1),  # Атвотер-консистентно (vet не переписывает ккал)
+                clarify_options=clarify,
                 confidence=0.9,
             )
         ],
     )
 
 
-async def test_generic_cold_start_asks() -> None:
-    # «курица» без квалификатора и без истории → вопрос
-    assistant, users, products = _build(StubNlu(_item("курица", "chicken")))
-    await _seed(products, _CHICKEN, "chicken")
+async def test_clarify_asked_when_options_present() -> None:
+    # «шаверма» с clarify_options от LLM → вопрос ровно с этими вариантами (строки)
+    opts = ["шаверма с курицей", "шаверма с говядиной", "вег"]
+    stub = StubNlu(_meal("шаверма", "shawarma", 210, clarify=opts))
+    assistant, users, _ = _build(stub)
     user = await _new_user(users)
 
-    result = await assistant.process(user, "курица 200")
+    result = await assistant.process(user, "шаверма 200")
 
     assert isinstance(result, VariantClarificationNeeded)
-    assert {p.canonical_key for p in result.options} == {
-        "chicken_breast_boiled",
-        "chicken_breast_fried",
-        "chicken_grilled",
-    }
+    assert result.options == opts
 
 
-async def test_tvorog_generic_asks_even_if_llm_picked_concrete() -> None:
-    # РЕГРЕССИЯ бага: LLM вернул конкретный tvorog_5 + ambiguous=False, но «творог» без
-    # квалификатора → всё равно спросить (раньше молча логировался 5%).
-    assistant, users, products = _build(StubNlu(_item("творог", "tvorog_5")))
-    await _seed(products, _TVOROG, "tvorog")
+async def test_clarify_button_replaces_name_and_reestimates() -> None:
+    # тап «шаверма с говядиной» → имя заменяется целиком, плотность ПЕРЕоценивается (230)
+    stub = StubNlu(
+        _meal("шаверма", "shawarma", 210, clarify=["шаверма с курицей", "шаверма с говядиной"]),
+        _meal("шаверма с говядиной", "shawarma_beef", 230),  # переоценка под уточнённое имя
+    )
+    assistant, users, _ = _build(stub)
     user = await _new_user(users)
 
-    result = await assistant.process(user, "творог 150")
+    asked = await assistant.process(user, "шаверма 200")
+    assert isinstance(asked, VariantClarificationNeeded)
 
-    assert isinstance(result, VariantClarificationNeeded)
-    assert {p.canonical_key for p in result.options} == {"tvorog_5", "tvorog_9"}
+    final = await assistant.resolve_clarification(
+        user, asked.draft, asked.item_index, asked.options[1], raw_input="шаверма 200"
+    )
+    assert isinstance(final, MealLogged)
+    assert final.meal.items[0].name_snapshot == "шаверма с говядиной"
+    assert final.meal.totals.kcal == 460.0  # 230/100 * 200, не generic 210
 
 
-async def test_qualifier_picks_variant_overriding_llm() -> None:
-    # «творог 9%» — квалификатор «9%» → ровно tvorog_9, даже если LLM промахнулся ключом
-    assistant, users, products = _build(StubNlu(_item("творог 9%", "tvorog_5")))
-    await _seed(products, _TVOROG, "tvorog")
+async def test_clarify_freetext_appends_and_reestimates() -> None:
+    # свой вариант текстом «с бараниной» → имя = «шаверма с бараниной», переоценка (250)
+    stub = StubNlu(
+        _meal("шаверма", "shawarma", 210, clarify=["шаверма с курицей"]),
+        _meal("шаверма с бараниной", "shawarma_lamb", 250),
+    )
+    assistant, users, _ = _build(stub)
     user = await _new_user(users)
 
-    result = await assistant.process(user, "творог 9% 200")
-
-    assert isinstance(result, MealLogged)
-    assert result.meal.totals.kcal == 320.0  # tvorog_9 (160/100*200), не tvorog_5 (240)
-
-
-async def test_variant_pick_sticks() -> None:
-    # после вопроса юзер выбрал вариант (эмуляция callback: key + variant_locked) →
-    # continue_meal логирует, НЕ переспрашивает заново (регрессия «message is not modified»)
-    assistant, users, products = _build(StubNlu(_item("творог", "tvorog_5")))
-    await _seed(products, _TVOROG, "tvorog")
-    user = await _new_user(users)
-
-    result = await assistant.process(user, "творог 150")
-    assert isinstance(result, VariantClarificationNeeded)
-
-    draft = result.draft
-    draft.items[result.item_index].canonical_key = "tvorog_9"
-    draft.items[result.item_index].variant_locked = True
-    final = await assistant.continue_meal(user, draft, raw_input="творог 150")
+    asked = await assistant.process(user, "шаверма 200")
+    new_name = f"{asked.draft.items[asked.item_index].name} с бараниной"
+    final = await assistant.resolve_clarification(
+        user, asked.draft, asked.item_index, new_name, raw_input="шаверма 200"
+    )
 
     assert isinstance(final, MealLogged)
-    assert final.meal.totals.kcal == 320.0  # выбранный tvorog_9 (160/100*200), без повтора
+    assert final.meal.items[0].name_snapshot == "шаверма с бараниной"
+    assert final.meal.totals.kcal == 500.0  # 250/100 * 200
 
 
-async def test_repeat_generic_asks_again() -> None:
-    # памяти нет: «творог» спрашивает КАЖДЫЙ раз, даже после прошлого выбора
-    # (два свежих парса — StubNlu отдаёт один и тот же объект, а первый мы мутируем)
-    assistant, users, products = _build(
-        StubNlu(_item("творог", "tvorog_5"), _item("творог", "tvorog_5"))
-    )
-    await _seed(products, _TVOROG, "tvorog")
+async def test_no_clarify_logs_directly() -> None:
+    # нет clarify_options → не дёргаем вопросом, пишем сразу
+    stub = StubNlu(_meal("огурец", "cucumber", 15))
+    assistant, users, _ = _build(stub)
     user = await _new_user(users)
 
-    first = await assistant.process(user, "творог 150")
-    # эмулируем выбор tvorog_9 и запись
-    first.draft.items[first.item_index].canonical_key = "tvorog_9"
-    first.draft.items[first.item_index].variant_locked = True
-    await assistant.continue_meal(user, first.draft, raw_input="творог 150")
-    # снова «творог» → снова вопрос (память не ведём)
-    second = await assistant.process(user, "творог 150")
+    result = await assistant.process(user, "огурец 200")
+    assert isinstance(result, MealLogged)
+    assert result.meal.totals.kcal == 30.0  # 15/100 * 200
 
-    assert isinstance(first, VariantClarificationNeeded)
-    assert isinstance(second, VariantClarificationNeeded)
+
+async def test_clarify_then_portion_two_questions() -> None:
+    # ≤2 вопроса: сперва СОСТАВ (clarify), потом РАЗМЕР (portion). Состав влияет и на то, и на то.
+    stub = StubNlu(
+        _meal("рыба", "fish", 100, clarify=["треска", "лосось"], unit=Unit.PORTION, grams=200),
+        _meal("лосось", "salmon", 200),  # переоценка плотности; unit/размер берём из исходной
+    )
+    assistant, users, _ = _build(stub)
+    user = await _new_user(users)
+
+    asked = await assistant.process(user, "рыба")
+    assert isinstance(asked, VariantClarificationNeeded)  # сперва — что за рыба
+
+    after = await assistant.resolve_clarification(
+        user, asked.draft, asked.item_index, "лосось", raw_input="рыба"
+    )
+    assert isinstance(after, ClarificationNeeded)  # затем — размер порции
 
 
 async def test_no_quantity_asks_size_and_scales() -> None:
@@ -143,7 +128,7 @@ async def test_no_quantity_asks_size_and_scales() -> None:
         items=[
             ParsedItem(
                 name="овсянка",
-                canonical_key="oatmeal_x",  # вне семейства — только вопрос размера, без варианта
+                canonical_key="oatmeal_x",
                 unit=Unit.PORTION,
                 portion_hint=None,
                 grams=250,  # типичная порция от LLM
@@ -167,15 +152,3 @@ async def test_no_quantity_asks_size_and_scales() -> None:
     assert isinstance(final, MealLogged)
     assert final.meal.items[0].grams == 175  # типичная 250 × 0.7 (маленькая)
     assert final.meal.totals.kcal == 157.5  # 90/100 * 175
-
-
-async def test_chicken_qualifier_picks_grilled() -> None:
-    # «курица гриль» — квалификатор гриль → grilled (400), даже если LLM промахнулся ключом
-    assistant, users, products = _build(StubNlu(_item("курица гриль", "chicken_breast_boiled")))
-    await _seed(products, _CHICKEN, "chicken")
-    user = await _new_user(users)
-
-    result = await assistant.process(user, "курица гриль 200")
-
-    assert isinstance(result, MealLogged)
-    assert result.meal.totals.kcal == 400.0
