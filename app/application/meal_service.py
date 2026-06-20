@@ -285,12 +285,11 @@ class MealService:
             source="llm",
             is_estimate=True,
         )
-        # D-15/D-16: пиним ТОЛЬКО уверенную оценку (high, либо None — один сэмпл/легаси).
-        # Неуверенную (med/low по разбросу сэмплов) НЕ замораживаем навсегда — мягкий кэш:
-        # пересчитается при следующей встрече; в карточке помечена «≈».
-        if parsed_item.estimate_confidence in (None, "high"):
-            return await self._products.create(product)
-        return product
+        # Пиним ЛЮБУЮ LLM-оценку → она попадает в /products, и юзер может её поправить (ручной
+        # escape-hatch — это и есть путь правки сомнительного). Сэмплинг (D-15) улучшает первую
+        # оценку, «≈» помечает. Пересмотр D-16: НЕ-пиннинг неуверенных ПРЯТАЛ их из /products —
+        # баг (нельзя было поправить именно сомнительное; багрепорт #1).
+        return await self._products.create(product)
 
     async def _free_key(self, base: str) -> str:
         key, suffix = base, 2

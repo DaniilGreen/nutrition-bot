@@ -184,8 +184,8 @@ async def test_sampling_consensus_recovers_and_pins() -> None:
     assert result.meal.items[0].is_estimate is True  # llm-оценка → метка «≈»
 
 
-async def test_sampling_high_variance_not_pinned() -> None:
-    # D-15/D-16: большой разброс плотности → низкая уверенность → НЕ пиним (мягкий кэш)
+async def test_sampling_high_variance_pinned_for_fixing() -> None:
+    # Пересмотр D-16: даже неуверенная оценка пиннится → попадает в /products (юзер поправит).
     samples = [_fish(100, 5, 2, 18), _fish(220, 12, 6, 30), _fish(340, 20, 10, 45)]
     assistant, users, products = _build(SamplingStubNlu(samples))
     user = await _new_user(users)
@@ -194,7 +194,9 @@ async def test_sampling_high_variance_not_pinned() -> None:
 
     assert isinstance(result, MealLogged)
     assert result.meal.totals.kcal > 0  # запись есть (медиана), не молчаливый 0
-    assert await products.get_by_key("pangasius") is None  # не заморожено навсегда
+    pinned = await products.get_by_key("pangasius")
+    # запиннено + «≈» → правится в /products (раньше неуверенное не пиннилось → баг #1)
+    assert pinned is not None and pinned.is_estimate is True
     assert result.meal.items[0].is_estimate is True
 
 
