@@ -10,6 +10,7 @@ from app.application.entities import Meal, MealItem, Product, User, WeightLog
 from app.domain.goals import Goal
 from app.domain.value_objects import Density, Macros
 from app.infrastructure.db.models import (
+    BugReportORM,
     MealItemORM,
     MealORM,
     ProductORM,
@@ -325,6 +326,17 @@ class SqlMealRepo:
         await self._s.delete(orm)
         await self._s.flush()
         return meal
+
+
+class SqlBugRepo:
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def add(
+        self, *, user_id: int, note: str, context: list[dict[str, object]] | None
+    ) -> None:
+        self._s.add(BugReportORM(user_id=user_id, note=note, context=context))
+        await self._s.flush()
 
 
 class SqlWeightRepo:

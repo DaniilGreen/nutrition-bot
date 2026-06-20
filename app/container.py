@@ -18,6 +18,7 @@ from app.clock import Clock, utcnow
 from app.config import Settings
 from app.infrastructure.db.base import Database
 from app.infrastructure.db.repositories import (
+    SqlBugRepo,
     SqlMealRepo,
     SqlProductRepo,
     SqlUserRepo,
@@ -81,10 +82,12 @@ class Container:
         meals = SqlMealRepo(session)
         weights = SqlWeightRepo(session)
 
+        bugs = SqlBugRepo(session)
+
         meal_service = MealService(products, meals, self.clock)
         weight_service = WeightService(weights, self.clock)
         stats_service = StatsService(meals, users, self.settings.default_goal(), self.clock)
         assistant = Assistant(
-            self.nlu, products, meal_service, weight_service, stats_service, self.stt
+            self.nlu, products, meal_service, weight_service, stats_service, self.stt, bugs
         )
         return assistant, users

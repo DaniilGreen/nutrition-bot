@@ -10,7 +10,7 @@ from statistics import median
 from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
 from app.application.entities import MealItem, Product, User, WeightLog
 from app.application.meal_service import MealService
-from app.application.ports import NluPort, ProductRepo, SttPort
+from app.application.ports import BugRepo, NluPort, ProductRepo, SttPort
 from app.application.results import (
     ClarificationNeeded,
     CorrectionFailed,
@@ -44,6 +44,7 @@ class Assistant:
         weight_service: WeightService,
         stats_service: StatsService,
         stt: SttPort | None = None,
+        bug_repo: BugRepo | None = None,
     ) -> None:
         self._nlu = nlu
         self._products = products
@@ -51,6 +52,24 @@ class Assistant:
         self._weights = weight_service
         self._stats = stats_service
         self._stt = stt
+        self._bug = bug_repo
+
+    async def report_bug(self, user: User, note: str) -> None:
+        """FR-26: сохранить багрепорт + контекст последних приёмов юзера (для дебага)."""
+        if self._bug is None or user.id is None:
+            return
+        recent = await self._meals.recent(user, 10)
+        context = [
+            {
+                "raw_input": m.raw_input,
+                "input_type": m.input_type,
+                "eaten_at": m.eaten_at.isoformat(),
+                "kcal": m.totals.kcal,
+                "items": [it.name_snapshot for it in m.items],
+            }
+            for m in recent
+        ]
+        await self._bug.add(user_id=user.id, note=note.strip()[:2000], context=context)
 
     async def process(self, user: User, text: str, *, input_type: str = "text") -> Result:
         known_keys = await self._products.all_keys()
@@ -209,7 +228,17 @@ def _consolidate(samples: list[ParsedMessage]) -> ParsedMessage:
     for i, item in enumerate(base.items):
         if item.total_kcal:  # стейтед (FR-22) — не сэмплируем
             continue
-        col = [s.items[i] for s in samples if i < len(s.items)]
+        # Выравниваем по canonical_key: i-я позиция сэмпла в медиану — ТОЛЬКО если тот же продукт.
+        # При temp>0 модель по-разному дробит мультипозицию (рис+курица vs «рис с курицей») — индекс
+        # не гарантирует совпадение, медиана по разным продуктам = мусор (баг голос+мультиблюдо).
+        key = item.canonical_key
+        col = [
+            s.items[i]
+            for s in samples
+            if i < len(s.items) and s.items[i].canonical_key == key
+        ]
+        if len(col) < 2:
+            continue  # рассинхрон сэмплов → доверяем base (temp=0), не миксуем
         src = [c for c in col if not _is_blank_item(c)] or col  # пустые промахи отбрасываем
         kmed, dcv = median_cv([c.kcal_per_100g for c in src])
         item.kcal_per_100g = round(kmed, 1)

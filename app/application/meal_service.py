@@ -25,6 +25,7 @@ from app.domain.plausibility import (
     clamp_density,
     clamp_grams,
     clamp_macros,
+    is_alcoholic,
     vet_macros,
 )
 from app.domain.portions import resolve_grams
@@ -104,7 +105,13 @@ class MealService:
                 parsed_portion_sizes=parsed_item.portion_options,
             )
             grams = clamp_grams(resolution.grams)  # INV-11.2: граммы в санитарные границы
-            macros = vet_macros(macros_for_grams(product.density, grams))  # INV-11 gate
+            raw_macros = macros_for_grams(product.density, grams)
+            # INV-14: алкоголь — ккал от этанола, доверяем (только границы); иначе Атвотер-сверка
+            macros = (
+                clamp_macros(raw_macros)
+                if is_alcoholic(parsed_item.name)
+                else vet_macros(raw_macros)
+            )
             # для выверенного каталога показываем чистое имя продукта (не искажённый ввод/STT)
             display_name = (
                 product.display_name
@@ -246,16 +253,16 @@ class MealService:
             return match
 
         unique_key = await self._free_key(key)
-        # gate INV-11: Атвотер-сверка ккал↔БЖУ + санитарные границы плотности
+        # gate INV-11: Атвотер-сверка ккал↔БЖУ + санитарные границы плотности.
+        # INV-14: алкоголь — ккал от этанола, НЕ сверяем Атвотером (иначе занизим в разы).
+        raw_density = Density(
+            kcal_per_100g=parsed_item.kcal_per_100g,
+            protein_per_100g=parsed_item.protein_per_100g,
+            fat_per_100g=parsed_item.fat_per_100g,
+            carb_per_100g=parsed_item.carb_per_100g,
+        )
         density = clamp_density(
-            reconcile_density(
-                Density(
-                    kcal_per_100g=parsed_item.kcal_per_100g,
-                    protein_per_100g=parsed_item.protein_per_100g,
-                    fat_per_100g=parsed_item.fat_per_100g,
-                    carb_per_100g=parsed_item.carb_per_100g,
-                )
-            )
+            raw_density if is_alcoholic(parsed_item.name) else reconcile_density(raw_density)
         )
         if _is_blank_density(density):
             # Пустая оценка (после ретрая INV-9) — НЕ пиним в каталог (иначе мусор навсегда:

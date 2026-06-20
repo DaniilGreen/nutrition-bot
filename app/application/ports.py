@@ -87,6 +87,14 @@ class MealRepo(Protocol):
         ...
 
 
+class BugRepo(Protocol):
+    async def add(
+        self, *, user_id: int, note: str, context: list[dict[str, object]] | None
+    ) -> None:
+        """Сохранить репорт о баге (FR-26): заметка юзера + контекст последних приёмов."""
+        ...
+
+
 class WeightRepo(Protocol):
     async def add(self, log: WeightLog) -> WeightLog: ...
 

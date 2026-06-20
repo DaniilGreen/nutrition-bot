@@ -10,6 +10,7 @@ from app.domain.plausibility import (
     clamp_density,
     clamp_grams,
     clamp_macros,
+    is_alcoholic,
     vet_macros,
 )
 from app.domain.value_objects import Density, Macros
@@ -57,6 +58,13 @@ def test_clamp_grams_bounds() -> None:
     assert clamp_grams(5000) == MAX_PORTION_G
     assert clamp_grams(0) == 1.0
     assert clamp_grams(250) == 250
+
+
+def test_is_alcoholic() -> None:
+    for n in ("пиво", "вино красное", "водка 50", "виски", "глинтвейн", "сидр", "wine", "beer"):
+        assert is_alcoholic(n), n
+    for n in ("виноград", "ромашковый чай", "курица", "кефир", "сок", "вода"):
+        assert not is_alcoholic(n), n  # «вино»⊂«виноград», «ром»⊂«ромашка» — не алкоголь
 
 
 def test_fallback_density_self_consistent() -> None:

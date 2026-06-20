@@ -8,6 +8,7 @@ class MealStates(StatesGroup):
     awaiting_portion = State()  # уточнение размера порции
     awaiting_variant = State()  # выбор варианта generic-имени (FR-20)
     awaiting_density = State()  # ввод исправленных КБЖУ продукта
+    awaiting_bug = State()      # описание бага после «🐛 Баг» (FR-26)
 
 
 class ProfileStates(StatesGroup):

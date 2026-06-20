@@ -180,6 +180,16 @@ class InMemoryWeightRepo:
         return xs[:limit]
 
 
+class InMemoryBugRepo:
+    def __init__(self) -> None:
+        self.reports: list[dict] = []
+
+    async def add(
+        self, *, user_id: int, note: str, context: list[dict[str, object]] | None
+    ) -> None:
+        self.reports.append({"user_id": user_id, "note": note, "context": context})
+
+
 class StubNlu:
     """Возвращает заранее заданные ответы по порядку (последний повторяется)."""
 

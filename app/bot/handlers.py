@@ -32,6 +32,7 @@ from app.application.results import (
 )
 from app.bot.formatters import format_goal, format_result
 from app.bot.keyboards import (
+    BTN_BUG,
     BTN_GOAL,
     BTN_HISTORY,
     BTN_PROFILE,
@@ -368,6 +369,41 @@ async def btn_undo(
 ) -> None:
     await state.clear()
     await _show_undo_picker(message, app_user, assistant)
+
+
+_BUG_PROMPT = "🐛 Опиши, что не так — одним сообщением. Приложу последние записи."
+
+
+@router.message(Command("bug"))
+async def cmd_bug(
+    message: Message, command: CommandObject, app_user: User, assistant: Assistant,
+    session: AsyncSession, state: FSMContext,
+) -> None:
+    note = (command.args or "").strip()
+    if not note:
+        await state.set_state(MealStates.awaiting_bug)
+        await message.answer(_BUG_PROMPT)
+        return
+    await assistant.report_bug(app_user, note)
+    await session.commit()
+    await message.answer("🐛 Спасибо! Багрепорт + последние записи сохранены — разберём.")
+
+
+@router.message(F.text == BTN_BUG)
+async def btn_bug(message: Message, state: FSMContext) -> None:
+    await state.set_state(MealStates.awaiting_bug)
+    await message.answer(_BUG_PROMPT)
+
+
+@router.message(MealStates.awaiting_bug, F.text)
+async def on_bug_note(
+    message: Message, app_user: User, assistant: Assistant, session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    await state.clear()
+    await assistant.report_bug(app_user, message.text or "")
+    await session.commit()
+    await message.answer("🐛 Спасибо! Багрепорт записан — разработчик разберёт.")
 
 
 # --- FSM-вводы (ввод чисел в конкретных состояниях) ----------------------------

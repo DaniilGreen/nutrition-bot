@@ -132,3 +132,17 @@ class WeightLogORM(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class BugReportORM(Base):
+    """Репорт о баге (FR-26, D-17): заметка юзера + контекст (последние приёмы)."""
+
+    __tablename__ = "bug_reports"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    note: Mapped[str] = mapped_column(String(2000))
+    context: Mapped[list[dict[str, object]] | None] = mapped_column(JSONB, nullable=True)  # приёмы
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

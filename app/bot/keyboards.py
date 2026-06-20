@@ -26,15 +26,18 @@ BTN_WEIGHT = "⚖️ Вес"
 BTN_GOAL = "🎯 Цель"
 BTN_PROFILE = "⚙️ Профиль"
 BTN_UNDO = "↩️ Отменить"
+BTN_BUG = "🐛 Баг"
 
-MENU_BUTTONS = (BTN_TODAY, BTN_WEEK, BTN_HISTORY, BTN_WEIGHT, BTN_GOAL, BTN_PROFILE, BTN_UNDO)
+MENU_BUTTONS = (
+    BTN_TODAY, BTN_WEEK, BTN_HISTORY, BTN_WEIGHT, BTN_GOAL, BTN_PROFILE, BTN_UNDO, BTN_BUG,
+)
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     for text in MENU_BUTTONS:
         builder.button(text=text)
-    builder.adjust(3, 3, 1)
+    builder.adjust(3, 3, 2)
     return builder.as_markup(resize_keyboard=True, is_persistent=True)
 
 

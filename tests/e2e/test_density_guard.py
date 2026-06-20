@@ -211,6 +211,58 @@ async def test_single_sample_pins_as_before() -> None:
     assert pinned is not None and pinned.density.kcal_per_100g == 120
 
 
+async def test_alcohol_kcal_not_reconciled_down() -> None:
+    # INV-14: вино — ккал от этанола; Атвотер-гейт НЕ занижает (85→127.5, а не до ~16)
+    meal = ParsedMessage(
+        intent=Intent.MEAL,
+        confidence=0.9,
+        items=[
+            ParsedItem(
+                name="вино красное", canonical_key="red_wine", unit=Unit.GRAM, grams=150,
+                kcal_per_100g=85, protein_per_100g=0.1, fat_per_100g=0, carb_per_100g=2.6,
+                confidence=0.9,
+            )
+        ],
+    )
+    assistant, users, _ = _build(StubNlu(meal))
+    user = await _new_user(users)
+
+    result = await assistant.process(user, "вино красное 150 мл")
+
+    assert isinstance(result, MealLogged)
+    assert result.meal.totals.kcal == 127.5  # 85 × 1.5, НЕ пересчитано Атвотером в ~16
+
+
+def _rice_chicken(rice_kcal: float, chicken_kcal: float, *, swapped: bool = False) -> ParsedMessage:
+    rice = ParsedItem(
+        name="рис", canonical_key="rice", unit=Unit.GRAM, grams=100,
+        kcal_per_100g=rice_kcal, protein_per_100g=3, fat_per_100g=0.5, carb_per_100g=28,
+        confidence=0.9,
+    )
+    chicken = ParsedItem(
+        name="курица", canonical_key="chicken", unit=Unit.GRAM, grams=100,
+        kcal_per_100g=chicken_kcal, protein_per_100g=20, fat_per_100g=10, carb_per_100g=0,
+        confidence=0.9,
+    )
+    items = [chicken, rice] if swapped else [rice, chicken]
+    return ParsedMessage(intent=Intent.MEAL, confidence=0.9, items=items)
+
+
+async def test_multi_item_sampling_guard_no_corruption() -> None:
+    # баг голос+мультиблюдо: сэмплы разъехались по порядку → медиана НЕ должна мешать продукты.
+    # base [рис130, курица200]; сэмпл2 переставлен [курица210, рис128] → guard держит base.
+    samples = [_rice_chicken(130, 200), _rice_chicken(128, 210, swapped=True)]
+    assistant, users, _ = _build(SamplingStubNlu(samples))
+    user = await _new_user(users)
+
+    result = await assistant.process(user, "рис и курица")
+
+    assert isinstance(result, MealLogged)
+    by = {it.name_snapshot: it.macros.kcal for it in result.meal.items}
+    assert by["рис"] == 130.0  # не смешано с курицей (без guard было бы ~170)
+    assert by["курица"] == 200.0
+
+
 async def test_stated_kcal_only_splits_macros() -> None:
     # INV-11.4 / AC-39: «хумус 150 ккал» — LLM не дал БЖУ → раскладка, НЕ Б0Ж0У0, помечено оценкой
     meal = ParsedMessage(
