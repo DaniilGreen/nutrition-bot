@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, ErrorEvent, Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -151,7 +151,8 @@ async def on_start(
     if app_user.onboarded_at is None and app_user.id is not None:
         # первый запуск (FR-24/D-12): приветствие + предложение настроить профиль-визард
         await message.answer(START_TEXT, reply_markup=main_menu_keyboard())
-        await message.answer(ONBOARD_PROMPT, reply_markup=onboarding_intro_keyboard())
+        sent = await message.answer(ONBOARD_PROMPT, reply_markup=onboarding_intro_keyboard())
+        await state.update_data(intro_msg_id=sent.message_id)  # #7: чтобы погасить при вводе еды
         return
     await message.answer(START_TEXT, reply_markup=main_menu_keyboard())
 
@@ -416,6 +417,33 @@ async def on_bug_note(
     await assistant.report_bug(app_user, message.text or "")
     await session.commit()
     await message.answer(_BUG_DONE)
+
+
+@router.message(MealStates.awaiting_bug, F.photo)
+async def on_bug_photo(
+    message: Message, app_user: User, assistant: Assistant, session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    """FR-26: скриншот в багрепорт — сохраняем file_id (а не уводим в read_label как этикетку)."""
+    await state.clear()
+    fid = message.photo[-1].file_id if message.photo else ""
+    note = (message.caption or "").strip() or "[скриншот без описания]"
+    await assistant.report_bug(app_user, f"{note}\n[скриншот file_id={fid}]")
+    await session.commit()
+    await message.answer("🐛 Спасибо! Скриншот и последние приёмы записал — гляну.")
+
+
+@router.message(MealStates.awaiting_bug, F.voice)
+async def on_bug_voice(
+    message: Message, app_user: User, assistant: Assistant, session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    """FR-26: голосовой багрепорт — сохраняем file_id голоса."""
+    await state.clear()
+    fid = message.voice.file_id if message.voice else ""
+    await assistant.report_bug(app_user, f"[голосовой багрепорт file_id={fid}]")
+    await session.commit()
+    await message.answer("🐛 Спасибо! Голосовой багрепорт записал — гляну.")
 
 
 # --- FSM-вводы (ввод чисел в конкретных состояниях) ----------------------------
@@ -689,16 +717,30 @@ async def on_label_gram_btn(
 @router.message(F.text)
 async def on_text(
     message: Message,
+    bot: Bot,
     app_user: User,
     assistant: Assistant,
     session: AsyncSession,
     state: FSMContext,
 ) -> None:
+    await _clear_intro_keyboard(message, bot, state)  # #7: гасим висящее интро-меню онбординга
     await state.clear()
     await _send_typing(message)
     result = await assistant.process(app_user, message.text or "", input_type="text")
     await session.commit()  # фиксируем запись ДО ответа — «✅ записал» не врёт
     await _reply_message(message, result, state, raw=message.text or "")
+
+
+@router.message(
+    StateFilter(
+        MealStates.awaiting_portion, MealStates.awaiting_variant, MealStates.awaiting_density,
+        MealStates.awaiting_rename, MealStates.awaiting_label_grams, MealStates.awaiting_bug,
+        ProfileStates.body,
+    )
+)
+async def on_unexpected_in_flow(message: Message) -> None:
+    """#11: не-текст (стикер/документ/…) во время вопроса — подсказываем, а не молчим."""
+    await message.answer("Жду ответ текстом или кнопкой (✖️ / кнопка меню — выйти).")
 
 
 # --- callbacks ----------------------------------------------------------------
@@ -770,7 +812,18 @@ async def on_meal_undo(callback: CallbackQuery, app_user: User, assistant: Assis
         with suppress(Exception):
             await callback.message.edit_text("🗑 Запись уже удалена.")
         return
-    await callback.message.edit_text("🗑 Запись отменена.")
+    kcal = round(result.meal.totals.kcal)
+    if (callback.message.text or "").startswith("Что отменить"):  # пикер /undo → перерисовать
+        history = await assistant.history(app_user, limit=5)
+        if history.meals:
+            await _safe_edit(
+                callback.message, "Что отменить? (по позициям)",
+                undo_picker_keyboard(history.meals, history.timezone),
+            )
+        else:
+            await _safe_edit(callback.message, "🗒 Больше нечего отменять — старое в 🗒 История.")
+    else:  # контекстная отмена под карточкой приёма
+        await callback.message.edit_text(f"🗑 Отменил приём ({kcal} ккал).")
     await callback.answer()
 
 
@@ -1001,6 +1054,16 @@ def _label_grams(text: str, package_g: float | None) -> float | None:
         return package_g
     n = _first_number(text)
     return n if n and n > 0 else None
+
+
+async def _clear_intro_keyboard(message: Message, bot: Bot, state: FSMContext) -> None:
+    """#7: снять висящую inline-клаву онбординг-интро, когда юзер действует вместо тапа по ней."""
+    mid = (await state.get_data()).get("intro_msg_id")
+    if mid:
+        with suppress(Exception):
+            await bot.edit_message_reply_markup(
+                chat_id=message.chat.id, message_id=int(mid), reply_markup=None
+            )
 
 
 async def _busy_with_flow(message: Message, state: FSMContext) -> bool:
