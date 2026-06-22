@@ -204,6 +204,14 @@ class SqlProductRepo:
         await self._s.flush()
         return _product_to_domain(orm)
 
+    async def rename(self, product_id: int, name: str) -> Product | None:
+        orm = await self._s.get(ProductORM, product_id)
+        if orm is None:
+            return None
+        orm.display_name = name
+        await self._s.flush()
+        return _product_to_domain(orm)
+
 
 class SqlMealRepo:
     def __init__(self, session: AsyncSession) -> None:

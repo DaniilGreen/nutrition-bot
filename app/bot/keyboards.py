@@ -16,6 +16,7 @@ MEAL_UNDO_PREFIX = "meal_undo"
 UNDO_ITEM_PREFIX = "undo_item"
 ITEM_DEL_PREFIX = "item_del"
 PROD_FIX_PREFIX = "prod_fix"
+PROD_RENAME_PREFIX = "prod_rename"  # переименовать продукт в /products (FR-27 #6)
 ONBOARD_PREFIX = "onb"
 WIZ_CANCEL = "wiz_cancel"  # «✖️ Отмена» в любом визарде (профиль/вариант) — сброс FSM
 
@@ -76,6 +77,13 @@ def variant_keyboard(options: Sequence[str]) -> InlineKeyboardMarkup:
         builder.button(text=_short(opt), callback_data=f"{VARIANT_CALLBACK_PREFIX}:{i}")
     builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def prod_edit_keyboard(product_id: int) -> InlineKeyboardMarkup:
+    """Под карточкой правки продукта: переименовать (КБЖУ правится текстом-числами). FR-27 #6."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✏️ Переименовать", callback_data=f"{PROD_RENAME_PREFIX}:{product_id}")
     return builder.as_markup()
 
 

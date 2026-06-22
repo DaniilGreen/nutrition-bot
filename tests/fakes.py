@@ -88,6 +88,13 @@ class InMemoryProductRepo:
                 return p
         return None
 
+    async def rename(self, product_id: int, name: str) -> Product | None:
+        for p in self._by_key.values():
+            if p.id == product_id:
+                p.display_name = name
+                return p
+        return None
+
 
 class InMemoryMealRepo:
     def __init__(self) -> None:

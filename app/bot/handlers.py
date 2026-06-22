@@ -43,6 +43,7 @@ from app.bot.keyboards import (
     BTN_WEIGHT,
     LABEL_G_PREFIX,
     ONBOARD_PREFIX,
+    PROD_RENAME_PREFIX,
     WIZ_CANCEL,
     activity_keyboard,
     goal_type_keyboard,
@@ -52,6 +53,7 @@ from app.bot.keyboards import (
     meal_actions_keyboard,
     onboarding_intro_keyboard,
     portion_keyboard,
+    prod_edit_keyboard,
     products_fix_keyboard,
     sex_keyboard,
     undo_picker_keyboard,
@@ -439,6 +441,21 @@ async def on_density_input(
     )
 
 
+@router.message(MealStates.awaiting_rename, F.text)
+async def on_rename_input(
+    message: Message, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
+    """FR-27 #6: новое имя продукта → переименовать."""
+    data = await state.get_data()
+    product_id = int(data.get("product_id", 0))
+    await state.clear()
+    product = await assistant.rename_product(product_id, message.text or "")
+    if product is None:
+        await message.answer("Не вышло переименовать — продукт не найден или пустое имя.")
+        return
+    await message.answer(f"✅ Теперь «{escape(product.display_name, quote=False)}».")
+
+
 @router.message(MealStates.awaiting_portion, F.text)
 async def on_portion_text(
     message: Message,
@@ -788,8 +805,24 @@ async def on_prod_fix(
         f"Сейчас на 100 г: {d.kcal_per_100g:g} ккал · "
         f"Б{d.protein_per_100g:g} Ж{d.fat_per_100g:g} У{d.carb_per_100g:g}\n\n"
         f"Пришли 4 числа через пробел — ккал, белки, жиры, углеводы на 100 г.\n"
-        f"Напр.: <code>165 31 3.6 0</code>"
+        f"Напр.: <code>165 31 3.6 0</code>\nИли переименуй кнопкой ниже.",
+        reply_markup=prod_edit_keyboard(product_id),
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(f"{PROD_RENAME_PREFIX}:"))
+async def on_prod_rename(
+    callback: CallbackQuery, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
+    """FR-27 #6: кнопка «Переименовать» в /products → ждём новое имя текстом."""
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    product_id = int((callback.data or "prod_rename:0").split(":", 1)[1])
+    await state.set_state(MealStates.awaiting_rename)
+    await state.update_data(product_id=product_id)
+    await callback.message.answer("✏️ Пришли новое название продукта.")
     await callback.answer()
 
 

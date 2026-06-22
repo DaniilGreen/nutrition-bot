@@ -189,6 +189,11 @@ class Assistant:
     async def get_product(self, product_id: int) -> Product | None:
         return await self._products.get_by_id(product_id)
 
+    async def rename_product(self, product_id: int, name: str) -> Product | None:
+        """FR-27 #6: переименовать продукт (обобщённое имя с этикетки → конкретное)."""
+        clean = name.strip()[:255]
+        return await self._products.rename(product_id, clean) if clean else None
+
     async def fix_product_density(self, product_id: int, density: Density) -> Product | None:
         # INV-11.2: ручную правку каталога тоже отсекаем по границам (защита от опечатки «310 г белка»)
         return await self._products.update_density(product_id, clamp_density(density))

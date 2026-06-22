@@ -71,6 +71,10 @@ class ProductRepo(Protocol):
 
     async def update_density(self, product_id: int, density: Density) -> Product | None: ...
 
+    async def rename(self, product_id: int, name: str) -> Product | None:
+        """Переименовать продукт (FR-27 #6: vision назвал обобщённо → юзер уточняет имя)."""
+        ...
+
 
 class MealRepo(Protocol):
     async def add(self, meal: Meal) -> Meal: ...

@@ -88,6 +88,22 @@ async def test_label_rescan_no_duplicate() -> None:
     assert len(labels) == 1  # дедуп: один продукт, не два
 
 
+async def test_rename_product() -> None:
+    # FR-27 #6: обобщённое имя с этикетки → юзер переименовывает в конкретное
+    assistant, users, products = _build(_label())
+    user = await _user(users)
+    read = await assistant.read_label(user, b"img")
+    assert isinstance(read, LabelRead)
+    read.draft.items[0].grams = 100
+    read.draft.items[0].unit = Unit.GRAM
+    await assistant.continue_meal(user, read.draft, raw_input="этикетка")
+
+    pid = (await products.list_all())[0].id
+    renamed = await assistant.rename_product(pid, "  Йогурт Dalat 3.8%  ")
+    assert renamed is not None and renamed.display_name == "Йогурт Dalat 3.8%"  # обрезали пробелы
+    assert await assistant.rename_product(pid, "   ") is None  # пустое имя — отказ
+
+
 async def test_label_not_recognized_returns_unknown() -> None:
     assistant, users, _ = _build(None)  # vision не нашёл таблицу
     user = await _user(users)
