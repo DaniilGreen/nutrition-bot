@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol
 
-from app.application.dto import ParsedMessage
+from app.application.dto import ParsedItem, ParsedMessage
 from app.application.entities import Meal, Product, User, WeightLog
 from app.domain.goals import Goal
 from app.domain.value_objects import Density, Macros
@@ -29,6 +29,13 @@ class NluPort(Protocol):
 
 class SttPort(Protocol):
     async def transcribe(self, audio: bytes, *, filename: str = "voice.ogg") -> str: ...
+
+
+class VisionPort(Protocol):
+    async def read_label(self, image: bytes) -> ParsedItem | None:
+        """FR-27: прочитать таблицу КБЖУ с фото этикетки → ParsedItem (name + плотность/100г
+        + вес пачки в unit_weight_g, если есть). None — этикетка не распознана."""
+        ...
 
 
 class UserRepo(Protocol):

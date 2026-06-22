@@ -11,6 +11,7 @@ from app.application.entities import Meal, Product
 
 PORTION_CALLBACK_PREFIX = "portion"
 VARIANT_CALLBACK_PREFIX = "variant"
+LABEL_ALL_PREFIX = "label_all"  # «вся пачка» после фото этикетки (FR-27)
 MEAL_UNDO_PREFIX = "meal_undo"
 UNDO_ITEM_PREFIX = "undo_item"
 ITEM_DEL_PREFIX = "item_del"
@@ -75,6 +76,15 @@ def variant_keyboard(options: Sequence[str]) -> InlineKeyboardMarkup:
         builder.button(text=_short(opt), callback_data=f"{VARIANT_CALLBACK_PREFIX}:{i}")
     builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def label_grams_keyboard(package_g: float | None) -> InlineKeyboardMarkup | None:
+    """FR-27: после этикетки — быстрая кнопка «вся пачка», если вес упаковки распознан."""
+    if not package_g:
+        return None
+    builder = InlineKeyboardBuilder()
+    builder.button(text=f"Вся пачка · {round(package_g)} г", callback_data=LABEL_ALL_PREFIX)
     return builder.as_markup()
 
 

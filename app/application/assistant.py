@@ -10,7 +10,7 @@ from statistics import median
 from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
 from app.application.entities import MealItem, Product, User, WeightLog
 from app.application.meal_service import MealService
-from app.application.ports import BugRepo, NluPort, ProductRepo, SttPort
+from app.application.ports import BugRepo, NluPort, ProductRepo, SttPort, VisionPort
 from app.application.results import (
     ClarificationNeeded,
     CorrectionFailed,
@@ -18,6 +18,7 @@ from app.application.results import (
     History,
     ItemAdjusted,
     ItemRemoved,
+    LabelRead,
     MealDeleted,
     MealLogged,
     Result,
@@ -45,6 +46,7 @@ class Assistant:
         stats_service: StatsService,
         stt: SttPort | None = None,
         bug_repo: BugRepo | None = None,
+        vision: VisionPort | None = None,
     ) -> None:
         self._nlu = nlu
         self._products = products
@@ -53,6 +55,7 @@ class Assistant:
         self._stats = stats_service
         self._stt = stt
         self._bug = bug_repo
+        self._vision = vision
 
     async def report_bug(self, user: User, note: str) -> None:
         """FR-26: сохранить багрепорт + контекст последних приёмов юзера (для дебага)."""
@@ -101,6 +104,17 @@ class Assistant:
         if self._stt is None:
             return None
         return await self._stt.transcribe(audio, filename=filename)
+
+    async def read_label(self, user: User, image: bytes) -> Result:
+        """FR-27: фото этикетки → распознать КБЖУ/100г → показать и ждать вес порции (текстом)."""
+        if self._vision is None:
+            return Unknown(reason="распознавание этикеток недоступно (нет vision)")
+        item = await self._vision.read_label(image)
+        if item is None:
+            return Unknown(reason="не разобрал этикетку — сфоткай таблицу КБЖУ ближе и чётче")
+        item.from_label = True
+        draft = ParsedMessage(intent=Intent.MEAL, items=[item], confidence=1.0)
+        return LabelRead(draft=draft, item_index=0)
 
     async def continue_meal(
         self, user: User, draft: ParsedMessage, *, raw_input: str, input_type: str = "text"

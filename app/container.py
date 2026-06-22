@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.assistant import Assistant
 from app.application.meal_service import MealService
-from app.application.ports import NluPort, SttPort
+from app.application.ports import NluPort, SttPort, VisionPort
 from app.application.stats_service import StatsService
 from app.application.weight_service import WeightService
 from app.clock import Clock, utcnow
@@ -59,12 +59,24 @@ def build_stt(settings: Settings) -> SttPort | None:
     return OpenAiStt(AsyncOpenAI(api_key=settings.openai_api_key), settings.openai_stt_model)
 
 
+def build_vision(settings: Settings) -> VisionPort | None:
+    """Vision (фото этикеток, FR-27) доступен только при наличии OpenAI-ключа; иначе None."""
+    if not settings.openai_api_key:
+        return None
+    from openai import AsyncOpenAI
+
+    from app.infrastructure.vision.openai_vision import OpenAiVision
+
+    return OpenAiVision(AsyncOpenAI(api_key=settings.openai_api_key), settings.openai_model)
+
+
 @dataclass
 class Container:
     settings: Settings
     db: Database
     nlu: NluPort
     stt: SttPort | None = None
+    vision: VisionPort | None = None
     clock: Clock = utcnow
 
     @classmethod
@@ -74,6 +86,7 @@ class Container:
             db=Database(settings.database_url, echo=settings.db_echo),
             nlu=build_nlu(settings),
             stt=build_stt(settings),
+            vision=build_vision(settings),
         )
 
     def assistant_for(self, session: AsyncSession) -> tuple[Assistant, SqlUserRepo]:
@@ -88,6 +101,7 @@ class Container:
         weight_service = WeightService(weights, self.clock)
         stats_service = StatsService(meals, users, self.settings.default_goal(), self.clock)
         assistant = Assistant(
-            self.nlu, products, meal_service, weight_service, stats_service, self.stt, bugs
+            self.nlu, products, meal_service, weight_service, stats_service,
+            self.stt, bugs, self.vision,
         )
         return assistant, users

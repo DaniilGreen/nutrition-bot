@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.application.dto import ParsedMessage
+from app.application.dto import ParsedItem, ParsedMessage
 from app.application.entities import Meal, Product, User, WeightLog
 from app.domain.goals import Goal
 from app.domain.value_objects import Density, Macros, sum_macros
@@ -217,6 +217,16 @@ class SamplingStubNlu:
 
     async def parse_samples(self, text: str, known_keys: object) -> list[ParsedMessage]:
         return list(self._samples)
+
+
+class StubVision:
+    """read_label отдаёт заданный ParsedItem (FR-27, без vision-вызова). None = не распознано."""
+
+    def __init__(self, item: ParsedItem | None) -> None:
+        self._item = item
+
+    async def read_label(self, image: bytes) -> ParsedItem | None:
+        return self._item
 
 
 class StubStt:

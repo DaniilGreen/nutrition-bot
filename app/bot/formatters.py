@@ -16,6 +16,7 @@ from app.application.results import (
     History,
     ItemAdjusted,
     ItemRemoved,
+    LabelRead,
     MealDeleted,
     MealLogged,
     Result,
@@ -38,6 +39,8 @@ def format_result(result: Result) -> str:
         return _format_clarification(result)
     if isinstance(result, VariantClarificationNeeded):
         return _format_variant_clarification(result)
+    if isinstance(result, LabelRead):
+        return _format_label_read(result)
     if isinstance(result, WeightLogged):
         return _format_weight(result)
     if isinstance(result, WeightTrend):
@@ -108,6 +111,18 @@ def _format_clarification(r: ClarificationNeeded) -> str:
 
 def _format_variant_clarification(r: VariantClarificationNeeded) -> str:
     return f"🤔 «{_esc(r.item_name)}» — уточни (или впиши свой вариант):"
+
+
+def _format_label_read(r: LabelRead) -> str:
+    it = r.draft.items[r.item_index]
+    pkg = f" · пачка {_n(it.unit_weight_g)} г" if it.unit_weight_g else ""
+    tail = " или жми «вся пачка»." if it.unit_weight_g else "."
+    return (
+        f"📋 Этикетка: <b>{_esc(it.name)}</b>{pkg}\n"
+        f"На 100 г: {_n(it.kcal_per_100g)} ккал · Б{_n(it.protein_per_100g)} "
+        f"Ж{_n(it.fat_per_100g)} У{_n(it.carb_per_100g)}\n\n"
+        f"Сколько грамм съел? Напиши число{tail}"
+    )
 
 
 def _format_weight(r: WeightLogged) -> str:

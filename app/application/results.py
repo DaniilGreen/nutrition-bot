@@ -35,6 +35,14 @@ class VariantClarificationNeeded:
 
 
 @dataclass
+class LabelRead:
+    """FR-27: распознана этикетка — показываем КБЖУ/100г и ждём вес порции (через continue_meal)."""
+
+    draft: ParsedMessage
+    item_index: int
+
+
+@dataclass
 class WeightLogged:
     log: WeightLog
     delta_kg: float | None
@@ -105,6 +113,7 @@ Result = (
     MealLogged
     | ClarificationNeeded
     | VariantClarificationNeeded
+    | LabelRead
     | WeightLogged
     | WeightTrend
     | DailyStats

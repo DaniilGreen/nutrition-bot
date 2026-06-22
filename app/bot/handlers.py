@@ -26,6 +26,7 @@ from app.application.entities import User
 from app.application.ports import UserRepo
 from app.application.results import (
     ClarificationNeeded,
+    LabelRead,
     MealLogged,
     Result,
     VariantClarificationNeeded,
@@ -40,10 +41,12 @@ from app.bot.keyboards import (
     BTN_UNDO,
     BTN_WEEK,
     BTN_WEIGHT,
+    LABEL_ALL_PREFIX,
     ONBOARD_PREFIX,
     WIZ_CANCEL,
     activity_keyboard,
     goal_type_keyboard,
+    label_grams_keyboard,
     location_request_keyboard,
     main_menu_keyboard,
     meal_actions_keyboard,
@@ -560,6 +563,88 @@ async def on_voice(
     await _reply_message(message, result, state, raw=transcript)
 
 
+@router.message(F.photo)
+async def on_photo(
+    message: Message,
+    bot: Bot,
+    app_user: User,
+    assistant: Assistant,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    """Фото = этикетка (FR-27): читаем КБЖУ → спрашиваем вес порции. (Фото готовой еды пока нет.)"""
+    await state.clear()
+    if not message.photo:
+        return
+    await _send_typing(message)
+    buffer = await bot.download(message.photo[-1])  # последний = максимальное разрешение
+    image = buffer.read() if buffer is not None else b""
+    result = await assistant.read_label(app_user, image)
+    if isinstance(result, LabelRead):
+        item = result.draft.items[result.item_index]
+        await state.set_state(MealStates.awaiting_label_grams)
+        await state.update_data(draft=result.draft, item_index=result.item_index, raw="этикетка")
+        await message.answer(
+            format_result(result), reply_markup=label_grams_keyboard(item.unit_weight_g)
+        )
+    else:
+        await message.answer(format_result(result))
+
+
+@router.message(MealStates.awaiting_label_grams, F.text)
+async def on_label_grams(
+    message: Message,
+    app_user: User,
+    assistant: Assistant,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    """Вес порции после этикетки: число или «вся пачка» (FR-27) → лог с точными КБЖУ."""
+    data = await state.get_data()
+    draft = data.get("draft")
+    if draft is None:
+        await state.clear()
+        await message.answer("⏳ Фото устарело — пришли этикетку заново.")
+        return
+    item = draft.items[int(data.get("item_index", 0))]
+    grams = _label_grams(message.text or "", item.unit_weight_g)
+    if grams is None:
+        await message.answer("Сколько грамм съел? Напиши число (или «вся пачка»).")
+        return
+    item.grams = grams
+    item.unit = Unit.GRAM
+    result = await assistant.continue_meal(app_user, draft, raw_input="этикетка")
+    await session.commit()
+    await state.clear()
+    await _reply_message(message, result, state, raw="этикетка")
+
+
+@router.callback_query(F.data == LABEL_ALL_PREFIX)
+async def on_label_all(
+    callback: CallbackQuery,
+    app_user: User,
+    assistant: Assistant,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    """Кнопка «вся пачка» после этикетки (FR-27): вес = нетто упаковки → лог."""
+    data = await state.get_data()
+    draft = data.get("draft")
+    if draft is None or not isinstance(callback.message, Message):
+        await callback.answer("Фото устарело — пришли заново.")
+        return
+    item = draft.items[int(data.get("item_index", 0))]
+    if not item.unit_weight_g:
+        await callback.answer("Вес пачки не распознан — напиши граммы.")
+        return
+    item.grams = item.unit_weight_g
+    item.unit = Unit.GRAM
+    result = await assistant.continue_meal(app_user, draft, raw_input="этикетка")
+    await session.commit()
+    await state.clear()
+    await _render_after_continue(callback.message, result, state, raw="этикетка")
+
+
 @router.message(F.text)
 async def on_text(
     message: Message,
@@ -833,6 +918,16 @@ def _portion_word(text: str) -> str | None:
 def _first_number(text: str) -> float | None:
     m = re.search(r"\d+(?:[.,]\d+)?", text)
     return float(m.group().replace(",", ".")) if m else None
+
+
+def _label_grams(text: str, package_g: float | None) -> float | None:
+    """FR-27: вес порции из ответа на этикетку — «вся пачка» → нетто, иначе первое число."""
+    low = text.lower().strip()
+    whole = "пачк" in low or "упаков" in low or "цел" in low or low in ("всё", "все")
+    if package_g and whole:
+        return package_g
+    n = _first_number(text)
+    return n if n and n > 0 else None
 
 
 async def _reply_message(

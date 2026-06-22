@@ -9,6 +9,7 @@ class MealStates(StatesGroup):
     awaiting_variant = State()  # выбор варианта generic-имени (FR-20)
     awaiting_density = State()  # ввод исправленных КБЖУ продукта
     awaiting_bug = State()      # описание бага после «🐛 Баг» (FR-26)
+    awaiting_label_grams = State()  # вес порции после фото этикетки (FR-27)
 
 
 class ProfileStates(StatesGroup):

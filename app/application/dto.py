@@ -47,6 +47,7 @@ class ParsedItem:
     total_carb: float | None = None
     confidence: float = 1.0
     estimate_confidence: str | None = None  # high|med|low из разброса сэмплов (D-15)
+    from_label: bool = False  # FR-27: КБЖУ прочитаны с фото этикетки → точные, пин source="label"
 
 
 @dataclass
