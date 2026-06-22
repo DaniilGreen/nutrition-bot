@@ -4,12 +4,29 @@ from __future__ import annotations
 from tests.eval.harness import (
     ItemEval,
     aggregate_runs,
+    daily_sum_within,
     flaky_rows,
     gate_check,
     load_golden,
     metrics,
     within,
 )
+
+
+def test_daily_sum_cancels_offsetting_errors() -> None:
+    # Каждая позиция вне ±15% (ошибка ±20%), но в дневной СУММЕ разнознаковые гасятся →
+    # дневная точность (NFR-1) ВЫШЕ per-item. Это и есть смысл дневной метрики.
+    evals = [
+        ItemEval(f"g{i}", "m", 100.0, 120.0 if i % 2 == 0 else 80.0, False, False)
+        for i in range(10)
+    ]
+    assert all(not within(e.est_kcal, e.true_kcal, 0.15) for e in evals)  # per-item: все мимо
+    daily = daily_sum_within(evals, tol=0.15, days=100, day_size=4, seed=0)
+    assert daily is not None and daily > 0.5  # сумма часто в допуске (гашение ошибок)
+
+
+def test_daily_sum_none_when_too_few() -> None:
+    assert daily_sum_within([ItemEval("g1", "m", 100, 100, False, False)], day_size=5) is None
 
 
 def test_within_tolerance() -> None:

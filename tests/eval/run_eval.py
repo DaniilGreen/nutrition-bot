@@ -88,7 +88,7 @@ def _diagnostics(m: dict) -> None:
 
 
 def _summary(m: dict) -> dict:
-    return {k: m[k] for k in ("n", "logged", "pct_within_item", "kcal_mape",
+    return {k: m[k] for k in ("n", "logged", "pct_within_item", "daily_sum_within_15", "kcal_mape",
                               "abstention_recall", "false_abstain_rate", "by_mechanism")}
 
 

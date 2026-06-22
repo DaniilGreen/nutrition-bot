@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import random
 import statistics
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,6 +62,27 @@ def _mape(pairs: list[tuple[float, float]]) -> dict | None:
     return {"median": round(statistics.median(xs), 3), "p90": _pct(xs, 0.9), "n": len(xs)}
 
 
+def daily_sum_within(
+    logged: list[ItemEval], *, tol: float = 0.15, days: int = 300, day_size: int = 5, seed: int = 0
+) -> float | None:
+    """НАСТОЯЩИЙ NFR-1: доля синтетических «дней» (сумма day_size позиций), где сумма ккал в ±tol.
+
+    Бутстрап со seed → детерминирован. Per-item ошибки в дневной сумме частично гасятся
+    (разнознаковые) → дневная точность обычно ВЫШЕ per-item. None, если логов меньше day_size.
+    """
+    pool = [(e.est_kcal, e.true_kcal) for e in logged if e.true_kcal]
+    if len(pool) < day_size:
+        return None
+    rng = random.Random(seed)
+    hits = 0
+    for _ in range(days):
+        sample = rng.sample(pool, day_size)
+        est, true = sum(e for e, _ in sample), sum(t for _, t in sample)
+        if true and abs(est - true) / true <= tol:
+            hits += 1
+    return round(hits / days, 3)
+
+
 def metrics(evals: list[ItemEval], tol_by_id: dict[str, float]) -> dict:
     """Сводка метрик NFR-1 со срезами по механизму (средние без срезов врут)."""
     logged = [e for e in evals if not e.clarified]
@@ -89,6 +111,7 @@ def metrics(evals: list[ItemEval], tol_by_id: dict[str, float]) -> dict:
             else None
         ),
         "kcal_mape": _mape([(e.est_kcal, e.true_kcal) for e in logged]),
+        "daily_sum_within_15": daily_sum_within(logged),  # настоящий NFR-1 (дневная сумма ±15%)
         "abstention_recall": (
             round(sum(e.clarified for e in abst) / len(abst), 3) if abst else None
         ),
@@ -118,6 +141,7 @@ def metrics(evals: list[ItemEval], tol_by_id: dict[str, float]) -> dict:
 # Плоские числовые метрики для baseline/gate; True = «больше — лучше».
 _GATED = {
     "pct_within_item": True,
+    "daily_sum_within_15": True,
     "abstention_recall": True,
     "false_abstain_rate": False,
     "kcal_mape_median": False,
@@ -130,6 +154,7 @@ def scalars(m: dict) -> dict[str, float]:
     km = m.get("kcal_mape") or {}
     return {
         "pct_within_item": m.get("pct_within_item") or 0.0,
+        "daily_sum_within_15": m.get("daily_sum_within_15") or 0.0,
         "abstention_recall": m.get("abstention_recall") or 0.0,
         "false_abstain_rate": m.get("false_abstain_rate") or 0.0,
         "kcal_mape_median": km.get("median") or 0.0,
