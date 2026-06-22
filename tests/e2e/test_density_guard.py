@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
+from app.application.entities import Product
 from app.application.results import MealLogged
+from app.domain.value_objects import Density
 from tests.e2e.test_meal_flow import _build, _new_user
 from tests.fakes import SamplingStubNlu, StubNlu
 
@@ -25,6 +27,46 @@ def _fish(kcal: float, p: float, f: float, c: float) -> ParsedMessage:
             )
         ],
     )
+
+
+async def test_key_collision_keeps_user_food() -> None:
+    # Багрепорт #3: LLM отдал ЧУЖОЙ ключ macadamia_milk для миндального молока → не берём пин,
+    # пишем как сказал юзер с его плотностью (а не «молоко макадамии» @ 40).
+    almond = ParsedMessage(
+        intent=Intent.MEAL,
+        confidence=0.9,
+        items=[
+            ParsedItem(
+                name="миндальное молоко",
+                canonical_key="macadamia_milk",  # LLM переиспользовал чужой ключ
+                unit=Unit.GRAM,
+                grams=200,
+                kcal_per_100g=35,
+                protein_per_100g=0,
+                fat_per_100g=0,
+                carb_per_100g=8.75,  # Атвотер-консистентно (4×8.75≈35)
+                confidence=0.9,
+            )
+        ],
+    )
+    assistant, users, products = _build(StubNlu(almond))
+    await products.create(
+        Product(
+            canonical_key="macadamia_milk",
+            display_name="молоко макадамии",
+            density=Density(40, 1, 3.5, 1),
+            source="manual",
+            is_estimate=False,
+        )
+    )
+    user = await _new_user(users)
+
+    result = await assistant.process(user, "миндальное молоко 200")
+
+    assert isinstance(result, MealLogged)
+    item = result.meal.items[0]
+    assert item.name_snapshot == "миндальное молоко"  # НЕ «молоко макадамии»
+    assert item.macros.kcal == 70.0  # 200г × 35/100 (миндальное), не 80 (макадамия @40)
 
 
 async def test_blank_density_not_pinned() -> None:

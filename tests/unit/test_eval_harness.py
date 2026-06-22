@@ -92,5 +92,6 @@ def test_golden_set_parses_and_well_formed() -> None:
     for r in rows:
         assert r["input"] and "mechanism" in r and "expected" in r
         assert "kcal" in r["expected"]
-        if r.get("expect_clarify"):
-            assert r["items"] == []  # воздержание → нечего сверять по ккал
+        if r.get("expect_clarify") and r["expected"]["kcal"] == 0:
+            assert r["items"] == []  # чистое воздержание (kcal 0) → нечего сверять
+        # гибрид (expect_clarify + items): ждём вопрос, но если бот залогирует — сверим по ккал

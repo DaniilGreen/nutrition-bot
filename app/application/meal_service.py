@@ -35,6 +35,7 @@ from app.domain.value_objects import Density, Macros, sum_macros
 _JUNK_KEYS = frozenset({"", "unknown", "none", "null", "na", "n_a", "item", "product", "food", "еда"})
 _MIN_KEY_LEN = 3
 _MATCH_THRESHOLD = 0.82  # порог имени для RAG-совпадения с каталогом
+_KEY_NAME_THRESHOLD = 0.6  # reuse пина по ключу — только если имя совпадает (защита от чужого)
 _CORRECTION_LOOKBACK = 10  # сколько недавних записей просматриваем для «удали X»
 _CORRECTION_NAME_THRESHOLD = 0.8  # порог нечёткого совпадения имени при удалении
 class MealService:
@@ -188,8 +189,10 @@ class MealService:
     async def _resolve_product(self, parsed_item: ParsedItem) -> Product:
         key = _canonical_key(parsed_item.canonical_key, parsed_item.name)
         existing = await self._products.get_by_key(key)
-        if existing is not None:
+        if existing is not None and _names_compatible(parsed_item.name, existing.display_name):
             return existing  # детерминизм: плотность из БД, LLM-числа игнорим
+        # иначе ключ ведёт на пин ДРУГОЙ еды — LLM переиспользовал чужой ключ (миндальное молоко →
+        # macadamia_milk, багрепорт #3). Не берём этот пин: идём в RAG/новый продукт (INV-4).
 
         # RAG-страховка: имя совпало с реальной строкой каталога → берём её, не оценку LLM
         match = best_product_match(parsed_item.name, await self._products.list_all())
@@ -317,6 +320,17 @@ def _name_matches(query: str, candidate: str) -> bool:
     if q in c or c in q:
         return True
     return difflib.SequenceMatcher(None, q, c).ratio() >= _CORRECTION_NAME_THRESHOLD
+
+
+def _names_compatible(parsed_name: str, pinned_name: str) -> bool:
+    """Имя из ввода и имя запиннутого продукта — одна еда? Защита от reuse ЧУЖОГО ключа: LLM
+    иногда отдаёт ключ другого продукта (миндальное молоко → macadamia_milk «молоко макадамии»).
+    Низкое сходство имён → ключ-коллизия, пин не берём (INV-4, багрепорт #3). Порог терпит
+    синонимы/уточнения (куриная грудка ⊂ куриная грудка отварная), режет разную еду (0.36)."""
+    return (
+        difflib.SequenceMatcher(None, _norm(parsed_name), _norm(pinned_name)).ratio()
+        >= _KEY_NAME_THRESHOLD
+    )
 
 
 def _norm(text: str) -> str:
