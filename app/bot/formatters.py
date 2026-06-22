@@ -60,7 +60,7 @@ def format_result(result: Result) -> str:
     if isinstance(result, CorrectionFailed):
         return _format_correction_failed(result)
     if isinstance(result, Unknown):
-        return _format_unknown()
+        return _format_unknown(result.reason)
     return "Что-то пошло не так."
 
 
@@ -228,13 +228,20 @@ def _format_correction_failed(r: CorrectionFailed) -> str:
     return f"Не нашёл {target} в недавних записях. Что удалить? Или /undo — снять последнюю запись."
 
 
-def _format_unknown() -> str:
+def _format_unknown(reason: str = "") -> str:
+    """Отбивка «не понял». Под конкретную причину — точное сообщение, иначе общие подсказки."""
+    r = reason.lower()
+    if "пределов" in r:  # вес вне 20–400 кг
+        return "⚖️ Вес должен быть 20–400 кг. Проверь число и пришли снова («вес 86»)."
+    if "vision" in r:  # распознавание этикеток выключено (нет ключа)
+        return "📷 Распознавание этикеток сейчас выключено (нет доступа к vision)."
+    if "этикет" in r:  # фото пришло, но таблицу КБЖУ не разобрали
+        return "📋 Не разобрал этикетку. Сфоткай таблицу КБЖУ крупно, при свете и без бликов."
     return (
-        "🤔 Не понял. Напиши, например:\n"
-        "• «курица 250 грамм»\n"
-        "• «два банана»\n"
-        "• «вес 86.8»\n"
-        "• «сколько осталось»"
+        "🤔 Не понял. Я считаю КБЖУ:\n"
+        "• еда — «куриная грудка 200 г», «два банана»\n"
+        "• 🎤 голосом или 📷 фото этикетки\n"
+        "• ⚖️ «вес 86» · 📊 «сколько осталось»"
     )
 
 
