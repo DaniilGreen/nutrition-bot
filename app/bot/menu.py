@@ -14,6 +14,7 @@ _COMMANDS = [
     BotCommand(command="profile", description="Настроить цель по профилю"),
     BotCommand(command="products", description="Поправить КБЖУ продукта"),
     BotCommand(command="timezone", description="Часовой пояс (по геолокации)"),
+    BotCommand(command="bug", description="Сообщить о баге"),
     BotCommand(command="help", description="Помощь"),
 ]
 

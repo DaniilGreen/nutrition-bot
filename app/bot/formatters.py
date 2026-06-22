@@ -61,7 +61,7 @@ def format_result(result: Result) -> str:
         return _format_correction_failed(result)
     if isinstance(result, Unknown):
         return _format_unknown(result.reason)
-    return "Что-то пошло не так."
+    return "⚠️ Не смог обработать. Переформулируй или напиши /help."
 
 
 def _is_stated(it: MealItem) -> bool:
@@ -95,7 +95,7 @@ def _format_meal(r: MealLogged) -> str:
     lines += ["", _remaining_block(r.remaining)]
     notes = []
     if any(it.is_estimate for it in r.meal.items):  # INV-13: метка per-item, сноска поясняет
-        notes.append("≈ — AI-оценка КБЖУ. Неверно? /products")
+        notes.append("≈ — прикинул сам, приблизительно. Неверно? /products")
     if any(_is_stated(it) for it in r.meal.items):
         notes.append("📋 — по твоим цифрам (меню/этикетка)")
     if r.meal.source_confidence < _LOW_CONFIDENCE:
@@ -106,7 +106,7 @@ def _format_meal(r: MealLogged) -> str:
 
 
 def _format_clarification(r: ClarificationNeeded) -> str:
-    return f"🤔 «{_esc(r.item_name)}» — какая порция?"
+    return f"🤔 «{_esc(r.item_name)}» — какая порция? Жми кнопку или впиши граммы."
 
 
 def _format_variant_clarification(r: VariantClarificationNeeded) -> str:
@@ -239,7 +239,10 @@ def _format_unknown(reason: str = "") -> str:
     if "пределов" in r:  # вес вне 20–400 кг
         return "⚖️ Вес должен быть 20–400 кг. Проверь число и пришли снова («вес 86»)."
     if "vision" in r:  # распознавание этикеток выключено (нет ключа)
-        return "📷 Распознавание этикеток сейчас выключено (нет доступа к vision)."
+        return (
+            "📷 Сейчас не читаю фото этикеток. Впиши КБЖУ текстом: "
+            "«творог, 120 ккал, 18 белка, 5 жира, 3 углевода»."
+        )
     if "этикет" in r:  # фото пришло, но таблицу КБЖУ не разобрали
         return "📋 Не разобрал этикетку. Сфоткай таблицу КБЖУ крупно, при свете и без бликов."
     return (

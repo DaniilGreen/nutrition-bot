@@ -73,6 +73,7 @@ START_TEXT = (
     "• «куриная грудка 250 г»\n"
     "• «два банана»\n"
     "• «фо бо средняя порция»\n\n"
+    "📷 Фото этикетки — пришли снимок таблицы КБЖУ, прочитаю цифры сам\n"
     "⚖️ Вес тела: «вес 86.8»\n"
     "📖 Полная инструкция — /help\n"
     "Кнопки меню — снизу 👇"
@@ -89,11 +90,13 @@ HELP_TEXT = (
     "• «фо бо», «шакшука» — хватит и одного названия блюда\n"
     "🎤 Голос работает так же — наговори как удобно.\n\n"
     "🤚 <b>Не указал сколько?</b>\n"
-    "На «овсянку» или «рис» без количества спрошу размер — жми «немного / средне / много». "
-    "Можно сразу словом: «большая тарелка борща».\n\n"
+    "На «овсянку» или «рис» без количества спрошу размер — жми «Маленькая / Средняя / Большая» "
+    "(или впиши граммы). Можно сразу словом: «большая тарелка борща».\n\n"
+    "📷 <b>Фото этикетки</b>\n"
+    "Пришли снимок таблицы пищевой ценности — прочитаю КБЖУ сам, спрошу только вес порции.\n\n"
     "🏷 <b>Знаешь КБЖУ из меню/этикетки?</b>\n"
     "Назови цифры прямо: «рис с гречей из кафе, 400 ккал, 30 белка, 10 жира, 50 углеводов» — "
-    "запишу ровно так, без пересчёта.\n\n"
+    "запишу ровно так, без пересчёта (или просто сфоткай этикетку — см. выше).\n\n"
     "🤔 <b>Уточню вариант</b>\n"
     "Для «творог» или «курица» спрошу: 5% / 9%, гриль / отварная — способ влияет на калории. "
     "Можно уточнить сразу: «творог 9%», «курица гриль».\n\n"
@@ -302,10 +305,13 @@ async def cmd_undo(message: Message, app_user: User, assistant: Assistant) -> No
 async def cmd_products(message: Message, app_user: User, assistant: Assistant) -> None:
     products = await assistant.fixable_products(limit=10)
     if not products:
-        await message.answer("Пока нечего править — нет продуктов с AI-оценкой.")
+        await message.answer(
+            "Пока всё точно — здесь появятся продукты, где я прикинул КБЖУ сам (≈), "
+            "когда запишешь такое блюдо."
+        )
         return
     await message.answer(
-        "Продукты с AI-оценкой КБЖУ. Что поправить?",
+        "Продукты, где я прикинул КБЖУ сам (≈). Что поправить?",
         reply_markup=products_fix_keyboard(products),
     )
 
@@ -377,6 +383,7 @@ async def btn_undo(
 
 
 _BUG_PROMPT = "🐛 Опиши, что не так — одним сообщением. Приложу последние записи."
+_BUG_DONE = "🐛 Спасибо! Записал багрепорт и последние приёмы — гляну."
 
 
 @router.message(Command("bug"))
@@ -391,7 +398,7 @@ async def cmd_bug(
         return
     await assistant.report_bug(app_user, note)
     await session.commit()
-    await message.answer("🐛 Спасибо! Багрепорт + последние записи сохранены — разберём.")
+    await message.answer(_BUG_DONE)
 
 
 @router.message(F.text == BTN_BUG)
@@ -408,7 +415,7 @@ async def on_bug_note(
     await state.clear()
     await assistant.report_bug(app_user, message.text or "")
     await session.commit()
-    await message.answer("🐛 Спасибо! Багрепорт записан — разработчик разберёт.")
+    await message.answer(_BUG_DONE)
 
 
 # --- FSM-вводы (ввод чисел в конкретных состояниях) ----------------------------
@@ -569,10 +576,11 @@ async def on_voice(
     audio = buffer.read() if buffer is not None else b""
     transcript = await assistant.transcribe(audio, filename="voice.ogg")
 
-    if not transcript:
-        await message.answer(
-            "🎤 Не смог распознать голос. Для голосовых нужен OpenAI-ключ — либо напиши текстом."
-        )
+    if transcript is None:
+        await message.answer("🎤 Голос сейчас недоступен — напиши текстом.")
+        return
+    if not transcript.strip():
+        await message.answer("🎤 Не расслышал — запиши поближе к микрофону в тишине, или текстом.")
         return
 
     await message.answer(f"🎤 Распознал: «{escape(transcript, quote=False)}»")
