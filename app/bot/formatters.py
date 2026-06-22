@@ -117,10 +117,15 @@ def _format_label_read(r: LabelRead) -> str:
     it = r.draft.items[r.item_index]
     pkg = f" · пачка {_n(it.unit_weight_g)} г" if it.unit_weight_g else ""
     tail = " или жми «вся пачка»." if it.unit_weight_g else "."
+    warn = (
+        "\n⚠️ Б/Ж/У не сходятся с ккал — возможно, я ошибся при чтении. Проверь или переснимь чётче."
+        if r.atwater_warning
+        else ""
+    )
     return (
         f"📋 Этикетка: <b>{_esc(it.name)}</b>{pkg}\n"
         f"На 100 г: {_n(it.kcal_per_100g)} ккал · Б{_n(it.protein_per_100g)} "
-        f"Ж{_n(it.fat_per_100g)} У{_n(it.carb_per_100g)}\n\n"
+        f"Ж{_n(it.fat_per_100g)} У{_n(it.carb_per_100g)}{warn}\n\n"
         f"Сколько грамм съел? Напиши число{tail}"
     )
 

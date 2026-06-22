@@ -32,7 +32,8 @@ from app.application.stats_service import StatsService
 from app.application.weight_service import WeightService
 from app.domain.consensus import confidence_from_cv, median_cv
 from app.domain.goals import Goal
-from app.domain.plausibility import clamp_density
+from app.domain.nutrition import atwater_suspect
+from app.domain.plausibility import clamp_density, is_alcoholic
 from app.domain.value_objects import Density
 
 
@@ -116,8 +117,11 @@ class Assistant:
             return Unknown(reason="не разобрал этикетку — сфоткай таблицу КБЖУ ближе и чётче")
         item.from_label = True
         item.label_photo_id = photo_file_id
+        warn = not is_alcoholic(item.name) and atwater_suspect(
+            item.kcal_per_100g, item.protein_per_100g, item.fat_per_100g, item.carb_per_100g
+        )
         draft = ParsedMessage(intent=Intent.MEAL, items=[item], confidence=1.0)
-        return LabelRead(draft=draft, item_index=0)
+        return LabelRead(draft=draft, item_index=0, atwater_warning=warn)
 
     async def continue_meal(
         self, user: User, draft: ParsedMessage, *, raw_input: str, input_type: str = "text"

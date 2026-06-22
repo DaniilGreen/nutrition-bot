@@ -104,6 +104,23 @@ async def test_rename_product() -> None:
     assert await assistant.rename_product(pid, "   ") is None  # пустое имя — отказ
 
 
+async def test_label_atwater_warning_on_misread() -> None:
+    # Б30 вместо 3.0 (misread): атвотер 4*30+9*2+4*12=186 ≫ 80 ккал → ⚠️ предупреждение
+    misread = ParsedItem(
+        name="йогурт", canonical_key="", unit=Unit.GRAM, grams=None,
+        kcal_per_100g=80, protein_per_100g=30, fat_per_100g=2, carb_per_100g=12, confidence=1.0,
+    )
+    assistant, users, _ = _build(misread)
+    read = await assistant.read_label(await _user(users), b"img")
+    assert isinstance(read, LabelRead) and read.atwater_warning is True
+
+
+async def test_label_no_warning_when_consistent() -> None:
+    assistant, users, _ = _build(_label())  # 80 ≈ атвотер(3,2,12)=78
+    read = await assistant.read_label(await _user(users), b"img")
+    assert isinstance(read, LabelRead) and read.atwater_warning is False
+
+
 async def test_label_not_recognized_returns_unknown() -> None:
     assistant, users, _ = _build(None)  # vision не нашёл таблицу
     user = await _user(users)

@@ -57,6 +57,17 @@ def reconcile_kcal(kcal: float, protein: float, fat: float, carb: float) -> floa
     return round(expected, 1) if abs(kcal - expected) > tol else kcal
 
 
+def atwater_suspect(kcal: float, protein: float, fat: float, carb: float) -> bool:
+    """True, если ккал сильно расходится с Атвотером(Б,Ж,У) — вероятен misread цифры с этикетки
+    (FR-27): напр. «3.0 г белка» прочитано как «30». Тот же допуск, что и reconcile (0.3·max+20),
+    чтобы терпеть клетчатку/полиолы/округление, но ловить грубые ошибки чтения. Алкоголь — мимо."""
+    expected = atwater_kcal(protein, fat, carb)
+    if expected <= 0 or kcal <= 0:
+        return False
+    tol = 0.3 * max(kcal, expected) + 20
+    return abs(kcal - expected) > tol
+
+
 def reconcile_density(d: Density) -> Density:
     """Авто-сверка правдоподобия LLM-оценки плотности (ккал ≈ Атвотер(Б,Ж,У))."""
     return Density(

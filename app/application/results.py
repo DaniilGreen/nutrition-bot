@@ -40,6 +40,7 @@ class LabelRead:
 
     draft: ParsedMessage
     item_index: int
+    atwater_warning: bool = False  # FR-27: Б/Ж/У ≠ ккал на этикетке → вероятен misread, показать ⚠️
 
 
 @dataclass
