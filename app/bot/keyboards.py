@@ -66,7 +66,8 @@ def portion_keyboard(options: dict[str, float] | None = None) -> InlineKeyboardM
         grams = options.get(key) if options else None
         text = f"{label} · {round(grams)} г" if grams else label
         builder.button(text=text, callback_data=f"{PORTION_CALLBACK_PREFIX}:{key}")
-    builder.adjust(3)
+    builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
+    builder.adjust(3, 1)
     return builder.as_markup()
 
 
@@ -84,6 +85,8 @@ def prod_edit_keyboard(product_id: int) -> InlineKeyboardMarkup:
     """Под карточкой правки продукта: переименовать (КБЖУ правится текстом-числами). FR-27 #6."""
     builder = InlineKeyboardBuilder()
     builder.button(text="✏️ Переименовать", callback_data=f"{PROD_RENAME_PREFIX}:{product_id}")
+    builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
+    builder.adjust(1)
     return builder.as_markup()
 
 
@@ -92,16 +95,16 @@ def label_grams_keyboard(
 ) -> InlineKeyboardMarkup | None:
     """FR-27: пресеты веса с этикетки — «1 порция» и/или «вся пачка». None, если пусто."""
     builder = InlineKeyboardBuilder()
-    has = False
+    shown: set[int] = set()
     if serving_g:
         g = round(serving_g)
         builder.button(text=f"1 порция · {g} г", callback_data=f"{LABEL_G_PREFIX}:{g}")
-        has = True
-    if package_g:
+        shown.add(g)
+    if package_g and round(package_g) not in shown:  # дедуп: порция==пачка → одна кнопка
         g = round(package_g)
         builder.button(text=f"Вся пачка · {g} г", callback_data=f"{LABEL_G_PREFIX}:{g}")
-        has = True
-    if not has:
+        shown.add(g)
+    if not shown:
         return None
     builder.adjust(1)
     return builder.as_markup()

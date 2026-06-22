@@ -477,7 +477,10 @@ async def on_portion_text(
     raw = str(data.get("raw", ""))
     if draft is None:  # черновик потерян — как в callback: просим заново (не реобрабатываем текст)
         await state.clear()
-        await message.answer("⏳ Запись устарела — отправь приём пищи заново.")
+        await message.answer(
+            "⏳ Этот вопрос уже неактуален (бот перезапускался или прошло время). "
+            "Отправь приём заново."
+        )
         return
 
     item = draft.items[int(data.get("item_index", 0))]
@@ -522,7 +525,10 @@ async def on_variant_text(
     q_msg_id = data.get("q_msg_id")  # сообщение-вопрос: уберём его «висящую» клавиатуру
     if draft is None:
         await state.clear()
-        await message.answer("⏳ Запись устарела — отправь приём пищи заново.")
+        await message.answer(
+            "⏳ Этот вопрос уже неактуален (бот перезапускался или прошло время). "
+            "Отправь приём заново."
+        )
         return
 
     item_index = int(data.get("item_index", 0))
@@ -546,6 +552,13 @@ async def on_profile_body(message: Message, state: FSMContext) -> None:
     if len(nums) != 3:
         await message.answer(
             "Нужно 3 числа через пробел: <b>вес рост возраст</b>. Напр.: <code>86 180 30</code>"
+        )
+        return
+    weight, height, age = nums
+    if not (20 <= weight <= 400 and 100 <= height <= 250 and 5 <= age <= 120):
+        await message.answer(
+            "Проверь числа: вес 20–400 кг, рост 100–250 см, возраст 5–120. "
+            "Напр.: <code>86 180 30</code>"
         )
         return
     await state.update_data(weight=nums[0], height=nums[1], age=nums[2])

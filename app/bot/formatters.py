@@ -169,10 +169,17 @@ def _format_weight_trend(t: WeightTrend) -> str:
 
 
 def _format_stats(rem: Remaining, meals_count: int) -> str:
+    if meals_count == 0:
+        return (
+            "📊 Сегодня пока пусто.\nЗапиши приём — например «куриная грудка 250 г», "
+            "наговори голосом или пришли фото этикетки 📷.\n\n" + _dashboard(rem)
+        )
     return f"📊 Сегодня · приёмов: {meals_count}\n\n{_dashboard(rem)}"
 
 
 def _format_weekly(r: WeeklyStats) -> str:
+    if r.days_logged == 0:
+        return "📈 За неделю пока нет записей. Запиши пару приёмов — и покажу среднее в день."
     days = r.days_logged or 1
     c = r.consumed
     g = r.goal
@@ -228,7 +235,10 @@ def _format_item_adjusted(r: ItemAdjusted) -> str:
 
 def _format_correction_failed(r: CorrectionFailed) -> str:
     if r.reason == "unsupported":
-        return "Умею удаление («удали рис») и правку веса («рис не 250 а 180»). Замену X→Y — позже."
+        return (
+            "Умею удаление («удали рис») и правку веса («рис не 250 а 180»). "
+            "Чтобы заменить продукт — удали и запиши заново."
+        )
     target = f"«{_esc(r.target)}»" if r.target else "это"
     return f"Не нашёл {target} в недавних записях. Что удалить? Или /undo — снять последнюю запись."
 
