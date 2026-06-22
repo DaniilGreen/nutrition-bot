@@ -13,7 +13,7 @@ def test_unknown_reason_routing() -> None:
     from app.application.results import Unknown
 
     assert "20–400" in format_result(Unknown(reason="вес вне разумных пределов (20–400 кг)"))
-    assert "выключено" in format_result(Unknown(reason="этикетки недоступно (нет vision)"))
+    assert "не читаю фото" in format_result(Unknown(reason="этикетки недоступно (нет vision)"))
     assert "крупно" in format_result(Unknown(reason="не разобрал этикетку — сфоткай чётче"))
     g = format_result(Unknown(reason="не распознал приём пищи или вес"))  # генерик
     assert "📷 фото" in g and "🎤 голос" in g
@@ -73,4 +73,4 @@ def test_meal_card_per_item_marks() -> None:
     assert "≈ том ям" in text  # оценка
     assert "📋 салат из кафе" in text  # цифры юзера
     assert "• куриная грудка" in text  # каталог — без метки
-    assert "≈ — AI-оценка" in text and "📋 — по твоим цифрам" in text  # сноски
+    assert "≈ — прикинул сам" in text and "📋 — по твоим цифрам" in text  # сноски
