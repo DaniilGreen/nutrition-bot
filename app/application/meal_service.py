@@ -194,13 +194,11 @@ class MealService:
 
     async def _resolve_product(self, parsed_item: ParsedItem) -> Product:
         key = _canonical_key(parsed_item.canonical_key, parsed_item.name)
-        if not parsed_item.from_label:  # этикетка (FR-27) = точные цифры → свежий пин, не reuse/RAG
-            existing = await self._products.get_by_key(key)
-            if existing is not None and _names_compatible(parsed_item.name, existing.display_name):
-                return existing  # детерминизм: плотность из БД, LLM-числа игнорим
-            # иначе ключ ведёт на пин ДРУГОЙ еды — LLM переиспользовал чужой ключ (миндальное →
-            # macadamia_milk, багрепорт #3). Не берём этот пин: идём в RAG/новый (INV-4).
-            # RAG-страховка: имя совпало с реальной строкой каталога → берём её, не оценку LLM
+        existing = await self._products.get_by_key(key)
+        if existing is not None and _names_compatible(parsed_item.name, existing.display_name):
+            return existing  # детерминизм + дедуп повторного скана (тот же ключ → тот же пин)
+        # имя не совпало с пином → чужой ключ (миндальное → macadamia_milk, баг #3): не берём
+        if not parsed_item.from_label:  # RAG-страховка — только для текста/голоса, не для этикетки
             match = best_product_match(parsed_item.name, await self._products.list_all())
             if match is not None:
                 return match
@@ -240,6 +238,7 @@ class MealService:
             unit_weight_g=parsed_item.unit_weight_g,
             source="label" if parsed_item.from_label else "llm",  # FR-27: этикетка = точно, без «≈»
             is_estimate=not parsed_item.from_label,
+            photo_file_id=parsed_item.label_photo_id if parsed_item.from_label else None,
         )
         # Пиним ЛЮБУЮ LLM-оценку → она попадает в /products, и юзер может её поправить (ручной
         # escape-hatch — это и есть путь правки сомнительного). Сэмплинг (D-15) улучшает первую

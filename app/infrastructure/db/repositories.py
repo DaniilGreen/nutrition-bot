@@ -45,6 +45,7 @@ def _product_to_domain(o: ProductORM) -> Product:
         portion_sizes=o.portion_sizes,
         source=o.source,
         is_estimate=o.is_estimate,
+        photo_file_id=o.photo_file_id,
     )
 
 
@@ -160,6 +161,7 @@ class SqlProductRepo:
             portion_sizes=product.portion_sizes,
             source=product.source,
             is_estimate=product.is_estimate,
+            photo_file_id=product.photo_file_id,
         )
         self._s.add(orm)
         await self._s.flush()

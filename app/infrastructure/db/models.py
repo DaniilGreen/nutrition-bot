@@ -72,6 +72,7 @@ class ProductORM(Base):
     portion_sizes: Mapped[dict[str, float] | None] = mapped_column(JSONB, nullable=True)
     source: Mapped[str] = mapped_column(String(32), default="llm")
     is_estimate: Mapped[bool] = mapped_column(Boolean, default=True)
+    photo_file_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

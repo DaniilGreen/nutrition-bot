@@ -48,6 +48,8 @@ class ParsedItem:
     confidence: float = 1.0
     estimate_confidence: str | None = None  # high|med|low из разброса сэмплов (D-15)
     from_label: bool = False  # FR-27: КБЖУ прочитаны с фото этикетки → точные, пин source="label"
+    serving_g: float | None = None  # FR-27: вес одной порции с этикетки (кнопка «1 порция»)
+    label_photo_id: str | None = None  # FR-27: Telegram file_id фото этикетки (храним у продукта)
 
 
 @dataclass

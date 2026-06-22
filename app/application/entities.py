@@ -35,6 +35,7 @@ class Product:
     portion_sizes: dict[str, float] | None = None
     source: str = "llm"
     is_estimate: bool = True
+    photo_file_id: str | None = None  # FR-27: Telegram file_id фото этикетки (если скан)
     id: int | None = None
 
 

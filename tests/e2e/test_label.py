@@ -44,7 +44,7 @@ def _label() -> ParsedItem:
     return ParsedItem(
         name="Йогурт греческий", canonical_key="", unit=Unit.GRAM, grams=None,
         kcal_per_100g=80, protein_per_100g=3, fat_per_100g=2, carb_per_100g=12,
-        unit_weight_g=250, confidence=1.0,
+        unit_weight_g=250, serving_g=125, confidence=1.0,
     )
 
 
@@ -56,10 +56,10 @@ async def test_label_read_then_grams_logs_exact() -> None:
     assistant, users, products = _build(_label())
     user = await _user(users)
 
-    read = await assistant.read_label(user, b"fake-image")
+    read = await assistant.read_label(user, b"fake-image", photo_file_id="tg_file_123")
     assert isinstance(read, LabelRead)
     item = read.draft.items[read.item_index]
-    assert item.from_label is True and item.unit_weight_g == 250
+    assert item.from_label is True and item.unit_weight_g == 250 and item.serving_g == 125
 
     item.grams = 100  # юзер ввёл вес порции
     item.unit = Unit.GRAM
@@ -71,6 +71,21 @@ async def test_label_read_then_grams_logs_exact() -> None:
     assert mi.is_estimate is False  # этикетка = точно, НЕ «≈»
     pinned = [p for p in await products.list_all() if p.source == "label"]
     assert len(pinned) == 1 and pinned[0].display_name == "Йогурт греческий"
+    assert pinned[0].photo_file_id == "tg_file_123"  # фото этикетки сохранено у продукта (#5)
+
+
+async def test_label_rescan_no_duplicate() -> None:
+    # FR-27: повторный скан того же продукта НЕ плодит дубль — тот же пин
+    assistant, users, products = _build(_label())
+    user = await _user(users)
+    for _ in range(2):
+        read = await assistant.read_label(user, b"img")
+        assert isinstance(read, LabelRead)
+        read.draft.items[0].grams = 100
+        read.draft.items[0].unit = Unit.GRAM
+        await assistant.continue_meal(user, read.draft, raw_input="этикетка")
+    labels = [p for p in await products.list_all() if p.source == "label"]
+    assert len(labels) == 1  # дедуп: один продукт, не два
 
 
 async def test_label_not_recognized_returns_unknown() -> None:

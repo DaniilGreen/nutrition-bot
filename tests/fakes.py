@@ -1,6 +1,7 @@
 """In-memory реализации портов + StubNlu/StubStt для тестов без БД и без LLM."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 from app.application.dto import ParsedItem, ParsedMessage
@@ -226,7 +227,8 @@ class StubVision:
         self._item = item
 
     async def read_label(self, image: bytes) -> ParsedItem | None:
-        return self._item
+        # копия на каждый скан — независимые «снимки» (для теста дедупа повторного скана)
+        return replace(self._item) if self._item is not None else None
 
 
 class StubStt:

@@ -11,7 +11,7 @@ from app.application.entities import Meal, Product
 
 PORTION_CALLBACK_PREFIX = "portion"
 VARIANT_CALLBACK_PREFIX = "variant"
-LABEL_ALL_PREFIX = "label_all"  # «вся пачка» после фото этикетки (FR-27)
+LABEL_G_PREFIX = "label_g"  # пресет веса (порция/пачка) после фото этикетки (FR-27)
 MEAL_UNDO_PREFIX = "meal_undo"
 UNDO_ITEM_PREFIX = "undo_item"
 ITEM_DEL_PREFIX = "item_del"
@@ -79,12 +79,23 @@ def variant_keyboard(options: Sequence[str]) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def label_grams_keyboard(package_g: float | None) -> InlineKeyboardMarkup | None:
-    """FR-27: после этикетки — быстрая кнопка «вся пачка», если вес упаковки распознан."""
-    if not package_g:
-        return None
+def label_grams_keyboard(
+    package_g: float | None, serving_g: float | None = None
+) -> InlineKeyboardMarkup | None:
+    """FR-27: пресеты веса с этикетки — «1 порция» и/или «вся пачка». None, если пусто."""
     builder = InlineKeyboardBuilder()
-    builder.button(text=f"Вся пачка · {round(package_g)} г", callback_data=LABEL_ALL_PREFIX)
+    has = False
+    if serving_g:
+        g = round(serving_g)
+        builder.button(text=f"1 порция · {g} г", callback_data=f"{LABEL_G_PREFIX}:{g}")
+        has = True
+    if package_g:
+        g = round(package_g)
+        builder.button(text=f"Вся пачка · {g} г", callback_data=f"{LABEL_G_PREFIX}:{g}")
+        has = True
+    if not has:
+        return None
+    builder.adjust(1)
     return builder.as_markup()
 
 

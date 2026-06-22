@@ -41,7 +41,7 @@ from app.bot.keyboards import (
     BTN_UNDO,
     BTN_WEEK,
     BTN_WEIGHT,
-    LABEL_ALL_PREFIX,
+    LABEL_G_PREFIX,
     ONBOARD_PREFIX,
     WIZ_CANCEL,
     activity_keyboard,
@@ -577,15 +577,17 @@ async def on_photo(
     if not message.photo:
         return
     await _send_typing(message)
-    buffer = await bot.download(message.photo[-1])  # последний = максимальное разрешение
+    photo = message.photo[-1]  # последний = максимальное разрешение
+    buffer = await bot.download(photo)
     image = buffer.read() if buffer is not None else b""
-    result = await assistant.read_label(app_user, image)
+    result = await assistant.read_label(app_user, image, photo_file_id=photo.file_id)
     if isinstance(result, LabelRead):
         item = result.draft.items[result.item_index]
         await state.set_state(MealStates.awaiting_label_grams)
         await state.update_data(draft=result.draft, item_index=result.item_index, raw="этикетка")
         await message.answer(
-            format_result(result), reply_markup=label_grams_keyboard(item.unit_weight_g)
+            format_result(result),
+            reply_markup=label_grams_keyboard(item.unit_weight_g, item.serving_g),
         )
     else:
         await message.answer(format_result(result))
@@ -619,25 +621,22 @@ async def on_label_grams(
     await _reply_message(message, result, state, raw="этикетка")
 
 
-@router.callback_query(F.data == LABEL_ALL_PREFIX)
-async def on_label_all(
+@router.callback_query(F.data.startswith(f"{LABEL_G_PREFIX}:"))
+async def on_label_gram_btn(
     callback: CallbackQuery,
     app_user: User,
     assistant: Assistant,
     session: AsyncSession,
     state: FSMContext,
 ) -> None:
-    """Кнопка «вся пачка» после этикетки (FR-27): вес = нетто упаковки → лог."""
+    """Пресет веса после этикетки (FR-27): «1 порция»/«вся пачка» → граммы из callback → лог."""
     data = await state.get_data()
     draft = data.get("draft")
     if draft is None or not isinstance(callback.message, Message):
         await callback.answer("Фото устарело — пришли заново.")
         return
     item = draft.items[int(data.get("item_index", 0))]
-    if not item.unit_weight_g:
-        await callback.answer("Вес пачки не распознан — напиши граммы.")
-        return
-    item.grams = item.unit_weight_g
+    item.grams = float((callback.data or "label_g:0").split(":", 1)[1])
     item.unit = Unit.GRAM
     result = await assistant.continue_meal(app_user, draft, raw_input="этикетка")
     await session.commit()

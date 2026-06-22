@@ -21,7 +21,8 @@ SYSTEM_PROMPT = (
     "name — КОНКРЕТНО, на русском: бренд (если виден) + тип + признак жирности/вида.\n"
     "Напр.: «молоко коровье 3.6%», «йогурт питьевой 3.8%», «молоко миндальное».\n"
     "НЕ обобщай до «молоко»/«йогурт» — иначе разные продукты сольются в каталоге.\n"
-    "package_grams — нетто-вес упаковки в г, если указан. found=false, если таблицы КБЖУ нет."
+    "package_grams — нетто-вес упаковки в г, если указан. serving_grams — вес ОДНОЙ порции в г,\n"
+    "если на этикетке есть («в порции / serving / khẩu phần»). found=false, если таблицы КБЖУ нет."
 )
 
 
@@ -33,6 +34,7 @@ class LabelReading(BaseModel):
     fat_per_100g: float
     carb_per_100g: float
     package_grams: float | None = Field(default=None, description="нетто-вес упаковки, г")
+    serving_grams: float | None = Field(default=None, description="вес одной порции, г")
 
 
 class OpenAiVision:
@@ -73,6 +75,7 @@ class OpenAiVision:
             fat_per_100g=r.fat_per_100g,
             carb_per_100g=r.carb_per_100g,
             unit_weight_g=r.package_grams,
+            serving_g=r.serving_grams,
             from_label=True,
             confidence=1.0,
         )

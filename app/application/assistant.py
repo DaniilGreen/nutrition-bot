@@ -105,7 +105,9 @@ class Assistant:
             return None
         return await self._stt.transcribe(audio, filename=filename)
 
-    async def read_label(self, user: User, image: bytes) -> Result:
+    async def read_label(
+        self, user: User, image: bytes, *, photo_file_id: str | None = None
+    ) -> Result:
         """FR-27: фото этикетки → распознать КБЖУ/100г → показать и ждать вес порции (текстом)."""
         if self._vision is None:
             return Unknown(reason="распознавание этикеток недоступно (нет vision)")
@@ -113,6 +115,7 @@ class Assistant:
         if item is None:
             return Unknown(reason="не разобрал этикетку — сфоткай таблицу КБЖУ ближе и чётче")
         item.from_label = True
+        item.label_photo_id = photo_file_id
         draft = ParsedMessage(intent=Intent.MEAL, items=[item], confidence=1.0)
         return LabelRead(draft=draft, item_index=0)
 
