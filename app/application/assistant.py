@@ -182,8 +182,9 @@ class Assistant:
         # D-19: сперва уточняем СОСТАВ (начинка/тип/жирность) — влияет и на плотность, и на размер.
         for i, item in enumerate(parsed.items):
             if item.clarify_options and not item.total_kcal:
+                options = await self._meals.order_clarify_options(user, item.clarify_options)
                 return VariantClarificationNeeded(
-                    draft=parsed, item_index=i, item_name=item.name, options=item.clarify_options
+                    draft=parsed, item_index=i, item_name=item.name, options=options
                 )
 
         idx = _first_unclarified_index(parsed)  # затем размер порции (FR-21)

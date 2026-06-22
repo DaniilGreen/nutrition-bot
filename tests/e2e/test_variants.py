@@ -91,6 +91,22 @@ async def test_clarify_freetext_appends_and_reestimates() -> None:
     assert final.meal.totals.kcal == 500.0  # 250/100 * 200
 
 
+async def test_clarify_buttons_ordered_by_history() -> None:
+    # D-19 память: недавно выбранный вариант всплывает первой кнопкой (порядок, не решение за юзера)
+    stub = StubNlu(
+        _meal("шаверма с говядиной", "shawarma_beef", 230),  # сначала логируем этот выбор
+        _meal("шаверма", "shawarma", 210, clarify=["вег", "шаверма с говядиной"]),
+    )
+    assistant, users, _ = _build(stub)
+    user = await _new_user(users)
+
+    await assistant.process(user, "шаверма с говядиной 200")  # попадает в историю
+    asked = await assistant.process(user, "шаверма 200")
+
+    assert isinstance(asked, VariantClarificationNeeded)
+    assert asked.options[0] == "шаверма с говядиной"  # недавний выбор — первой кнопкой
+
+
 async def test_no_clarify_logs_directly() -> None:
     # нет clarify_options → не дёргаем вопросом, пишем сразу
     stub = StubNlu(_meal("огурец", "cucumber", 15))

@@ -129,6 +129,12 @@ class MealService:
     async def recent(self, user: User, limit: int = 10) -> list[Meal]:
         return await self._meals.list_recent(_require_id(user), limit)
 
+    async def order_clarify_options(self, user: User, options: list[str]) -> list[str]:
+        """D-19: недавний/частый выбор юзера — первой кнопкой (порядок, не решение за него)."""
+        meals = await self._meals.list_recent(_require_id(user), 20)
+        names = [it.name_snapshot for m in meals for it in m.items]
+        return order_options_by_history(options, names)
+
     async def delete_last(self, user: User) -> Meal | None:
         return await self._meals.delete_last(_require_id(user))
 
@@ -320,6 +326,25 @@ def _name_matches(query: str, candidate: str) -> bool:
     if q in c or c in q:
         return True
     return difflib.SequenceMatcher(None, q, c).ratio() >= _CORRECTION_NAME_THRESHOLD
+
+
+def order_options_by_history(options: list[str], recent_names: list[str]) -> list[str]:
+    """D-19: подсортировать варианты-кнопки — недавний выбор юзера первой кнопкой.
+
+    recent_names — имена позиций недавних приёмов, СВЕЖИЕ первыми. Вариант, совпавший с недавним
+    именем, всплывает (чем свежее — тем выше); прочие сохраняют порядок LLM (по убыванию
+    вероятности). Память НЕ решает за юзера (D-6/D-19) — только удобный порядок, выбор всегда его.
+    """
+    norm_recent = [_norm(r) for r in recent_names]
+
+    def rank(opt: str) -> tuple[int, int]:
+        no = _norm(opt)
+        for i, r in enumerate(norm_recent):
+            if no in r or r in no or difflib.SequenceMatcher(None, no, r).ratio() >= 0.7:
+                return (0, i)  # встречался → вперёд, свежее = выше
+        return (1, options.index(opt))  # не встречался → после, в LLM-порядке
+
+    return sorted(options, key=rank)
 
 
 def _names_compatible(parsed_name: str, pinned_name: str) -> bool:
