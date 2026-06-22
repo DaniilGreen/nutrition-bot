@@ -558,6 +558,8 @@ async def on_voice(
     session: AsyncSession,
     state: FSMContext,
 ) -> None:
+    if await _busy_with_flow(message, state):  # не затираем незавершённый черновик голосом
+        return
     await state.clear()
     if message.voice is None:
         return
@@ -590,6 +592,8 @@ async def on_photo(
     state: FSMContext,
 ) -> None:
     """Фото = этикетка (FR-27): читаем КБЖУ → спрашиваем вес порции. (Фото готовой еды пока нет.)"""
+    if await _busy_with_flow(message, state):  # не затираем незавершённый черновик фото
+        return
     await state.clear()
     if not message.photo:
         return
@@ -865,6 +869,13 @@ async def on_profile_goal(
     await state.clear()
     assert app_user.id is not None
 
+    if not all(k in data for k in ("sex", "weight", "height", "age", "activity")):
+        # визард потерял данные (рестарт/MemoryStorage) — не падаем KeyError, просим начать заново
+        await callback.message.answer(
+            "Профиль не достроился (бот перезапускался). Начни заново — ⚙️ Профиль."
+        )
+        await callback.answer()
+        return
     goal = goal_from_profile(
         sex=data["sex"],
         weight_kg=float(data["weight"]),
@@ -887,6 +898,15 @@ async def on_profile_goal(
         tail = "\n\nПоменять: <code>/goal 1800</code>"
     await callback.message.answer(f"✅ Дневная цель:\n{format_goal(goal)}{tail}")
     await callback.answer()
+
+
+@router.callback_query()  # замыкающий: ловит любую устаревшую кнопку (после рестарта/времени)
+async def on_stale_callback(callback: CallbackQuery) -> None:
+    """Не пойманный callback → гасим вечный спиннер Telegram и снимаем мёртвую клавиатуру."""
+    await callback.answer("Кнопка устарела — открой меню заново")
+    if isinstance(callback.message, Message):
+        with suppress(Exception):
+            await callback.message.edit_reply_markup(reply_markup=None)
 
 
 # --- helpers ------------------------------------------------------------------
@@ -960,6 +980,17 @@ def _label_grams(text: str, package_g: float | None) -> float | None:
         return package_g
     n = _first_number(text)
     return n if n and n > 0 else None
+
+
+async def _busy_with_flow(message: Message, state: FSMContext) -> bool:
+    """True, если идёт незавершённый вопрос/визард — голос/фото не должны затирать черновик."""
+    if await state.get_state() is None:
+        return False
+    await message.answer(
+        "⏳ Сейчас жду ответ на прошлый шаг — ответь текстом или кнопкой "
+        "(или ✖️ / кнопка меню, чтобы выйти). Голос и фото пока в сторонке."
+    )
+    return True
 
 
 async def _reply_message(
