@@ -129,6 +129,16 @@ async def test_weight_flow() -> None:
     assert result.delta_kg is None
 
 
+async def test_today_meals_shows_all_today() -> None:
+    # багрепорт #12: пикер отмены показывает ВСЕ сегодняшние приёмы, не последние 5
+    assistant, users, _ = _build(StubNlu(_chicken(150), _chicken(160), _chicken(170)))
+    user = await _new_user(users)
+    for _ in range(3):
+        await assistant.process(user, "курица 250")
+    today = await assistant.today_meals(user)
+    assert len(today.meals) == 3
+
+
 async def test_query_after_meal() -> None:
     assistant, users, _ = _build(
         StubNlu(_chicken(165), ParsedMessage(intent=Intent.QUERY, confidence=0.9))

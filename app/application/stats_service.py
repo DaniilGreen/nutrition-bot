@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from zoneinfo import ZoneInfo
 
-from app.application.entities import User
+from app.application.entities import Meal, User
 from app.application.ports import MealRepo, UserRepo
 from app.application.results import DailyStats, WeeklyStats
 from app.clock import Clock, utcnow
@@ -35,6 +35,13 @@ class StatsService:
         consumed = sum_macros(meal.totals for meal in meals)
         goal = await self._users.get_goal(user_id) or self._default_goal
         return DailyStats(remaining=remaining(consumed, goal), meals_count=len(meals))
+
+    async def day_meals(self, user: User) -> list[Meal]:
+        """Все приёмы за СЕГОДНЯ, свежие первыми — для пикера отмены (не последние N, баг #12)."""
+        start, end = day_bounds_utc(self._clock(), user.timezone)
+        meals = await self._meals.list_between(_require_id(user), start, end)
+        meals.sort(key=lambda m: m.eaten_at, reverse=True)
+        return meals
 
     async def weekly(self, user: User) -> WeeklyStats:
         user_id = _require_id(user)

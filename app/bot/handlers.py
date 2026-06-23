@@ -435,15 +435,19 @@ async def on_bug_photo(
 
 @router.message(MealStates.awaiting_bug, F.voice)
 async def on_bug_voice(
-    message: Message, app_user: User, assistant: Assistant, session: AsyncSession,
+    message: Message, bot: Bot, app_user: User, assistant: Assistant, session: AsyncSession,
     state: FSMContext,
 ) -> None:
-    """FR-26: голосовой багрепорт — сохраняем file_id голоса."""
+    """FR-26: голосовой багрепорт — ТРАНСКРИБИРУЕМ и сохраняем текст (+ file_id), баг #9."""
     await state.clear()
+    buffer = await bot.download(message.voice) if message.voice else None
+    audio = buffer.read() if buffer is not None else b""
+    transcript = (await assistant.transcribe(audio, filename="bug.ogg")) if audio else None
     fid = message.voice.file_id if message.voice else ""
-    await assistant.report_bug(app_user, f"[голосовой багрепорт file_id={fid}]")
+    note = (transcript or "").strip() or "[голос не распознан]"
+    await assistant.report_bug(app_user, f"🎤 {note}\n[file_id={fid}]")
     await session.commit()
-    await message.answer("🐛 Спасибо! Голосовой багрепорт записал — гляну.")
+    await message.answer("🐛 Спасибо! Голосовой багрепорт расшифровал и записал — гляну.")
 
 
 # --- FSM-вводы (ввод чисел в конкретных состояниях) ----------------------------
@@ -653,6 +657,18 @@ async def on_photo(
     result = await assistant.read_label(app_user, image, photo_file_id=photo.file_id)
     if isinstance(result, LabelRead):
         item = result.draft.items[result.item_index]
+        cap_g = (
+            _label_grams(message.caption or "", item.unit_weight_g, item.serving_g)
+            if message.caption
+            else None
+        )
+        if cap_g:  # #5: вес в подписи к фото («этикетка 200 г») → сразу лог, без вопроса
+            item.grams = cap_g
+            item.unit = Unit.GRAM
+            final = await assistant.continue_meal(app_user, result.draft, raw_input="этикетка")
+            await session.commit()
+            await _reply_message(message, final, state, raw="этикетка")
+            return
         await state.set_state(MealStates.awaiting_label_grams)
         await state.update_data(draft=result.draft, item_index=result.item_index, raw="этикетка")
         await message.answer(
@@ -814,7 +830,7 @@ async def on_meal_undo(callback: CallbackQuery, app_user: User, assistant: Assis
         return
     kcal = round(result.meal.totals.kcal)
     if (callback.message.text or "").startswith("Что отменить"):  # пикер /undo → перерисовать
-        history = await assistant.history(app_user, limit=5)
+        history = await assistant.today_meals(app_user)
         if history.meals:
             await _safe_edit(
                 callback.message, "Что отменить? (по позициям)",
@@ -1005,7 +1021,7 @@ async def _show_history(message: Message, app_user: User, assistant: Assistant) 
 
 
 async def _show_undo_picker(message: Message, app_user: User, assistant: Assistant) -> None:
-    history = await assistant.history(app_user, limit=5)
+    history = await assistant.today_meals(app_user)  # #12: весь сегодняшний день, не последние 5
     if not history.meals:
         await message.answer("Нечего отменять.")
         return

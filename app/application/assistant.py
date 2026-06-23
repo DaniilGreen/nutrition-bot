@@ -163,6 +163,10 @@ class Assistant:
         meals = await self._meals.recent(user, limit)
         return History(meals=meals, timezone=user.timezone)
 
+    async def today_meals(self, user: User) -> History:
+        """Все приёмы за сегодня (пикер отмены показывает весь день, не последние 5; баг #12)."""
+        return History(meals=await self._stats.day_meals(user), timezone=user.timezone)
+
     async def weight_trend(self, user: User, limit: int = 14) -> WeightTrend:
         logs = await self._weights.history(user, limit)
         logs = [log for log in logs if 20 <= log.weight_kg <= 400]  # отсечь мусорные значения
