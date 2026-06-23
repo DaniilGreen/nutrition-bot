@@ -1070,7 +1070,7 @@ def _label_grams(
     if package_g and ("пачк" in low or "упаков" in low or "цел" in low or low in ("всё", "все")):
         return package_g
     n = _first_number(text)
-    if "порц" in low:  # «2 порции» = 2×вес порции, НЕ 2 грамма (#10). Без веса порции — не угадываем.
+    if "порц" in low:  # «2 порции» = 2×вес порции (#10); без веса порции — не угадываем граммы
         return (n or 1) * serving_g if serving_g else None
     return n if n and n > 0 else None
 
