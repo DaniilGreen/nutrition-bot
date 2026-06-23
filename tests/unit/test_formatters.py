@@ -9,6 +9,16 @@ from app.domain.goals import Goal, remaining
 from app.domain.value_objects import Macros
 
 
+def test_label_grams_servings() -> None:
+    from app.bot.handlers import _label_grams
+
+    # багрепорт #10: «2 порции» = 2×вес порции (200 г), НЕ 2 грамма
+    assert _label_grams("2 порции", None, 100) == 200
+    assert _label_grams("1 порция", None, 100) == 100
+    assert _label_grams("вся пачка", 250, 100) == 250
+    assert _label_grams("180", 250, 100) == 180  # явные граммы
+
+
 def test_unknown_reason_routing() -> None:
     from app.application.results import Unknown
 

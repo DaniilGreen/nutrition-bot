@@ -35,7 +35,7 @@ from app.domain.value_objects import Density, Macros, sum_macros
 _JUNK_KEYS = frozenset({"", "unknown", "none", "null", "na", "n_a", "item", "product", "food", "еда"})
 _MIN_KEY_LEN = 3
 _MATCH_THRESHOLD = 0.82  # порог имени для RAG-совпадения с каталогом
-_KEY_NAME_THRESHOLD = 0.6  # reuse пина по ключу — только если имя совпадает (защита от чужого)
+_KEY_NAME_THRESHOLD = 0.72  # reuse пина по ключу только если имя совпадает (подстрока ИЛИ ≥0.72)
 _CORRECTION_LOOKBACK = 10  # сколько недавних записей просматриваем для «удали X»
 _CORRECTION_NAME_THRESHOLD = 0.8  # порог нечёткого совпадения имени при удалении
 class MealService:
@@ -351,13 +351,14 @@ def order_options_by_history(options: list[str], recent_names: list[str]) -> lis
 
 def _names_compatible(parsed_name: str, pinned_name: str) -> bool:
     """Имя из ввода и имя запиннутого продукта — одна еда? Защита от reuse ЧУЖОГО ключа: LLM
-    иногда отдаёт ключ другого продукта (миндальное молоко → macadamia_milk «молоко макадамии»).
-    Низкое сходство имён → ключ-коллизия, пин не берём (INV-4, багрепорт #3). Порог терпит
-    синонимы/уточнения (куриная грудка ⊂ куриная грудка отварная), режет разную еду (0.36)."""
-    return (
-        difflib.SequenceMatcher(None, _norm(parsed_name), _norm(pinned_name)).ratio()
-        >= _KEY_NAME_THRESHOLD
-    )
+    иногда отдаёт ключ другого продукта (молоко миндальное → macadamia_milk «молоко макадамии»).
+    Подстрока («куриная грудка» ⊂ «куриная грудка отварная») = уточнение, та же еда. Иначе высокий
+    порог difflib: «молоко миндальное» vs «молоко макадамии» = 0.606 (общее «молоко» завышает) —
+    режем как разную еду (INV-4, багрепорты #3/#11)."""
+    a, b = _norm(parsed_name), _norm(pinned_name)
+    if a in b or b in a:
+        return True
+    return difflib.SequenceMatcher(None, a, b).ratio() >= _KEY_NAME_THRESHOLD
 
 
 def _norm(text: str) -> str:

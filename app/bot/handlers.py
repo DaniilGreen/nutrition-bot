@@ -679,7 +679,7 @@ async def on_label_grams(
         await message.answer("⏳ Фото устарело — пришли этикетку заново.")
         return
     item = draft.items[int(data.get("item_index", 0))]
-    grams = _label_grams(message.text or "", item.unit_weight_g)
+    grams = _label_grams(message.text or "", item.unit_weight_g, item.serving_g)
     if grams is None:
         await message.answer("Сколько грамм съел? Напиши число (или «вся пачка»).")
         return
@@ -1046,13 +1046,16 @@ def _first_number(text: str) -> float | None:
     return float(m.group().replace(",", ".")) if m else None
 
 
-def _label_grams(text: str, package_g: float | None) -> float | None:
-    """FR-27: вес порции из ответа на этикетку — «вся пачка» → нетто, иначе первое число."""
+def _label_grams(
+    text: str, package_g: float | None, serving_g: float | None = None
+) -> float | None:
+    """FR-27: вес из ответа на этикетку. «вся пачка»→нетто; «N порц»→N×вес порции; иначе число г."""
     low = text.lower().strip()
-    whole = "пачк" in low or "упаков" in low or "цел" in low or low in ("всё", "все")
-    if package_g and whole:
+    if package_g and ("пачк" in low or "упаков" in low or "цел" in low or low in ("всё", "все")):
         return package_g
     n = _first_number(text)
+    if serving_g and "порц" in low:  # «2 порции» = 2×вес порции, НЕ 2 грамма (багрепорт #10)
+        return (n or 1) * serving_g
     return n if n and n > 0 else None
 
 

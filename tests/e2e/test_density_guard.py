@@ -29,6 +29,15 @@ def _fish(kcal: float, p: float, f: float, c: float) -> ParsedMessage:
     )
 
 
+def test_names_compatible_blocks_nut_collision() -> None:
+    from app.application.meal_service import _names_compatible
+
+    # багрепорт #11: «молоко миндальное» vs «молоко макадамии» = 0.606 — РАЗНАЯ еда, не reuse
+    assert _names_compatible("молоко миндальное", "молоко макадамии") is False
+    assert _names_compatible("куриная грудка", "куриная грудка отварная") is True  # уточнение
+    assert _names_compatible("молоко миндальное", "молоко миндальное") is True  # точное
+
+
 async def test_key_collision_keeps_user_food() -> None:
     # Багрепорт #3: LLM отдал ЧУЖОЙ ключ macadamia_milk для миндального молока → не берём пин,
     # пишем как сказал юзер с его плотностью (а не «молоко макадамии» @ 40).
