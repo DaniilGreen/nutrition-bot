@@ -55,7 +55,7 @@ def test_daily_card_has_bar_and_remaining() -> None:
     rem = remaining(Macros(500, 40, 20, 50), Goal(2000, 150, 65, 250))
     text = format_result(DailyStats(remaining=rem, meals_count=2))
     assert "📊 Сегодня" in text
-    assert "▰" in text or "▱" in text  # полоска стиля C
+    assert "█" in text or "░" in text  # полоска (█/░)
     assert "<code>" in text  # выровненная сетка моноширинно
     assert "2000" in text  # цель ккал в строке грида (500/2000)
 
