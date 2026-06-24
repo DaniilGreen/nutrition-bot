@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from io import BytesIO
+
+from PIL import Image
 
 from app.application.results import MonthReport
 from app.bot.dashboard_image import (
@@ -76,6 +79,15 @@ def test_render_heatmap_streak_badge() -> None:
     # последние дни подряд в цели → бейдж серии (streak >= 2)
     days = [(date(2026, 6, 1) + timedelta(days=i), 1800.0) for i in range(10)]
     assert render_heatmap(days, 2000)[:8] == _PNG
+
+
+def test_render_heatmap_last_cell_not_clipped() -> None:
+    # регрессия: сдвиг первой недели не должен обрезать последнюю строку
+    days = [(date(2026, 5, 28) + timedelta(days=i), 1800.0) for i in range(28)]
+    img = Image.open(BytesIO(render_heatmap(days, 2000)))
+    cell, gap, top = 56, 8, 80
+    last_row = (days[0][0].weekday() + len(days) - 1) // 7
+    assert img.height >= top + last_row * (cell + gap) + cell  # последняя клетка влезает
 
 
 def test_render_goal_card() -> None:

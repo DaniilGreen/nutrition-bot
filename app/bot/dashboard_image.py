@@ -118,14 +118,14 @@ def render_today(rem: Remaining) -> bytes:
 
 def render_day_card(rem: Remaining, day: date) -> bytes:
     """Карточка дня для шеринга: дата · бары · кольцо Б/Ж/У · подвал."""
-    img = Image.new("RGB", (720, 600), _BG)
+    img = Image.new("RGB", (720, 620), _BG)
     d = ImageDraw.Draw(img)
     title = f"{day.day} {_MON[day.month - 1]}"
     d.text((24, 22), title, font=_font(30, True), fill=_INK, anchor="lt")
     d.line([(24, 70), (696, 70)], fill=_MUTED, width=2)
     bottom = _draw_bars(d, rem, 24, 88, 696)
-    _draw_ring(d, rem.consumed, 360, bottom + 128, 104)
-    d.text((24, 568), "BurnFat · учёт КБЖУ", font=_font(16), fill=_GREY, anchor="lt")
+    _draw_ring(d, rem.consumed, 360, bottom + 120, 100)  # кольцо + легенда (≈ до y 560)
+    d.text((24, 592), "@Nutrition_calorie_bot · учёт КБЖУ", font=_font(16), fill=_GREY, anchor="lt")
     return _png(img)
 
 
@@ -239,7 +239,8 @@ def render_weight_chart(points: list[tuple[datetime, float]]) -> bytes:
 def render_heatmap(days: list[tuple[date, float]], goal: float) -> bytes:
     """Календарь-хитмап: клетка на день, цвет = ккал/цель (серый-зелёный-красный)."""
     cell, gap, top, left = 56, 8, 80, 24
-    weeks = (len(days) + 6) // 7
+    pad = days[0][0].weekday() if days else 0  # сдвиг первой недели по дню недели
+    weeks = (pad + len(days) + 6) // 7  # учитываем сдвиг — иначе последняя неделя обрезается
     img = Image.new("RGB", (left * 2 + 7 * (cell + gap), top + weeks * (cell + gap) + 20), _BG)
     d = ImageDraw.Draw(img)
     d.text((left, 18), "Дни в цели", font=_font(24, True), fill=_INK, anchor="lt")
@@ -258,7 +259,6 @@ def render_heatmap(days: list[tuple[date, float]], goal: float) -> bytes:
     for i, wd in enumerate(_WD):
         wx = left + i * (cell + gap) + cell // 2
         d.text((wx, 56), wd, font=_font(15), fill=_GREY, anchor="mm")
-    pad = days[0][0].weekday() if days else 0  # первая неделя по дню недели
     for idx, (day, kcal) in enumerate(days):
         slot = idx + pad
         x = left + (slot % 7) * (cell + gap)
