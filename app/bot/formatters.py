@@ -229,6 +229,14 @@ def _day_title(d: date, days_ago: int) -> str:
     return f"{label}, {ds}" if label else ds
 
 
+def day_photo_caption(r: DayView) -> str:
+    """Подпись к карточке дня (История картинкой): заголовок + список (бары — в картинке)."""
+    title = _day_title(r.day, r.days_ago)
+    if not r.meals:
+        return f"🗒 {title} · ничего не записано"
+    return f"🗒 {title}\n{_eaten_lines(r.meals, r.timezone)}".rstrip()
+
+
 def _format_day_view(r: DayView) -> str:
     title = _day_title(r.day, r.days_ago)
     if not r.meals:

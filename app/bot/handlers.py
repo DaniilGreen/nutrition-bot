@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from contextlib import suppress
+from datetime import datetime
 from html import escape
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -36,16 +37,22 @@ from app.application.results import (
     MealLogged,
     Result,
     VariantClarificationNeeded,
+    WeightLogged,
+    WeightTrend,
 )
 from app.bot.dashboard_image import (
     render_dashboard,
     render_day_card,
+    render_goal_card,
     render_heatmap,
+    render_label_card,
+    render_month_card,
     render_today,
     render_weekly_chart,
     render_weight_chart,
 )
 from app.bot.formatters import (
+    day_photo_caption,
     format_goal,
     format_result,
     meal_photo_caption,
@@ -300,7 +307,7 @@ async def on_goal(
         carb_g=round(kcal * 0.45 / 4),
     )
     await users.set_goal(app_user.id, goal)
-    await message.answer(f"🎯 Цель обновлена:\n{format_goal(goal)}")
+    await _send_goal_card(message, goal, f"🎯 Цель обновлена\n{format_goal(goal)}")
 
 
 @router.message(Command("today"))
@@ -331,6 +338,17 @@ async def cmd_streak(message: Message, app_user: User, assistant: Assistant) -> 
         return
     png = render_heatmap(days, goal.daily_kcal)
     await message.answer_photo(BufferedInputFile(png, "streak.png"), caption="📅 Дни в цели")
+
+
+@router.message(Command("month"))
+async def cmd_month(message: Message, app_user: User, assistant: Assistant) -> None:
+    """Отчёт за 30 дней картинкой: среднее КБЖУ, дней в цели, Δ веса."""
+    rep = await assistant.month_report(app_user)
+    if rep.days_logged == 0:
+        await message.answer("За последние 30 дней записей нет — поедим, потом покажу отчёт 📅")
+        return
+    png = render_month_card(rep)
+    await message.answer_photo(BufferedInputFile(png, "month.png"), caption="📅 Отчёт за 30 дней")
 
 
 @router.message(Command("history"))
@@ -404,10 +422,10 @@ async def btn_goal(
 ) -> None:
     await state.clear()
     goal = await assistant.current_goal(app_user)
-    await message.answer(
-        "🎯 Цель на день:\n"
-        f"{format_goal(goal)}\n\n"
-        "Изменить: <code>/goal 1800</code> или ⚙️ Профиль (авто)."
+    await _send_goal_card(
+        message, goal,
+        f"🎯 Цель на день\n{format_goal(goal)}\n\n"
+        "Изменить: <code>/goal 1800</code> или ⚙️ Профиль (авто).",
     )
 
 
@@ -674,6 +692,7 @@ async def on_voice(
     result = await assistant.process(app_user, transcript, input_type="voice")
     await session.commit()
     await _reply_message(message, result, state, raw=transcript)
+    await _maybe_weight_chart(message, app_user, assistant, result)
 
 
 @router.message(F.photo)
@@ -710,6 +729,11 @@ async def on_photo(
             await session.commit()
             await _reply_message(message, final, state, raw="этикетка")
             return
+        card = render_label_card(
+            item.name, item.kcal_per_100g, item.protein_per_100g,
+            item.fat_per_100g, item.carb_per_100g,
+        )
+        await message.answer_photo(BufferedInputFile(card, "label.png"))  # инфо-карточка КБЖУ/100г
         await state.set_state(MealStates.awaiting_label_grams)
         await state.update_data(draft=result.draft, item_index=result.item_index, raw="этикетка")
         await message.answer(
@@ -786,6 +810,7 @@ async def on_text(
     result = await assistant.process(app_user, message.text or "", input_type="text")
     await session.commit()  # фиксируем запись ДО ответа — «✅ записал» не врёт
     await _reply_message(message, result, state, raw=message.text or "")
+    await _maybe_weight_chart(message, app_user, assistant, result)
 
 
 @router.message(
@@ -1035,7 +1060,7 @@ async def on_profile_goal(
         )
     else:
         tail = "\n\nПоменять: <code>/goal 1800</code>"
-    await callback.message.answer(f"✅ Дневная цель:\n{format_goal(goal)}{tail}")
+    await _send_goal_card(callback.message, goal, f"✅ Дневная цель\n{format_goal(goal)}{tail}")
     await callback.answer()
 
 
@@ -1046,8 +1071,13 @@ async def on_day_nav(callback: CallbackQuery, app_user: User, assistant: Assista
         await callback.answer()
         return
     days_ago = max(0, int((callback.data or "day_nav:0").split(":", 1)[1]))
-    dv = await assistant.day_view(app_user, days_ago)
-    await _safe_edit(callback.message, format_result(dv), day_nav_keyboard(dv.days_ago))
+    rem, dv = await assistant.day_card(app_user, days_ago)
+    media = InputMediaPhoto(
+        media=BufferedInputFile(render_day_card(rem, dv.day), "day.png"),
+        caption=_cap(day_photo_caption(dv)),
+    )
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_media(media, reply_markup=day_nav_keyboard(dv.days_ago))
     await callback.answer()
 
 
@@ -1102,15 +1132,19 @@ async def _show_weight(message: Message, app_user: User, assistant: Assistant) -
     if len(trend.logs) < 2:  # 0–1 точка — график не построить, отдаём текст
         await message.answer(format_result(trend))
         return
-    pts = [(log.measured_at, log.weight_kg) for log in reversed(trend.logs)]  # старые→новые
     await message.answer_photo(
-        BufferedInputFile(render_weight_chart(pts), "weight.png"), caption="⚖️ Тренд веса"
+        BufferedInputFile(render_weight_chart(_weight_points(trend)), "weight.png"),
+        caption="⚖️ Тренд веса",
     )
 
 
 async def _show_history(message: Message, app_user: User, assistant: Assistant) -> None:
-    dv = await assistant.day_view(app_user)  # вар. A: день со стрелками, начинаем с сегодня
-    await message.answer(format_result(dv), reply_markup=day_nav_keyboard(dv.days_ago))
+    rem, dv = await assistant.day_card(app_user)  # день карточкой-картинкой, стрелки ← →
+    png = render_day_card(rem, dv.day)
+    await message.answer_photo(
+        BufferedInputFile(png, "day.png"),
+        caption=_cap(day_photo_caption(dv)), reply_markup=day_nav_keyboard(dv.days_ago),
+    )
 
 
 async def _show_undo_picker(message: Message, app_user: User, assistant: Assistant) -> None:
@@ -1236,6 +1270,33 @@ async def _render_after_continue(
         await state.clear()
         markup = meal_actions_keyboard(result.meal) if isinstance(result, MealLogged) else None
         await _safe_edit(message, format_result(result), markup)
+
+
+def _cap(text: str) -> str:
+    """Подпись Telegram ≤1024 символов — длинную режем с многоточием."""
+    return text if len(text) <= 1024 else text[:1020] + "…"
+
+
+def _weight_points(trend: WeightTrend) -> list[tuple[datetime, float]]:
+    return [(log.measured_at, log.weight_kg) for log in reversed(trend.logs)]  # старые→новые
+
+
+async def _send_goal_card(message: Message, goal: Goal, caption: str) -> None:
+    png = render_goal_card(goal)
+    await message.answer_photo(BufferedInputFile(png, "goal.png"), caption=_cap(caption))
+
+
+async def _maybe_weight_chart(
+    message: Message, app_user: User, assistant: Assistant, result: Result
+) -> None:
+    """После записи веса — бонусом график тренда (если есть ≥2 замеров)."""
+    if not isinstance(result, WeightLogged):
+        return
+    trend = await assistant.weight_trend(app_user)
+    if len(trend.logs) >= 2:
+        await message.answer_photo(
+            BufferedInputFile(render_weight_chart(_weight_points(trend)), "weight.png")
+        )
 
 
 async def _edit_card(message: Message, text: str, markup: object = None) -> None:

@@ -12,7 +12,8 @@ from io import BytesIO
 
 from PIL import Image, ImageDraw, ImageFont
 
-from app.domain.goals import Remaining
+from app.application.results import MonthReport
+from app.domain.goals import Goal, Remaining
 from app.domain.value_objects import Macros
 
 _FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -36,6 +37,12 @@ def _png(img: Image.Image) -> bytes:
     buf = BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
+
+
+def _delta_str(delta: float | None) -> str:
+    if delta is None:
+        return "—"
+    return f"{'+' if delta > 0 else ''}{delta:g} кг"
 
 
 def _draw_bars(d: ImageDraw.ImageDraw, rem: Remaining, x: int, y: int, w: int) -> int:
@@ -122,6 +129,54 @@ def render_day_card(rem: Remaining, day: date) -> bytes:
     return _png(img)
 
 
+def render_goal_card(goal: Goal) -> bytes:
+    """Карточка дневной цели: кольцо целевых Б/Ж/У, центр — целевые ккал."""
+    img = Image.new("RGB", (560, 380), _BG)
+    d = ImageDraw.Draw(img)
+    d.text((280, 30), "Цель на день", font=_font(26, True), fill=_INK, anchor="mt")
+    target = Macros(goal.daily_kcal, goal.protein_g, goal.fat_g, goal.carb_g)
+    _draw_ring(d, target, 280, 210, 110)
+    return _png(img)
+
+
+def render_month_card(rep: MonthReport) -> bytes:
+    """Отчёт за период: ср. ккал, дней в цели, Δ веса + кольцо средних Б/Ж/У в день."""
+    img = Image.new("RGB", (720, 420), _BG)
+    d = ImageDraw.Draw(img)
+    head = f"Последние {rep.total_days} дней"
+    d.text((24, 22), head, font=_font(26, True), fill=_INK, anchor="lt")
+    d.line([(24, 66), (696, 66)], fill=_MUTED, width=2)
+    metrics = (
+        (f"{round(rep.avg_kcal)}", "ср. ккал/день"),
+        (f"{rep.days_in_goal}/{rep.days_logged}", "дней в цели"),
+        (_delta_str(rep.weight_delta), "вес за период"),
+    )
+    for i, (val, lab) in enumerate(metrics):
+        y = 110 + i * 88
+        d.text((40, y), val, font=_font(34, True), fill=_INK, anchor="lt")
+        d.text((40, y + 44), lab, font=_font(17), fill=_GREY, anchor="lt")
+    _draw_ring(d, rep.avg_macros, 530, 230, 108)
+    return _png(img)
+
+
+def render_label_card(name: str, kcal: float, protein: float, fat: float, carb: float) -> bytes:
+    """Карточка распознанной этикетки: имя + КБЖУ на 100 г (цветные точки макросов)."""
+    img = Image.new("RGB", (640, 260), _BG)
+    d = ImageDraw.Draw(img)
+    d.text((24, 22), "Прочитал этикетку", font=_font(22, True), fill=_INK, anchor="lt")
+    nm = name if len(name) <= 36 else name[:35] + "…"
+    d.text((24, 58), nm, font=_font(19), fill=_GREY, anchor="lt")
+    rows = (("Ккал", kcal, _COLORS[0]), ("Белок", protein, _COLORS[1]),
+            ("Жир", fat, _COLORS[2]), ("Углеводы", carb, _COLORS[3]))
+    for i, (lab, val, col) in enumerate(rows):
+        y = 102 + i * 34
+        d.ellipse([24, y + 3, 40, y + 19], fill=col)
+        d.text((54, y), lab, font=_font(18, True), fill=_INK, anchor="lt")
+        d.text((300, y), f"{round(val)}", font=_font(18), fill=_INK, anchor="lt")
+    d.text((300, 102 + 4 * 34 + 4), "на 100 г", font=_font(14), fill=_GREY, anchor="lt")
+    return _png(img)
+
+
 def render_weekly_chart(days: list[tuple[date, float]], goal: float) -> bytes:
     """Столбики калорий за N дней + пунктир цели. Зелёный ≤ цели, красный > цели."""
     img = Image.new("RGB", (720, 380), _BG)
@@ -188,6 +243,18 @@ def render_heatmap(days: list[tuple[date, float]], goal: float) -> bytes:
     img = Image.new("RGB", (left * 2 + 7 * (cell + gap), top + weeks * (cell + gap) + 20), _BG)
     d = ImageDraw.Draw(img)
     d.text((left, 18), "Дни в цели", font=_font(24, True), fill=_INK, anchor="lt")
+    streak = 0  # подряд идущие дни в цели, заканчивая последним днём с записью
+    for _day, kcal in reversed(days):
+        if kcal <= 0:
+            if streak == 0:
+                continue  # хвостовые незаполненные (сегодня ещё не ел) — не рвут серию
+            break
+        if goal and kcal > goal * 1.1:
+            break
+        streak += 1
+    if streak >= 2:
+        d.text((img.width - left, 26), f"серия {streak} дн.", font=_font(18, True),
+               fill=_OK, anchor="rt")
     for i, wd in enumerate(_WD):
         wx = left + i * (cell + gap) + cell // 2
         d.text((wx, 56), wd, font=_font(15), fill=_GREY, anchor="mm")

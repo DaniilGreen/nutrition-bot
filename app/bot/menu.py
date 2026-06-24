@@ -8,6 +8,7 @@ _COMMANDS = [
     BotCommand(command="start", description="Старт и меню"),
     BotCommand(command="today", description="Сегодня"),
     BotCommand(command="week", description="За неделю (график)"),
+    BotCommand(command="month", description="Отчёт за 30 дней"),
     BotCommand(command="streak", description="Календарь дней в цели"),
     BotCommand(command="card", description="Карточка дня (картинка)"),
     BotCommand(command="history", description="История"),

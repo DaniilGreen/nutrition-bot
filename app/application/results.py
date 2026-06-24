@@ -83,6 +83,19 @@ class WeeklyStats:
 
 
 @dataclass
+class MonthReport:
+    """Отчёт за период (FR-29): средние/день, дни в цели, Δ веса — для картинки /month."""
+
+    total_days: int
+    days_logged: int
+    days_in_goal: int
+    avg_kcal: float
+    avg_macros: Macros
+    weight_delta: float | None
+    goal: Goal
+
+
+@dataclass
 class History:
     meals: list[Meal]
     timezone: str

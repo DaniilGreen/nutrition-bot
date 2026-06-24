@@ -1,12 +1,16 @@
 """Картинки дашбордов/графиков: каждый рендер возвращает валидный PNG (без дисплея/сети)."""
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
+from app.application.results import MonthReport
 from app.bot.dashboard_image import (
     render_dashboard,
     render_day_card,
+    render_goal_card,
     render_heatmap,
+    render_label_card,
+    render_month_card,
     render_today,
     render_weekly_chart,
     render_weight_chart,
@@ -66,3 +70,27 @@ def test_render_heatmap_28_days_with_pad() -> None:
     # старт в среду (pad=2): первая неделя смещена, нули серым, перебор красным
     days = [(date(2026, 6, 3 + i), float((i * 311) % 2600)) for i in range(28)]
     assert render_heatmap(days, 2000)[:8] == _PNG
+
+
+def test_render_heatmap_streak_badge() -> None:
+    # последние дни подряд в цели → бейдж серии (streak >= 2)
+    days = [(date(2026, 6, 1) + timedelta(days=i), 1800.0) for i in range(10)]
+    assert render_heatmap(days, 2000)[:8] == _PNG
+
+
+def test_render_goal_card() -> None:
+    assert render_goal_card(Goal(2000, 150, 60, 220))[:8] == _PNG
+
+
+def test_render_month_card() -> None:
+    g = Goal(2000, 150, 60, 220)
+    rep = MonthReport(30, 22, 18, 1850.0, Macros(1850, 120, 60, 200), -1.4, g)
+    assert render_month_card(rep)[:8] == _PNG
+    rep_none = MonthReport(30, 5, 3, 1700.0, Macros(1700, 100, 55, 180), None, g)  # Δ веса нет
+    assert render_month_card(rep_none)[:8] == _PNG
+
+
+def test_render_label_card() -> None:
+    assert render_label_card("Творог 5%", 121, 17, 5, 3)[:8] == _PNG
+    long = "Очень длинное название продукта которое точно не влезет в карточку"
+    assert render_label_card(long, 250, 10, 12, 30)[:8] == _PNG

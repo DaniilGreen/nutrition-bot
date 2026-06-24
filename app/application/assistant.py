@@ -23,6 +23,7 @@ from app.application.results import (
     LabelRead,
     MealDeleted,
     MealLogged,
+    MonthReport,
     Result,
     Unknown,
     VariantClarificationNeeded,
@@ -33,10 +34,10 @@ from app.application.results import (
 from app.application.stats_service import StatsService
 from app.application.weight_service import WeightService
 from app.domain.consensus import confidence_from_cv, median_cv
-from app.domain.goals import Goal
+from app.domain.goals import Goal, Remaining, remaining
 from app.domain.nutrition import atwater_suspect
 from app.domain.plausibility import clamp_density, is_alcoholic
-from app.domain.value_objects import Density
+from app.domain.value_objects import Density, Macros, sum_macros
 
 
 class Assistant:
@@ -177,6 +178,27 @@ class Assistant:
     async def day_calories(self, user: User, n: int) -> tuple[list[tuple[date, float]], Goal]:
         """(дни с ккал, цель) за n дней — для графика недели и хитмапа (картинки)."""
         return await self._stats.last_days(user, n), await self._stats.current_goal(user)
+
+    async def day_card(self, user: User, days_ago: int = 0) -> tuple[Remaining, DayView]:
+        """День для карточки-картинки (История): остаток дня + приёмы (для подписи)."""
+        dv = await self.day_view(user, days_ago)
+        consumed = sum_macros(m.totals for m in dv.meals)
+        goal = await self._stats.current_goal(user)
+        return remaining(consumed, goal), dv
+
+    async def month_report(self, user: User, days: int = 30) -> MonthReport:
+        """Отчёт за период для картинки /month (FR-29): средние/день, дни в цели, Δ веса."""
+        perday, goal = await self.day_calories(user, days)
+        consumed, _dl = await self._stats.period(user, days)
+        logged = [k for _, k in perday if k > 0]
+        n = max(1, len(logged))
+        avg = Macros(consumed.kcal / n, consumed.protein / n, consumed.fat / n, consumed.carb / n)
+        in_goal = sum(1 for k in logged if k <= goal.daily_kcal * 1.1)
+        trend = await self.weight_trend(user, limit=days)
+        wd = None
+        if len(trend.logs) >= 2:  # logs newest-first: [0]=последний, [-1]=первый за период
+            wd = round(trend.logs[0].weight_kg - trend.logs[-1].weight_kg, 1)
+        return MonthReport(days, len(logged), in_goal, avg.kcal, avg, wd, goal)
 
     async def weight_trend(self, user: User, limit: int = 14) -> WeightTrend:
         logs = await self._weights.history(user, limit)
