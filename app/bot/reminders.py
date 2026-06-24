@@ -11,8 +11,10 @@ from contextlib import suppress
 from datetime import date
 
 from aiogram import Bot
+from aiogram.types import BufferedInputFile
 
-from app.bot.formatters import format_result
+from app.bot.dashboard_image import render_today
+from app.bot.formatters import today_photo_caption
 from app.container import Container
 from app.domain.timeframe import reminder_due
 
@@ -45,8 +47,16 @@ async def _tick(bot: Bot, container: Container, hour: int, sent: dict[int, date]
             if stats.meals_count == 0:
                 continue  # нечего подытоживать — не дёргаем
             sent[user.telegram_id] = today
+            png = render_today(stats.remaining)  # бары+кольцо картинкой, как 📊 Сегодня
+            caption = "🌙 Итог дня\n\n" + today_photo_caption(stats)
             with suppress(Exception):
-                await bot.send_message(
-                    user.telegram_id, "🌙 Итог дня\n\n" + format_result(stats)
-                )
+                if len(caption) <= 1024:  # лимит подписи Telegram
+                    await bot.send_photo(
+                        user.telegram_id, BufferedInputFile(png, "today.png"), caption=caption
+                    )
+                else:  # длинный список — фото с краткой подписью + список отдельным сообщением
+                    await bot.send_photo(
+                        user.telegram_id, BufferedInputFile(png, "today.png"), caption="🌙 Итог дня"
+                    )
+                    await bot.send_message(user.telegram_id, today_photo_caption(stats))
         await session.commit()
