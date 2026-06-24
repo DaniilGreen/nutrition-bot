@@ -317,20 +317,19 @@ def _dashboard(rem: Remaining) -> str:
 
 
 def _macro_line(label: str, consumed: float, goal: float) -> str:
-    """Строка макроса: ПОЛОСКА первой (col 0) → выравнивается на любой платформе. На Android
-    кириллица в <code> не моноширинна, поэтому подпись/числа в ХВОСТ — их «рваность» не видна.
-    Бар (рамочные символы) + % — единственное, что выровнено; считаем по точным значениям."""
+    """Строка макроса (подпись первой). Числа округляем до целых, поля фикс-ширины.
+    Глиф полоски — █/░ (дефолт _bar): полные блоки ровнее ▰▱. Бар по точным значениям."""
     pct = round(100 * consumed / goal) if goal else 0
     nums = f"{round(consumed)}/{round(goal)}"
-    return f"{_bar(consumed, goal)} {pct:>3}% · {label} {nums}"
+    return f"{label:<10} {nums:<9} {_bar(consumed, goal)} {pct}%"
 
 
 def _remaining_block(rem: Remaining) -> str:
     return _dashboard(rem)
 
 
-def _bar(value: float, goal: float, fill: str = "▰", empty: str = "▱", width: int = 10) -> str:
-    """Текстовая полоска (стиль C ▰▱ по умолчанию); fill/empty параметризованы (FR-9)."""
+def _bar(value: float, goal: float, fill: str = "█", empty: str = "░", width: int = 10) -> str:
+    """Текстовая полоска (█/░ — полные блоки, ровнее ▰▱ на Android); fill/empty парам. (FR-9)."""
     if goal <= 0:
         return empty * width
     ratio = 0.0 if value < 0 else min(1.0, value / goal)

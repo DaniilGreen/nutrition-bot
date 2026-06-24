@@ -31,11 +31,11 @@ def test_unknown_reason_routing() -> None:
 
 
 def test_bar_fill_levels() -> None:
-    assert _bar(0, 100, width=10) == "▱" * 10
-    assert _bar(100, 100, width=10) == "▰" * 10
-    assert _bar(50, 100, width=10) == "▰" * 5 + "▱" * 5
-    assert _bar(200, 100, width=10) == "▰" * 10  # перебор — заполнен, не длиннее
-    assert _bar(50, 0, width=10) == "▱" * 10  # нулевая цель безопасна
+    assert _bar(0, 100, width=10) == "░" * 10
+    assert _bar(100, 100, width=10) == "█" * 10
+    assert _bar(50, 100, width=10) == "█" * 5 + "░" * 5
+    assert _bar(200, 100, width=10) == "█" * 10  # перебор — заполнен, не длиннее
+    assert _bar(50, 0, width=10) == "░" * 10  # нулевая цель безопасна
 
 
 def test_escape_dynamic() -> None:
