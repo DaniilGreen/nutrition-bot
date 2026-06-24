@@ -17,10 +17,12 @@ from app.domain.value_objects import Macros
 
 _FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 _FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-# цвета: ккал-оранжевый, белок-красный, жир-золотой, угл-коричневый; статусы под/над целью
-_COLORS = ((240, 138, 0), (214, 69, 65), (224, 168, 0), (150, 111, 51))
-_OK, _OVER, _MUTED, _BG = (76, 175, 80), (224, 90, 80), (233, 233, 233), (255, 255, 255)
-_INK, _GREY = (30, 30, 30), (110, 110, 110)
+# тёмная тема, палитра «Минимал»: Ккал-василёк (отдельно от макросов), Белок-красный,
+# Жир-янтарь, Углеводы-тил. Ккал намеренно другого семейства — читается как «итог».
+_COLORS = ((124, 156, 224), (235, 122, 120), (224, 169, 59), (95, 188, 176))
+_OK, _OVER, _OK_DIM = (92, 184, 122), (232, 115, 111), (58, 96, 80)  # в цели / перебор / мало
+_MUTED, _BG = (52, 57, 66), (28, 31, 38)  # пустой бар/клетка · тёмный фон карточки
+_INK, _GREY = (237, 239, 243), (151, 157, 166)  # светлый текст · приглушённый
 _WD = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
 _MON = ("янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
 
@@ -130,7 +132,7 @@ def render_weekly_chart(days: list[tuple[date, float]], goal: float) -> bytes:
     maxv = max([k for _, k in days] + [goal, 1.0]) * 1.12
     gy = mt + plot_h * (1 - goal / maxv)
     for gx in range(ml, 700, 14):  # пунктир цели
-        d.line([(gx, gy), (gx + 7, gy)], fill=(170, 170, 170), width=2)
+        d.line([(gx, gy), (gx + 7, gy)], fill=_GREY, width=2)
     d.text((696, gy - 6), f"цель {round(goal)}", font=_font(15), fill=_GREY, anchor="rb")
     slot = plot_w / max(1, len(days))
     bw = slot * 0.6
@@ -148,23 +150,30 @@ def render_weekly_chart(days: list[tuple[date, float]], goal: float) -> bytes:
 
 
 def render_weight_chart(points: list[tuple[datetime, float]]) -> bytes:
-    """Линия тренда веса по датам (точки + значения концов + дельта)."""
-    img = Image.new("RGB", (720, 340), _BG)
+    """Линия тренда веса: точки, ДАТЫ по оси X, значения концов и дельта за период."""
+    img = Image.new("RGB", (720, 360), _BG)
     d = ImageDraw.Draw(img)
     d.text((24, 18), "Вес", font=_font(24, True), fill=_INK, anchor="lt")
-    ml, mt, mb, mr = 24, 70, 46, 70
-    plot_h, plot_w = 340 - mt - mb, 720 - ml - mr
+    ml, mt, mb, mr = 24, 70, 64, 70
+    plot_h, plot_w = 360 - mt - mb, 720 - ml - mr
     ws = [w for _, w in points]
     lo, hi = min(ws), max(ws)
     span = (hi - lo) or 1.0
     n = len(points)
     xs = [ml + (plot_w * i / max(1, n - 1)) for i in range(n)]
     ys = [mt + plot_h * (1 - (w - lo) / span) for w in ws]
+    base = mt + plot_h
+    d.line([(ml, base), (ml + plot_w, base)], fill=_MUTED, width=2)  # ось X
     d.line(list(zip(xs, ys, strict=True)), fill=_COLORS[0], width=3, joint="curve")
     for x, y in zip(xs, ys, strict=True):
         d.ellipse([x - 4, y - 4, x + 4, y + 4], fill=_COLORS[0])
     d.text((xs[0], ys[0] - 10), f"{ws[0]:g}", font=_font(16, True), fill=_INK, anchor="mb")
     d.text((xs[-1], ys[-1] - 10), f"{ws[-1]:g}", font=_font(16, True), fill=_INK, anchor="mb")
+    step = 1 if n <= 8 else (n + 6) // 7  # не чаще ~7 подписей дат, чтобы не слипались
+    for i, (dt, _w) in enumerate(points):
+        if i % step == 0 or i == n - 1:
+            d.text((xs[i], base + 10), f"{dt.day}.{dt.month:02d}", font=_font(14),
+                   fill=_GREY, anchor="ma")
     delta = round(ws[-1] - ws[0], 1)
     sign = "+" if delta > 0 else ""
     d.text((720 - mr, 24), f"{sign}{delta} кг", font=_font(20, True),
@@ -191,8 +200,8 @@ def render_heatmap(days: list[tuple[date, float]], goal: float) -> bytes:
             color = _MUTED
         else:
             r = kcal / goal if goal else 1.0
-            color = _OVER if r > 1.1 else _OK if r >= 0.5 else (200, 224, 200)
+            color = _OVER if r > 1.1 else _OK if r >= 0.5 else _OK_DIM
         d.rounded_rectangle([x, y, x + cell, y + cell], radius=8, fill=color)
         d.text((x + cell // 2, y + cell // 2), str(day.day), font=_font(16),
-               fill=_BG if kcal > 0 else _GREY, anchor="mm")
+               fill=_INK if kcal > 0 else _GREY, anchor="mm")
     return _png(img)
