@@ -35,7 +35,7 @@ from app.application.results import (
 from app.application.stats_service import StatsService
 from app.application.weight_service import WeightService
 from app.domain.consensus import confidence_from_cv, median_cv
-from app.domain.goals import Goal, Remaining, remaining
+from app.domain.goals import Goal, Remaining, in_goal, remaining
 from app.domain.nutrition import atwater_suspect
 from app.domain.plausibility import clamp_density, is_alcoholic
 from app.domain.value_objects import Density, Macros, sum_macros
@@ -189,12 +189,14 @@ class Assistant:
 
     async def month_report(self, user: User, days: int = 30) -> MonthReport:
         """Отчёт за период для картинки /month (FR-29): средние/день, дни в цели, Δ веса."""
+        # ponytail: окно читается из БД дважды (last_days по дням + period целиком) — при 2 юзерах
+        # и редком /month дешевле, чем тащить per-day макросы; объединить, если станет горячо.
         perday, goal = await self.day_calories(user, days)
         consumed = await self._stats.period(user, days)
         logged = [k for _, k in perday if k > 0]
         n = max(1, len(logged))
         avg = Macros(consumed.kcal / n, consumed.protein / n, consumed.fat / n, consumed.carb / n)
-        in_goal = sum(1 for k in logged if k <= goal.daily_kcal * 1.1)
+        goal_days = sum(1 for k in logged if in_goal(k, goal.daily_kcal))  # коридор как в /streak
         # Δ веса — по замерам ВНУТРИ окна периода (а не по числу записей): при редком
         # взвешивании limit=days охватил бы больше дней, чем заявлено в подписи «вес за период».
         tz = ZoneInfo(user.timezone)
@@ -202,7 +204,7 @@ class Assistant:
         logs = (await self.weight_trend(user, limit=days * 4)).logs  # ponytail: до ~4 замеров/день
         win = [lg for lg in logs if start and lg.measured_at.astimezone(tz).date() >= start]
         wd = round(win[0].weight_kg - win[-1].weight_kg, 1) if len(win) >= 2 else None
-        return MonthReport(days, len(logged), in_goal, avg.kcal, avg, wd, goal)
+        return MonthReport(days, len(logged), goal_days, avg, wd)
 
     async def weight_trend(self, user: User, limit: int = 14) -> WeightTrend:
         logs = await self._weights.history(user, limit)

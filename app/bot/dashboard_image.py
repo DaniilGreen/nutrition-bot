@@ -13,7 +13,7 @@ from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 
 from app.application.results import MonthReport
-from app.domain.goals import Goal, Remaining
+from app.domain.goals import IN_GOAL_HIGH, Goal, Remaining, in_goal
 from app.domain.value_objects import Macros
 
 _FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -147,7 +147,7 @@ def render_month_card(rep: MonthReport) -> bytes:
     d.text((24, 22), head, font=_font(26, True), fill=_INK, anchor="lt")
     d.line([(24, 66), (696, 66)], fill=_MUTED, width=2)
     metrics = (
-        (f"{round(rep.avg_kcal)}", "ср. ккал/день"),
+        (f"{round(rep.avg_macros.kcal)}", "ср. ккал/день"),
         (f"{rep.days_in_goal}/{rep.days_logged}", "дней в цели"),
         (_delta_str(rep.weight_delta), "вес за период"),
     )
@@ -245,7 +245,7 @@ def _streak(days: list[tuple[date, float]], goal: float) -> int:
             if n == 0:
                 continue  # сегодня ещё не ел — не рвёт серию
             break
-        if goal and not (goal * 0.5 <= kcal <= goal * 1.1):
+        if not in_goal(kcal, goal):  # тот же коридор, что и раскраска клеток
             break
         n += 1
     return n
@@ -272,9 +272,12 @@ def render_heatmap(days: list[tuple[date, float]], goal: float) -> bytes:
         y = top + (slot // 7) * (cell + gap)
         if kcal <= 0:
             color = _MUTED
+        elif goal and kcal > goal * IN_GOAL_HIGH:
+            color = _OVER
+        elif in_goal(kcal, goal):
+            color = _OK
         else:
-            r = kcal / goal if goal else 1.0
-            color = _OVER if r > 1.1 else _OK if r >= 0.5 else _OK_DIM
+            color = _OK_DIM  # залогирован, но <50% цели — недобор
         d.rounded_rectangle([x, y, x + cell, y + cell], radius=8, fill=color)
         d.text((x + cell // 2, y + cell // 2), str(day.day), font=_font(16),
                fill=_INK if kcal > 0 else _GREY, anchor="mm")

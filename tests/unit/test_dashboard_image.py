@@ -110,10 +110,9 @@ def test_render_goal_card() -> None:
 
 
 def test_render_month_card() -> None:
-    g = Goal(2000, 150, 60, 220)
-    rep = MonthReport(30, 22, 18, 1850.0, Macros(1850, 120, 60, 200), -1.4, g)
+    rep = MonthReport(30, 22, 18, Macros(1850, 120, 60, 200), -1.4)
     assert render_month_card(rep)[:8] == _PNG
-    rep_none = MonthReport(30, 5, 3, 1700.0, Macros(1700, 100, 55, 180), None, g)  # Δ веса нет
+    rep_none = MonthReport(30, 5, 3, Macros(1700, 100, 55, 180), None)  # Δ веса нет
     assert render_month_card(rep_none)[:8] == _PNG
 
 

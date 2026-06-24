@@ -1,7 +1,18 @@
 from __future__ import annotations
 
-from app.domain.goals import Goal, goal_from_profile, mifflin_st_jeor, remaining
+from app.domain.goals import Goal, goal_from_profile, in_goal, mifflin_st_jeor, remaining
 from app.domain.value_objects import Macros
+
+
+def test_in_goal_corridor() -> None:
+    # единый критерий «день в цели» = 0.5–1.1× цели (для /streak, хитмапа, /month)
+    assert in_goal(2000, 2000) is True
+    assert in_goal(1000, 2000) is True  # ровно 50% — нижняя граница
+    assert in_goal(2200, 2000) is True  # ровно 110% — верхняя граница
+    assert in_goal(999, 2000) is False  # <50% — недобор
+    assert in_goal(2300, 2000) is False  # >110% — перебор
+    assert in_goal(0, 2000) is False  # нет лога
+    assert in_goal(300, 0) is True  # без цели любой kcal>0 засчитан
 
 
 def test_remaining() -> None:

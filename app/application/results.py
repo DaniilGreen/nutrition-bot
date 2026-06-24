@@ -89,10 +89,8 @@ class MonthReport:
     total_days: int
     days_logged: int
     days_in_goal: int
-    avg_kcal: float
     avg_macros: Macros
     weight_delta: float | None
-    goal: Goal
 
 
 @dataclass

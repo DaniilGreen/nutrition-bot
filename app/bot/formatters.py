@@ -29,7 +29,6 @@ from app.application.results import (
     WeightTrend,
 )
 from app.domain.goals import Goal, Remaining
-from app.domain.value_objects import sum_macros
 
 _LOW_CONFIDENCE = 0.6  # ниже — помечаем разбор как сомнительный
 _SPARK = "▁▂▃▄▅▆▇█"
@@ -53,8 +52,6 @@ def format_result(result: Result) -> str:
         return _format_weight_trend(result)
     if isinstance(result, DailyStats):
         return _format_stats(result)
-    if isinstance(result, DayView):
-        return _format_day_view(result)
     if isinstance(result, WeeklyStats):
         return _format_weekly(result)
     if isinstance(result, History):
@@ -235,18 +232,6 @@ def day_photo_caption(r: DayView) -> str:
     if not r.meals:
         return f"🗒 {title} · ничего не записано"
     return f"🗒 {title}\n{_eaten_lines(r.meals, r.timezone)}".rstrip()
-
-
-def _format_day_view(r: DayView) -> str:
-    title = _day_title(r.day, r.days_ago)
-    if not r.meals:
-        return f"🗒 <b>{title}</b>\nПусто — в этот день ничего не записано."
-    t = sum_macros(m.totals for m in r.meals)
-    return (
-        f"🗒 <b>{title}</b>\n"
-        f"{_eaten_lines(r.meals, r.timezone)}"
-        f"─────\nИтого: <b>{_n(t.kcal)} ккал</b> · Б{_n(t.protein)} Ж{_n(t.fat)} У{_n(t.carb)}"
-    )
 
 
 def _format_weekly(r: WeeklyStats) -> str:

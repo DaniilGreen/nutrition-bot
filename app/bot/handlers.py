@@ -133,10 +133,13 @@ HELP_TEXT = (
     "✏️ <b>Исправить</b>\n"
     "• «удали рис» — уберу позицию\n"
     "• ↩️ Отменить — снять последнюю запись или отдельный продукт из неё\n\n"
-    "📊 <b>Посмотреть</b>\n"
-    "• 📊 Сегодня — съедено и остаток\n"
-    "• 📈 Неделя — среднее за 7 дней\n"
-    "• 🗒 История — последние записи\n\n"
+    "📊 <b>Посмотреть</b> (всё картинками)\n"
+    "• 📊 Сегодня — съедено, остаток и кольцо Б/Ж/У\n"
+    "• 📈 Неделя — график калорий по дням\n"
+    "• 🗒 История — день со стрелками ← →\n"
+    "• /month — отчёт за 30 дней\n"
+    "• /streak — календарь «дней в цели»\n"
+    "• /card — карточка дня для шеринга\n\n"
     "🎯 <b>Настрой под себя</b> — так остаток будет точным:\n"
     "• ⚙️ Профиль — пол, вес, рост, возраст, цель → посчитаю норму\n"
     "• /goal 1800 — задать цель вручную\n"
@@ -1223,6 +1226,18 @@ async def _busy_with_flow(message: Message, state: FSMContext) -> bool:
     return True
 
 
+async def _send_meal_card(message: Message, result: MealLogged) -> None:
+    """Фото-карточка приёма: бары картинкой + список в подписи + кнопки отмены (новое сообщение)."""
+    photo = BufferedInputFile(render_dashboard(result.remaining), "meal.png")
+    caption = meal_photo_caption(result)
+    kb = meal_actions_keyboard(result.meal)
+    if len(caption) <= 1024:  # лимит подписи Telegram
+        await message.answer_photo(photo, caption=caption, reply_markup=kb)
+    else:  # длинный приём — фото с краткой подписью + список отдельным сообщением
+        await message.answer_photo(photo, caption="✅ Записал")
+        await message.answer(caption, reply_markup=kb)
+
+
 async def _reply_message(
     message: Message, result: Result, state: FSMContext, *, raw: str
 ) -> None:
@@ -1238,15 +1253,7 @@ async def _reply_message(
             draft=result.draft, item_index=result.item_index, raw=raw, q_msg_id=sent.message_id
         )
     elif isinstance(result, MealLogged):
-        png = render_dashboard(result.remaining)  # бары картинкой, список съеденного — в подписи
-        photo = BufferedInputFile(png, "meal.png")
-        caption = meal_photo_caption(result)
-        kb = meal_actions_keyboard(result.meal)
-        if len(caption) <= 1024:  # лимит подписи Telegram
-            await message.answer_photo(photo, caption=caption, reply_markup=kb)
-        else:  # очень длинный приём — фото с краткой подписью + список отдельным сообщением
-            await message.answer_photo(photo, caption="✅ Записал")
-            await message.answer(caption, reply_markup=kb)
+        await _send_meal_card(message, result)
     else:
         await message.answer(format_result(result))
 
@@ -1268,8 +1275,12 @@ async def _render_after_continue(
         await _safe_edit(message, format_result(result), variant_keyboard(result.options))
     else:
         await state.clear()
-        markup = meal_actions_keyboard(result.meal) if isinstance(result, MealLogged) else None
-        await _safe_edit(message, format_result(result), markup)
+        if isinstance(result, MealLogged):  # финал и после кнопки — фото-карточкой, как при тексте
+            with suppress(TelegramBadRequest):
+                await message.edit_reply_markup(reply_markup=None)  # снять кнопки сообщения-вопроса
+            await _send_meal_card(message, result)
+        else:
+            await _safe_edit(message, format_result(result))
 
 
 def _cap(text: str) -> str:

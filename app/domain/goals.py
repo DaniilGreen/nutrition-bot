@@ -46,6 +46,18 @@ def remaining(consumed: Macros, goal: Goal) -> Remaining:
     return Remaining(consumed=consumed, goal=goal)
 
 
+# «День в цели»: коридор калорий как доля дневной цели — ЕДИНЫЙ критерий для /streak,
+# хитмапа и /month (иначе соседние экраны считают «дни в цели» по-разному).
+IN_GOAL_LOW, IN_GOAL_HIGH = 0.5, 1.1
+
+
+def in_goal(kcal: float, goal_kcal: float) -> bool:
+    """День «в цели» = 0.5–1.1× дневной цели. Без заданной цели — любой залогированный день."""
+    if goal_kcal <= 0:
+        return kcal > 0
+    return IN_GOAL_LOW * goal_kcal <= kcal <= IN_GOAL_HIGH * goal_kcal
+
+
 def mifflin_st_jeor(
     *,
     sex: Literal["male", "female"],
