@@ -49,6 +49,16 @@ class StatsService:
         meals.sort(key=lambda m: m.eaten_at, reverse=True)
         return meals
 
+    async def last_days(self, user: User, n: int) -> list[tuple[date, float]]:
+        """(дата, ккал) за n последних дней, старые→новые — для графика недели и хитмапа."""
+        tz = ZoneInfo(user.timezone)
+        out: list[tuple[date, float]] = []
+        for days_ago in range(n - 1, -1, -1):
+            meals = await self.day_meals(user, days_ago)
+            day = (self._clock() - timedelta(days=days_ago)).astimezone(tz).date()
+            out.append((day, sum(m.totals.kcal for m in meals)))
+        return out
+
     async def day_view(self, user: User, days_ago: int = 0) -> tuple[list[Meal], date]:
         """Приёмы за день ХРОНОЛОГИЧЕСКИ + дата дня (в TZ юзера) — для day-view с навигацией."""
         meals = list(reversed(await self.day_meals(user, days_ago)))

@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from datetime import date
 from statistics import median
 
 from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
@@ -172,6 +173,10 @@ class Assistant:
         """Просмотр одного дня (вар. A): приёмы хронологически + дата, для навигации ← / →."""
         meals, day = await self._stats.day_view(user, days_ago)
         return DayView(meals=meals, timezone=user.timezone, days_ago=days_ago, day=day)
+
+    async def day_calories(self, user: User, n: int) -> tuple[list[tuple[date, float]], Goal]:
+        """(дни с ккал, цель) за n дней — для графика недели и хитмапа (картинки)."""
+        return await self._stats.last_days(user, n), await self._stats.current_goal(user)
 
     async def weight_trend(self, user: User, limit: int = 14) -> WeightTrend:
         logs = await self._weights.history(user, limit)

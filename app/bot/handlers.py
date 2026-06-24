@@ -17,7 +17,13 @@ from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, ErrorEvent, Message
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    ErrorEvent,
+    InputMediaPhoto,
+    Message,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.assistant import Assistant
@@ -31,8 +37,20 @@ from app.application.results import (
     Result,
     VariantClarificationNeeded,
 )
-from app.bot.dashboard_image import render_dashboard
-from app.bot.formatters import format_goal, format_result, today_photo_caption
+from app.bot.dashboard_image import (
+    render_dashboard,
+    render_day_card,
+    render_heatmap,
+    render_today,
+    render_weekly_chart,
+    render_weight_chart,
+)
+from app.bot.formatters import (
+    format_goal,
+    format_result,
+    meal_photo_caption,
+    today_photo_caption,
+)
 from app.bot.keyboards import (
     BTN_BUG,
     BTN_GOAL,
@@ -295,6 +313,26 @@ async def cmd_week(message: Message, app_user: User, assistant: Assistant) -> No
     await _show_week(message, app_user, assistant)
 
 
+@router.message(Command("card"))
+async def cmd_card(message: Message, app_user: User, assistant: Assistant) -> None:
+    """Карточка дня картинкой — для шеринга (дата · бары · кольцо)."""
+    stats = await assistant.today(app_user)
+    days, _ = await assistant.day_calories(app_user, 1)
+    png = render_day_card(stats.remaining, days[-1][0])
+    await message.answer_photo(BufferedInputFile(png, "card.png"), caption="📤 Карточка дня")
+
+
+@router.message(Command("streak"))
+async def cmd_streak(message: Message, app_user: User, assistant: Assistant) -> None:
+    """Календарь-хитмап за 4 недели: дни в цели зелёным, перебор красным."""
+    days, goal = await assistant.day_calories(app_user, 28)
+    if not any(k > 0 for _, k in days):
+        await message.answer("Пока пусто — запиши пару дней, и тут появится календарь 📅")
+        return
+    png = render_heatmap(days, goal.daily_kcal)
+    await message.answer_photo(BufferedInputFile(png, "streak.png"), caption="📅 Дни в цели")
+
+
 @router.message(Command("history"))
 async def cmd_history(message: Message, app_user: User, assistant: Assistant) -> None:
     await _show_history(message, app_user, assistant)
@@ -357,7 +395,7 @@ async def btn_weight(
     message: Message, app_user: User, assistant: Assistant, state: FSMContext
 ) -> None:
     await state.clear()
-    await message.answer(format_result(await assistant.weight_trend(app_user)))
+    await _show_weight(message, app_user, assistant)
 
 
 @router.message(F.text == BTN_GOAL)
@@ -841,8 +879,8 @@ async def on_meal_undo(callback: CallbackQuery, app_user: User, assistant: Assis
             )
         else:
             await _safe_edit(callback.message, "🗒 Больше нечего отменять — старое в 🗒 История.")
-    else:  # контекстная отмена под карточкой приёма
-        await callback.message.edit_text(f"🗑 Отменил приём ({kcal} ккал).")
+    else:  # контекстная отмена под карточкой приёма (она теперь фото → edit_caption)
+        await _edit_card(callback.message, f"🗑 Отменил приём ({kcal} ккал).")
     await callback.answer()
 
 
@@ -855,8 +893,16 @@ async def on_item_del(callback: CallbackQuery, app_user: User, assistant: Assist
     meal_id, item_id = int(parts[1]), int(parts[2])
     result = await assistant.remove_item(app_user, meal_id, item_id)
     if result is None:
-        await callback.message.edit_text("🗑 Запись отменена (позиций не осталось).")
-    else:
+        await _edit_card(callback.message, "🗑 Запись отменена (позиций не осталось).")
+    elif callback.message.photo:  # карточка-фото: перерисовать бары + обновить подпись
+        media = InputMediaPhoto(
+            media=BufferedInputFile(render_dashboard(result.remaining), "meal.png"),
+            caption=meal_photo_caption(result),
+        )
+        kb = meal_actions_keyboard(result.meal)
+        with suppress(TelegramBadRequest):
+            await callback.message.edit_media(media, reply_markup=kb)
+    else:  # путь после уточнения — карточка текстом
         await callback.message.edit_text(
             format_result(result), reply_markup=meal_actions_keyboard(result.meal)
         )
@@ -1028,14 +1074,38 @@ async def _show_today(message: Message, app_user: User, assistant: Assistant) ->
     if stats.meals_count == 0:
         await message.answer(format_result(stats))  # пусто → текстовый нудж
         return
-    png = render_dashboard(stats.remaining)  # E: бары картинкой (ровно на Android)
-    await message.answer_photo(
-        BufferedInputFile(png, "today.png"), caption=today_photo_caption(stats)
-    )
+    png = render_today(stats.remaining)  # бары + кольцо Б/Ж/У картинкой (ровно на Android)
+    caption = today_photo_caption(stats)
+    if len(caption) <= 1024:  # лимит подписи Telegram; длинный список — отдельным сообщением
+        await message.answer_photo(BufferedInputFile(png, "today.png"), caption=caption)
+    else:
+        await message.answer_photo(BufferedInputFile(png, "today.png"), caption="📊 Сегодня")
+        await message.answer(caption)
 
 
 async def _show_week(message: Message, app_user: User, assistant: Assistant) -> None:
-    await message.answer(format_result(await assistant.weekly(app_user)))
+    days, goal = await assistant.day_calories(app_user, 7)
+    if not any(k > 0 for _, k in days):  # неделя пустая → текстовый нудж
+        await message.answer(format_result(await assistant.weekly(app_user)))
+        return
+    logged = sum(1 for _, k in days if k > 0)
+    avg = round(sum(k for _, k in days) / logged)
+    png = render_weekly_chart(days, goal.daily_kcal)
+    await message.answer_photo(
+        BufferedInputFile(png, "week.png"),
+        caption=f"📈 Неделя · дней с записями {logged}/7 · в среднем {avg} ккал/день",
+    )
+
+
+async def _show_weight(message: Message, app_user: User, assistant: Assistant) -> None:
+    trend = await assistant.weight_trend(app_user)
+    if len(trend.logs) < 2:  # 0–1 точка — график не построить, отдаём текст
+        await message.answer(format_result(trend))
+        return
+    pts = [(log.measured_at, log.weight_kg) for log in reversed(trend.logs)]  # старые→новые
+    await message.answer_photo(
+        BufferedInputFile(render_weight_chart(pts), "weight.png"), caption="⚖️ Тренд веса"
+    )
 
 
 async def _show_history(message: Message, app_user: User, assistant: Assistant) -> None:
@@ -1134,7 +1204,15 @@ async def _reply_message(
             draft=result.draft, item_index=result.item_index, raw=raw, q_msg_id=sent.message_id
         )
     elif isinstance(result, MealLogged):
-        await message.answer(format_result(result), reply_markup=meal_actions_keyboard(result.meal))
+        png = render_dashboard(result.remaining)  # бары картинкой, список съеденного — в подписи
+        photo = BufferedInputFile(png, "meal.png")
+        caption = meal_photo_caption(result)
+        kb = meal_actions_keyboard(result.meal)
+        if len(caption) <= 1024:  # лимит подписи Telegram
+            await message.answer_photo(photo, caption=caption, reply_markup=kb)
+        else:  # очень длинный приём — фото с краткой подписью + список отдельным сообщением
+            await message.answer_photo(photo, caption="✅ Записал")
+            await message.answer(caption, reply_markup=kb)
     else:
         await message.answer(format_result(result))
 
@@ -1158,6 +1236,15 @@ async def _render_after_continue(
         await state.clear()
         markup = meal_actions_keyboard(result.meal) if isinstance(result, MealLogged) else None
         await _safe_edit(message, format_result(result), markup)
+
+
+async def _edit_card(message: Message, text: str, markup: object = None) -> None:
+    """Правка карточки приёма: фото → edit_caption, текст → edit_text (undo/remove-item)."""
+    if message.photo:
+        with suppress(TelegramBadRequest):
+            await message.edit_caption(caption=text, reply_markup=markup)  # type: ignore[arg-type]
+    else:
+        await _safe_edit(message, text, markup)
 
 
 async def _safe_edit(message: Message, text: str, markup: object = None) -> None:

@@ -86,7 +86,7 @@ def _item_mark(it: MealItem) -> str:
     return ""
 
 
-def _format_meal(r: MealLogged) -> str:
+def _meal_head(r: MealLogged) -> list[str]:
     lines = ["✅ Записал:"]
     for it in r.meal.items:
         m = it.macros
@@ -100,7 +100,10 @@ def _format_meal(r: MealLogged) -> str:
         lines.append(
             f"\nИтого: <b>{_n(t.kcal)} ккал</b> · Б{_n(t.protein)} Ж{_n(t.fat)} У{_n(t.carb)}"
         )
-    lines += ["", _remaining_block(r.remaining)]
+    return lines
+
+
+def _meal_notes(r: MealLogged) -> list[str]:
     notes = []
     if any(it.is_estimate for it in r.meal.items):  # INV-13: метка per-item, сноска поясняет
         notes.append("≈ — прикинул сам, приблизительно. Неверно? /products")
@@ -108,6 +111,22 @@ def _format_meal(r: MealLogged) -> str:
         notes.append("📋 — по твоим цифрам (меню/этикетка)")
     if r.meal.source_confidence < _LOW_CONFIDENCE:
         notes.append("⚠️ не уверен в распознавании — проверь")
+    return notes
+
+
+def _format_meal(r: MealLogged) -> str:
+    """Текстовая карточка (бары текстом) — для путей без фото (после уточнения)."""
+    lines = _meal_head(r) + ["", _remaining_block(r.remaining)]
+    notes = _meal_notes(r)
+    if notes:
+        lines += ["", *notes]
+    return "\n".join(lines)
+
+
+def meal_photo_caption(r: MealLogged) -> str:
+    """Подпись к фото-карточке приёма: записанное + сноски, БЕЗ баров (они в картинке)."""
+    lines = _meal_head(r)
+    notes = _meal_notes(r)
     if notes:
         lines += ["", *notes]
     return "\n".join(lines)
