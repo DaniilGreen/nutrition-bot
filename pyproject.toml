@@ -17,6 +17,7 @@ dependencies = [
     "pydantic>=2.8",
     "pydantic-settings>=2.4",
     "openai>=1.50",
+    "pillow>=10.0",
 ]
 
 [project.optional-dependencies]

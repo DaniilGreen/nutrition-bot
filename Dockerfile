@@ -6,6 +6,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# шрифт с кириллицей для рендера дашборда картинкой (Pillow)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY pyproject.toml ./
 COPY app ./app
 COPY migrations ./migrations

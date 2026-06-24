@@ -17,7 +17,7 @@ from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, ErrorEvent, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, ErrorEvent, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.assistant import Assistant
@@ -31,7 +31,8 @@ from app.application.results import (
     Result,
     VariantClarificationNeeded,
 )
-from app.bot.formatters import format_goal, format_result
+from app.bot.dashboard_image import render_dashboard
+from app.bot.formatters import format_goal, format_result, today_photo_caption
 from app.bot.keyboards import (
     BTN_BUG,
     BTN_GOAL,
@@ -1023,7 +1024,14 @@ async def _start_profile(message: Message, state: FSMContext) -> None:
 
 
 async def _show_today(message: Message, app_user: User, assistant: Assistant) -> None:
-    await message.answer(format_result(await assistant.today(app_user)))
+    stats = await assistant.today(app_user)
+    if stats.meals_count == 0:
+        await message.answer(format_result(stats))  # пусто → текстовый нудж
+        return
+    png = render_dashboard(stats.remaining)  # E: бары картинкой (ровно на Android)
+    await message.answer_photo(
+        BufferedInputFile(png, "today.png"), caption=today_photo_caption(stats)
+    )
 
 
 async def _show_week(message: Message, app_user: User, assistant: Assistant) -> None:

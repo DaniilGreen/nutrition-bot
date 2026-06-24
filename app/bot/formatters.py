@@ -186,6 +186,11 @@ def _format_stats(r: DailyStats) -> str:
     return f"📊 Сегодня · приёмов: {r.meals_count}\n{eaten}\n{_dashboard(r.remaining)}"
 
 
+def today_photo_caption(r: DailyStats) -> str:
+    """Подпись к фото-дашборду «Сегодня»: заголовок + список съеденного (бары — в картинке)."""
+    return f"📊 Сегодня · приёмов: {r.meals_count}\n{_eaten_lines(r.meals, r.timezone)}".rstrip()
+
+
 def _eaten_lines(meals: list[Meal], tz_name: str) -> str:
     """Компактный список съеденного за день: «чч:мм · продукт — N ккал» по позициям."""
     tz = ZoneInfo(tz_name)
