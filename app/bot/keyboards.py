@@ -12,6 +12,7 @@ from app.application.entities import Meal, Product
 PORTION_CALLBACK_PREFIX = "portion"
 VARIANT_CALLBACK_PREFIX = "variant"
 LABEL_G_PREFIX = "label_g"  # пресет веса (порция/пачка) после фото этикетки (FR-27)
+DAY_NAV_PREFIX = "day_nav"  # навигация по дням в просмотре истории (вар. A)
 MEAL_UNDO_PREFIX = "meal_undo"
 UNDO_ITEM_PREFIX = "undo_item"
 ITEM_DEL_PREFIX = "item_del"
@@ -87,6 +88,16 @@ def prod_edit_keyboard(product_id: int) -> InlineKeyboardMarkup:
     builder.button(text="✏️ Переименовать", callback_data=f"{PROD_RENAME_PREFIX}:{product_id}")
     builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def day_nav_keyboard(days_ago: int) -> InlineKeyboardMarkup:
+    """Вар. A: ← предыдущий день всегда; → следующий — только если не сегодня."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="← пред. день", callback_data=f"{DAY_NAV_PREFIX}:{days_ago + 1}")
+    if days_ago > 0:
+        builder.button(text="след. день →", callback_data=f"{DAY_NAV_PREFIX}:{days_ago - 1}")
+    builder.adjust(2)
     return builder.as_markup()
 
 

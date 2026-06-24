@@ -129,6 +129,17 @@ async def test_weight_flow() -> None:
     assert result.delta_kg is None
 
 
+async def test_day_view_today_and_yesterday() -> None:
+    # вар. A: day_view(0)=сегодня с приёмом, day_view(1)=вчера пусто, навигация по days_ago
+    assistant, users, _ = _build(StubNlu(_chicken(150)))
+    user = await _new_user(users)
+    await assistant.process(user, "курица 250")
+    today = await assistant.day_view(user, days_ago=0)
+    assert len(today.meals) == 1 and today.days_ago == 0
+    yest = await assistant.day_view(user, days_ago=1)
+    assert yest.meals == [] and yest.days_ago == 1
+
+
 async def test_today_meals_shows_all_today() -> None:
     # багрепорт #12: пикер отмены показывает ВСЕ сегодняшние приёмы, не последние 5
     assistant, users, _ = _build(StubNlu(_chicken(150), _chicken(160), _chicken(170)))

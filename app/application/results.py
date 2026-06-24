@@ -1,7 +1,8 @@
 """Результаты работы Assistant — данные для презентационного слоя (бот форматирует)."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import date
 
 from app.application.dto import ParsedMessage
 from app.application.entities import Meal, MealItem, WeightLog
@@ -59,6 +60,18 @@ class WeightTrend:
 class DailyStats:
     remaining: Remaining
     meals_count: int
+    meals: list[Meal] = field(default_factory=list)  # сегодняшние приёмы (список съеденного)
+    timezone: str = "UTC"  # для рендера времени приёмов
+
+
+@dataclass
+class DayView:
+    """Вар. A: приёмы за один день + навигация ← / → по дням."""
+
+    meals: list[Meal]  # хронологически (утро→вечер)
+    timezone: str
+    days_ago: int  # 0 = сегодня
+    day: date  # дата дня в TZ юзера (для заголовка)
 
 
 @dataclass
@@ -120,6 +133,7 @@ Result = (
     | DailyStats
     | WeeklyStats
     | History
+    | DayView
     | MealDeleted
     | ItemRemoved
     | ItemAdjusted

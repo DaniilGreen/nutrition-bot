@@ -5,14 +5,16 @@
 """
 from __future__ import annotations
 
+from datetime import date
 from html import escape
 from zoneinfo import ZoneInfo
 
-from app.application.entities import MealItem
+from app.application.entities import Meal, MealItem
 from app.application.results import (
     ClarificationNeeded,
     CorrectionFailed,
     DailyStats,
+    DayView,
     History,
     ItemAdjusted,
     ItemRemoved,
@@ -27,9 +29,13 @@ from app.application.results import (
     WeightTrend,
 )
 from app.domain.goals import Goal, Remaining
+from app.domain.value_objects import sum_macros
 
 _LOW_CONFIDENCE = 0.6  # ниже — помечаем разбор как сомнительный
 _SPARK = "▁▂▃▄▅▆▇█"
+_MONTHS_RU = (
+    "янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек",
+)
 
 
 def format_result(result: Result) -> str:
@@ -46,7 +52,9 @@ def format_result(result: Result) -> str:
     if isinstance(result, WeightTrend):
         return _format_weight_trend(result)
     if isinstance(result, DailyStats):
-        return _format_stats(result.remaining, result.meals_count)
+        return _format_stats(result)
+    if isinstance(result, DayView):
+        return _format_day_view(result)
     if isinstance(result, WeeklyStats):
         return _format_weekly(result)
     if isinstance(result, History):
@@ -168,13 +176,45 @@ def _format_weight_trend(t: WeightTrend) -> str:
     return text
 
 
-def _format_stats(rem: Remaining, meals_count: int) -> str:
-    if meals_count == 0:
+def _format_stats(r: DailyStats) -> str:
+    if r.meals_count == 0:
         return (
             "📊 Сегодня пока пусто.\nЗапиши приём — например «куриная грудка 250 г», "
-            "наговори голосом или пришли фото этикетки 📷.\n\n" + _dashboard(rem)
+            "наговори голосом или пришли фото этикетки 📷.\n\n" + _dashboard(r.remaining)
         )
-    return f"📊 Сегодня · приёмов: {meals_count}\n\n{_dashboard(rem)}"
+    eaten = _eaten_lines(r.meals, r.timezone) if r.meals else ""
+    return f"📊 Сегодня · приёмов: {r.meals_count}\n{eaten}\n{_dashboard(r.remaining)}"
+
+
+def _eaten_lines(meals: list[Meal], tz_name: str) -> str:
+    """Компактный список съеденного за день: «чч:мм · продукт — N ккал» по позициям."""
+    tz = ZoneInfo(tz_name)
+    rows = []
+    for m in meals:
+        when = m.eaten_at.astimezone(tz).strftime("%H:%M")
+        for it in m.items:
+            g = f"{_n(it.grams)} г · " if it.grams else ""
+            rows.append(f" {when} · {_esc(it.name_snapshot)} — {g}{_n(it.macros.kcal)} ккал")
+            when = "     "  # последующие позиции приёма — без повтора времени
+    return "<code>" + "\n".join(rows) + "</code>\n"
+
+
+def _day_title(d: date, days_ago: int) -> str:
+    label = "Сегодня" if days_ago == 0 else "Вчера" if days_ago == 1 else ""
+    ds = f"{d.day} {_MONTHS_RU[d.month - 1]}"
+    return f"{label}, {ds}" if label else ds
+
+
+def _format_day_view(r: DayView) -> str:
+    title = _day_title(r.day, r.days_ago)
+    if not r.meals:
+        return f"🗒 <b>{title}</b>\nПусто — в этот день ничего не записано."
+    t = sum_macros(m.totals for m in r.meals)
+    return (
+        f"🗒 <b>{title}</b>\n"
+        f"{_eaten_lines(r.meals, r.timezone)}"
+        f"─────\nИтого: <b>{_n(t.kcal)} ккал</b> · Б{_n(t.protein)} Ж{_n(t.fat)} У{_n(t.carb)}"
+    )
 
 
 def _format_weekly(r: WeeklyStats) -> str:

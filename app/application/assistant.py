@@ -15,6 +15,7 @@ from app.application.results import (
     ClarificationNeeded,
     CorrectionFailed,
     DailyStats,
+    DayView,
     History,
     ItemAdjusted,
     ItemRemoved,
@@ -166,6 +167,11 @@ class Assistant:
     async def today_meals(self, user: User) -> History:
         """Все приёмы за сегодня (пикер отмены показывает весь день, не последние 5; баг #12)."""
         return History(meals=await self._stats.day_meals(user), timezone=user.timezone)
+
+    async def day_view(self, user: User, days_ago: int = 0) -> DayView:
+        """Просмотр одного дня (вар. A): приёмы хронологически + дата, для навигации ← / →."""
+        meals, day = await self._stats.day_view(user, days_ago)
+        return DayView(meals=meals, timezone=user.timezone, days_ago=days_ago, day=day)
 
     async def weight_trend(self, user: User, limit: int = 14) -> WeightTrend:
         logs = await self._weights.history(user, limit)

@@ -41,11 +41,13 @@ from app.bot.keyboards import (
     BTN_UNDO,
     BTN_WEEK,
     BTN_WEIGHT,
+    DAY_NAV_PREFIX,
     LABEL_G_PREFIX,
     ONBOARD_PREFIX,
     PROD_RENAME_PREFIX,
     WIZ_CANCEL,
     activity_keyboard,
+    day_nav_keyboard,
     goal_type_keyboard,
     label_grams_keyboard,
     location_request_keyboard,
@@ -990,6 +992,18 @@ async def on_profile_goal(
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith(f"{DAY_NAV_PREFIX}:"))
+async def on_day_nav(callback: CallbackQuery, app_user: User, assistant: Assistant) -> None:
+    """Вар. A: ← / → листание дней в просмотре истории."""
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    days_ago = max(0, int((callback.data or "day_nav:0").split(":", 1)[1]))
+    dv = await assistant.day_view(app_user, days_ago)
+    await _safe_edit(callback.message, format_result(dv), day_nav_keyboard(dv.days_ago))
+    await callback.answer()
+
+
 @router.callback_query()  # замыкающий: ловит любую устаревшую кнопку (после рестарта/времени)
 async def on_stale_callback(callback: CallbackQuery) -> None:
     """Не пойманный callback → гасим вечный спиннер Telegram и снимаем мёртвую клавиатуру."""
@@ -1017,7 +1031,8 @@ async def _show_week(message: Message, app_user: User, assistant: Assistant) -> 
 
 
 async def _show_history(message: Message, app_user: User, assistant: Assistant) -> None:
-    await message.answer(format_result(await assistant.history(app_user)))
+    dv = await assistant.day_view(app_user)  # вар. A: день со стрелками, начинаем с сегодня
+    await message.answer(format_result(dv), reply_markup=day_nav_keyboard(dv.days_ago))
 
 
 async def _show_undo_picker(message: Message, app_user: User, assistant: Assistant) -> None:

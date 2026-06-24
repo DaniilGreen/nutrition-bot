@@ -1,6 +1,7 @@
 """Use-case: дневная и недельная статистика, остаток КБЖУ, текущая цель."""
 from __future__ import annotations
 
+from datetime import date, timedelta
 from zoneinfo import ZoneInfo
 
 from app.application.entities import Meal, User
@@ -32,16 +33,27 @@ class StatsService:
         user_id = _require_id(user)
         start, end = day_bounds_utc(self._clock(), user.timezone)
         meals = await self._meals.list_between(user_id, start, end)
+        meals.sort(key=lambda m: m.eaten_at)  # хронологически — для списка съеденного в «Сегодня»
         consumed = sum_macros(meal.totals for meal in meals)
         goal = await self._users.get_goal(user_id) or self._default_goal
-        return DailyStats(remaining=remaining(consumed, goal), meals_count=len(meals))
+        return DailyStats(
+            remaining=remaining(consumed, goal), meals_count=len(meals), meals=meals,
+            timezone=user.timezone,
+        )
 
-    async def day_meals(self, user: User) -> list[Meal]:
-        """Все приёмы за СЕГОДНЯ, свежие первыми — для пикера отмены (не последние N, баг #12)."""
-        start, end = day_bounds_utc(self._clock(), user.timezone)
+    async def day_meals(self, user: User, days_ago: int = 0) -> list[Meal]:
+        """Приёмы за день (0=сегодня), свежие первыми — пикер #12 и просмотр дня (вар. A)."""
+        ref = self._clock() - timedelta(days=days_ago)
+        start, end = day_bounds_utc(ref, user.timezone)
         meals = await self._meals.list_between(_require_id(user), start, end)
         meals.sort(key=lambda m: m.eaten_at, reverse=True)
         return meals
+
+    async def day_view(self, user: User, days_ago: int = 0) -> tuple[list[Meal], date]:
+        """Приёмы за день ХРОНОЛОГИЧЕСКИ + дата дня (в TZ юзера) — для day-view с навигацией."""
+        meals = list(reversed(await self.day_meals(user, days_ago)))
+        day = (self._clock() - timedelta(days=days_ago)).astimezone(ZoneInfo(user.timezone)).date()
+        return meals, day
 
     async def weekly(self, user: User) -> WeeklyStats:
         user_id = _require_id(user)
