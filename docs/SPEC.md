@@ -282,7 +282,7 @@
 | **meals** | user_id, eaten_at, input_type, raw_input, source_confidence, total_* | приём пищи + сырой ввод |
 | **meal_items** | meal_id, product_id (SET NULL), name_snapshot, grams, kcal/protein/fat/carb (снапшот) | позиция приёма |
 | **weight_logs** | user_id, measured_at, weight_kg | замеры веса |
-| **bug_reports** | user_id, created_at, note, context (JSONB: последние N приёмов) | репорты о багах (FR-26, D-17) |
+| **bug_reports** | user_id, created_at, note, context (JSONB: последние N приёмов), resolved_at | репорты о багах (FR-26, D-17); новые = resolved_at IS NULL |
 
 Удаления — **hard delete** (каскад), решение D-5.
 
