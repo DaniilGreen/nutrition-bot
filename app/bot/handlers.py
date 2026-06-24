@@ -323,9 +323,8 @@ async def cmd_week(message: Message, app_user: User, assistant: Assistant) -> No
 @router.message(Command("card"))
 async def cmd_card(message: Message, app_user: User, assistant: Assistant) -> None:
     """Карточка дня картинкой — для шеринга (дата · бары · кольцо)."""
-    stats = await assistant.today(app_user)
-    days, _ = await assistant.day_calories(app_user, 1)
-    png = render_day_card(stats.remaining, days[-1][0])
+    rem, dv = await assistant.day_card(app_user)
+    png = render_day_card(rem, dv.day)
     await message.answer_photo(BufferedInputFile(png, "card.png"), caption="📤 Карточка дня")
 
 
@@ -891,8 +890,7 @@ async def on_meal_undo(callback: CallbackQuery, app_user: User, assistant: Assis
     result = await assistant.delete_meal(app_user, meal_id)
     if result.meal is None:
         await callback.answer("Уже удалено.")
-        with suppress(Exception):
-            await callback.message.edit_text("🗑 Запись уже удалена.")
+        await _edit_card(callback.message, "🗑 Запись уже удалена.")  # карточка-фото → edit_caption
         return
     kcal = round(result.meal.totals.kcal)
     if (callback.message.text or "").startswith("Что отменить"):  # пикер /undo → перерисовать
@@ -922,7 +920,7 @@ async def on_item_del(callback: CallbackQuery, app_user: User, assistant: Assist
     elif callback.message.photo:  # карточка-фото: перерисовать бары + обновить подпись
         media = InputMediaPhoto(
             media=BufferedInputFile(render_dashboard(result.remaining), "meal.png"),
-            caption=meal_photo_caption(result),
+            caption=_cap(meal_photo_caption(result)),
         )
         kb = meal_actions_keyboard(result.meal)
         with suppress(TelegramBadRequest):
@@ -1072,12 +1070,14 @@ async def on_day_nav(callback: CallbackQuery, app_user: User, assistant: Assista
         return
     days_ago = max(0, int((callback.data or "day_nav:0").split(":", 1)[1]))
     rem, dv = await assistant.day_card(app_user, days_ago)
-    media = InputMediaPhoto(
-        media=BufferedInputFile(render_day_card(rem, dv.day), "day.png"),
-        caption=_cap(day_photo_caption(dv)),
-    )
-    with suppress(TelegramBadRequest):
-        await callback.message.edit_media(media, reply_markup=day_nav_keyboard(dv.days_ago))
+    photo = BufferedInputFile(render_day_card(rem, dv.day), "day.png")
+    cap, kb = _cap(day_photo_caption(dv)), day_nav_keyboard(dv.days_ago)
+    if callback.message.photo:
+        media = InputMediaPhoto(media=photo, caption=cap)
+        with suppress(TelegramBadRequest):
+            await callback.message.edit_media(media, reply_markup=kb)
+    else:  # старое ТЕКСТОВОЕ сообщение истории (до картинок) — шлём новую карточку
+        await callback.message.answer_photo(photo, caption=cap, reply_markup=kb)
     await callback.answer()
 
 

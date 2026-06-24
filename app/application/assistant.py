@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import date
 from statistics import median
+from zoneinfo import ZoneInfo
 
 from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
 from app.application.entities import MealItem, Product, User, WeightLog
@@ -189,15 +190,18 @@ class Assistant:
     async def month_report(self, user: User, days: int = 30) -> MonthReport:
         """Отчёт за период для картинки /month (FR-29): средние/день, дни в цели, Δ веса."""
         perday, goal = await self.day_calories(user, days)
-        consumed, _dl = await self._stats.period(user, days)
+        consumed = await self._stats.period(user, days)
         logged = [k for _, k in perday if k > 0]
         n = max(1, len(logged))
         avg = Macros(consumed.kcal / n, consumed.protein / n, consumed.fat / n, consumed.carb / n)
         in_goal = sum(1 for k in logged if k <= goal.daily_kcal * 1.1)
-        trend = await self.weight_trend(user, limit=days)
-        wd = None
-        if len(trend.logs) >= 2:  # logs newest-first: [0]=последний, [-1]=первый за период
-            wd = round(trend.logs[0].weight_kg - trend.logs[-1].weight_kg, 1)
+        # Δ веса — по замерам ВНУТРИ окна периода (а не по числу записей): при редком
+        # взвешивании limit=days охватил бы больше дней, чем заявлено в подписи «вес за период».
+        tz = ZoneInfo(user.timezone)
+        start = perday[0][0] if perday else None
+        logs = (await self.weight_trend(user, limit=days * 4)).logs  # ponytail: до ~4 замеров/день
+        win = [lg for lg in logs if start and lg.measured_at.astimezone(tz).date() >= start]
+        wd = round(win[0].weight_kg - win[-1].weight_kg, 1) if len(win) >= 2 else None
         return MonthReport(days, len(logged), in_goal, avg.kcal, avg, wd, goal)
 
     async def weight_trend(self, user: User, limit: int = 14) -> WeightTrend:

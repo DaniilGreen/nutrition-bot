@@ -8,6 +8,7 @@ from PIL import Image
 
 from app.application.results import MonthReport
 from app.bot.dashboard_image import (
+    _streak,
     render_dashboard,
     render_day_card,
     render_goal_card,
@@ -79,6 +80,20 @@ def test_render_heatmap_streak_badge() -> None:
     # последние дни подряд в цели → бейдж серии (streak >= 2)
     days = [(date(2026, 6, 1) + timedelta(days=i), 1800.0) for i in range(10)]
     assert render_heatmap(days, 2000)[:8] == _PNG
+
+
+def test_streak_matches_green_definition() -> None:
+    g = 2000.0
+    base = date(2026, 6, 1)
+
+    def mk(vals: list[float]) -> list[tuple[date, float]]:
+        return [(base + timedelta(days=i), float(v)) for i, v in enumerate(vals)]
+
+    assert _streak(mk([1800, 1900, 1850, 0]), g) == 3  # хвостовой 0 (не ел) не рвёт
+    assert _streak(mk([1800, 300, 1900, 1850]), g) == 2  # <50% цели рвёт серию (клетка тусклая)
+    assert _streak(mk([1900, 2500, 1800, 1850]), g) == 2  # перебор >110% рвёт
+    assert _streak(mk([1900, 0, 1800, 1850]), g) == 2  # пропуск в середине рвёт
+    assert _streak(mk([100, 200, 300]), 0) == 3  # без цели любой kcal>0 считается
 
 
 def test_render_heatmap_last_cell_not_clipped() -> None:

@@ -236,6 +236,21 @@ def render_weight_chart(points: list[tuple[datetime, float]]) -> bytes:
     return _png(img)
 
 
+def _streak(days: list[tuple[date, float]], goal: float) -> int:
+    """Серия подряд «зелёных» дней (в цели) с конца. Совпадает с раскраской клеток
+    (0.5–1.1 цели): хвостовые незаполненные дни пропускаем, любой иной — рвёт серию."""
+    n = 0
+    for _day, kcal in reversed(days):
+        if kcal <= 0:
+            if n == 0:
+                continue  # сегодня ещё не ел — не рвёт серию
+            break
+        if goal and not (goal * 0.5 <= kcal <= goal * 1.1):
+            break
+        n += 1
+    return n
+
+
 def render_heatmap(days: list[tuple[date, float]], goal: float) -> bytes:
     """Календарь-хитмап: клетка на день, цвет = ккал/цель (серый-зелёный-красный)."""
     cell, gap, top, left = 56, 8, 80, 24
@@ -244,15 +259,7 @@ def render_heatmap(days: list[tuple[date, float]], goal: float) -> bytes:
     img = Image.new("RGB", (left * 2 + 7 * (cell + gap), top + weeks * (cell + gap) + 20), _BG)
     d = ImageDraw.Draw(img)
     d.text((left, 18), "Дни в цели", font=_font(24, True), fill=_INK, anchor="lt")
-    streak = 0  # подряд идущие дни в цели, заканчивая последним днём с записью
-    for _day, kcal in reversed(days):
-        if kcal <= 0:
-            if streak == 0:
-                continue  # хвостовые незаполненные (сегодня ещё не ел) — не рвут серию
-            break
-        if goal and kcal > goal * 1.1:
-            break
-        streak += 1
+    streak = _streak(days, goal)
     if streak >= 2:
         d.text((img.width - left, 26), f"серия {streak} дн.", font=_font(18, True),
                fill=_OK, anchor="rt")

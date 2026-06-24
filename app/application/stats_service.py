@@ -65,17 +65,14 @@ class StatsService:
         day = (self._clock() - timedelta(days=days_ago)).astimezone(ZoneInfo(user.timezone)).date()
         return meals, day
 
-    async def period(self, user: User, days: int) -> tuple[Macros, int]:
-        """Суммарные КБЖУ и число дней с логом за последние `days` дней — для отчёта /month."""
+    async def period(self, user: User, days: int) -> Macros:
+        """Суммарные КБЖУ за последние `days` дней — для отчёта /month."""
         user_id = _require_id(user)
         now = self._clock()
         start, _ = day_bounds_utc(now - timedelta(days=days - 1), user.timezone)
         _, end = day_bounds_utc(now, user.timezone)
         meals = await self._meals.list_between(user_id, start, end)
-        consumed = sum_macros(m.totals for m in meals)
-        tz = ZoneInfo(user.timezone)
-        days_logged = len({m.eaten_at.astimezone(tz).date() for m in meals})
-        return consumed, days_logged
+        return sum_macros(m.totals for m in meals)
 
     async def weekly(self, user: User) -> WeeklyStats:
         user_id = _require_id(user)
