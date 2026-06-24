@@ -147,3 +147,6 @@ class BugReportORM(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    resolved_at: Mapped[datetime | None] = mapped_column(  # NULL = новый/открытый репорт
+        DateTime(timezone=True), nullable=True
+    )
