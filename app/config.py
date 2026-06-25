@@ -27,7 +27,6 @@ class Settings(BaseSettings):
     default_goal_protein: float = 150
     default_goal_fat: float = 65
     default_goal_carb: float = 250
-    confidence_auto_threshold: float = 0.6
 
     reminder_enabled: bool = True
     reminder_hour: int = 21  # локальный час вечернего итога
