@@ -230,8 +230,7 @@ def render_weight_chart(points: list[tuple[datetime, float]]) -> bytes:
             d.text((xs[i], base + 10), f"{dt.day}.{dt.month:02d}", font=_font(14),
                    fill=_GREY, anchor="ma")
     delta = round(ws[-1] - ws[0], 1)
-    sign = "+" if delta > 0 else ""
-    d.text((720 - mr, 24), f"{sign}{delta} кг", font=_font(20, True),
+    d.text((720 - mr, 24), _delta_str(delta), font=_font(20, True),
            fill=_OVER if delta > 0 else _OK, anchor="rt")
     return _png(img)
 
