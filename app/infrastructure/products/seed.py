@@ -47,6 +47,8 @@ CURATED: list[dict] = [
     {"key": "rice_boiled", "name": "Рис отварной", "kcal": 130, "p": 2.7, "f": 0.3, "c": 28, "sizes": None},
     {"key": "pasta_boiled", "name": "Макароны отварные", "kcal": 157, "p": 5.8, "f": 0.9, "c": 31, "sizes": None},
     {"key": "mashed_potato", "name": "Картофельное пюре", "kcal": 90, "p": 2, "f": 3, "c": 14, "sizes": None},
+    {"key": "tvorog_0", "name": "Творог обезжиренный", "kcal": 79, "p": 18, "f": 0.6, "c": 1.8, "sizes": None, "cat": "tvorog"},
+    {"key": "tvorog_3", "name": "Творог 3%", "kcal": 113, "p": 18, "f": 3, "c": 3.5, "sizes": None, "cat": "tvorog"},
     {"key": "tvorog_5", "name": "Творог 5%", "kcal": 120, "p": 16, "f": 5, "c": 3, "sizes": None, "cat": "tvorog"},
     {"key": "tvorog_9", "name": "Творог 9%", "kcal": 160, "p": 16, "f": 9, "c": 3, "sizes": None, "cat": "tvorog"},
     {"key": "chicken_breast_boiled", "name": "Куриная грудка отварная", "kcal": 130, "p": 29, "f": 1.8, "c": 0, "sizes": None, "cat": "chicken"},

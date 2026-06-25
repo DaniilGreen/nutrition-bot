@@ -42,6 +42,10 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
+[tool.ruff.lint.per-file-ignores]
+# Курируемый каталог — широкая дата-таблица, длинные строки на запись естественны.
+"app/infrastructure/products/seed.py" = ["E501"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true
