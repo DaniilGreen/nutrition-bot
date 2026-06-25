@@ -25,6 +25,7 @@ from aiogram.types import (
     InputMediaPhoto,
     Message,
 )
+from openai import RateLimitError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.assistant import Assistant
@@ -160,8 +161,12 @@ async def on_error(event: ErrorEvent) -> bool:
         maybe = event.update.callback_query.message
         target = maybe if isinstance(maybe, Message) else None
     if target is not None:
+        if isinstance(event.exception, RateLimitError):  # баг #16: 429 от OpenAI (лимит TPM)
+            text = "⏳ ИИ перегружен. Подожди ~10 секунд и повтори — данные не потеряны."
+        else:
+            text = "⚠️ Что-то пошло не так. Попробуй ещё раз через пару секунд."
         with suppress(Exception):
-            await target.answer("⚠️ Что-то пошло не так. Попробуй ещё раз через пару секунд.")
+            await target.answer(text)
     return True
 
 

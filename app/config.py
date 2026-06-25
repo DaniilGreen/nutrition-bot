@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     openai_stt_model: str = "whisper-1"
     use_fake_nlu: bool = False
     sample_k: int = 5  # self-consistency: сколько сэмплов оценки на новый продукт (D-15)
+    openai_max_retries: int = 4  # ретраи SDK на 429/сеть — переждать окно TPM-лимита (баг #16)
 
     default_timezone: str = "Europe/Moscow"
     default_goal_kcal: float = 2000

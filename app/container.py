@@ -40,7 +40,7 @@ def build_nlu(settings: Settings) -> NluPort:
         from app.infrastructure.nlu.openai_nlu import OpenAiNlu
 
         return OpenAiNlu(
-            AsyncOpenAI(api_key=settings.openai_api_key),
+            AsyncOpenAI(api_key=settings.openai_api_key, max_retries=settings.openai_max_retries),
             settings.openai_model,
             sample_k=settings.sample_k,
         )
@@ -56,7 +56,10 @@ def build_stt(settings: Settings) -> SttPort | None:
 
     from app.infrastructure.stt.whisper_client import OpenAiStt
 
-    return OpenAiStt(AsyncOpenAI(api_key=settings.openai_api_key), settings.openai_stt_model)
+    return OpenAiStt(
+        AsyncOpenAI(api_key=settings.openai_api_key, max_retries=settings.openai_max_retries),
+        settings.openai_stt_model,
+    )
 
 
 def build_vision(settings: Settings) -> VisionPort | None:
@@ -67,7 +70,10 @@ def build_vision(settings: Settings) -> VisionPort | None:
 
     from app.infrastructure.vision.openai_vision import OpenAiVision
 
-    return OpenAiVision(AsyncOpenAI(api_key=settings.openai_api_key), settings.openai_model)
+    return OpenAiVision(
+        AsyncOpenAI(api_key=settings.openai_api_key, max_retries=settings.openai_max_retries),
+        settings.openai_model,
+    )
 
 
 @dataclass
