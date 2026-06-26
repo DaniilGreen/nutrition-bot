@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4.1"
     openai_stt_model: str = "whisper-1"
     use_fake_nlu: bool = False
-    sample_k: int = 5  # self-consistency: сколько сэмплов оценки на новый продукт (D-15)
+    sample_k: int = 3  # сэмплов self-consistency (D-15); 5→3 ради ↓токенов и реже 429 (TPM 30k)
     openai_max_retries: int = 4  # ретраи SDK на 429/сеть — переждать окно TPM-лимита (баг #16)
 
     default_timezone: str = "Europe/Moscow"
