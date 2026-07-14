@@ -106,9 +106,9 @@ def _verdict(st: DailyStats) -> str:
         return "Всё в цели"
     parts = []
     if low:
-        parts.append(f"{', '.join(low).lower()} — недобор")
+        parts.append(f"Недобор — {', '.join(low).lower()}")
     if over:
-        parts.append(f"{', '.join(over).lower()} — перебор")
+        parts.append(f"Перебор — {', '.join(over).lower()}")
     return " · ".join(parts)
 
 
@@ -145,11 +145,17 @@ def _eaten(st: DailyStats) -> str:
 
 
 def _macro_row(eid: str, fb: str, lab: str, c: float, g: float) -> str:
-    """Строка: [точка+подпись] | [бар] | [% · факт]. Три колонки, ничего не переносится."""
+    """Строка: [точка+подпись] | [бар] | [% над фактом].
+
+    % и факт — В ДВЕ СТРОКИ ячейки НАМЕРЕННО: в одну строку колонка требовала 13–15 символов,
+    её сжимало и содержимое переносилось вразнобой (строки разной высоты), а бар при этом
+    распирало до края и «113%» липло к полосе. Теперь ширина колонки = «1410/2200» (9 симв.),
+    все строки одной высоты, у бара остаётся зазор.
+    """
     return (
         f"<tr><td>{_em(eid, fb)} <b>{lab}</b></td>"
         f"<td>{_bar(c, g, lab)}</td>"
-        f'<td align="right"><b>{_pct(c, g)}%</b> · {_n(c)}/{_n(g)}</td></tr>'
+        f'<td align="right"><b>{_pct(c, g)}%</b><br>{_n(c)}/{_n(g)}</td></tr>'
     )
 
 
