@@ -104,10 +104,12 @@ def bar(cons: float, goal: float, label: str, w: int = BAR_W) -> str:
     if not goal:
         return em(SEG_EMPTY, "⬜") * w
     ratio = max(0.0, cons / goal)
-    if ratio <= 1.0:
-        stt = status(cons, goal, label)
+    stt = status(cons, goal, label)
+    if stt != "over":
+        # Порог перебора один и тот же у бара и у вердикта — иначе при 102% вердикт говорит
+        # «Всё в цели», а бар уже рисует красный хвост, и экран спорит сам с собой.
         eid, fb = _SEG[stt]
-        filled = round(w * ratio)
+        filled = round(w * min(1.0, ratio))
         return em(eid, fb) * filled + em(SEG_EMPTY, "⬜") * (w - filled)
     over = min(MAX_OVER, max(1, round(w * (ratio - 1.0))))
     return em(SEG_OK, "🟩") * w + em(SEG_OVER, "🟥") * over

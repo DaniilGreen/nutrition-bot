@@ -180,3 +180,21 @@ def test_overflow_bar_shows_magnitude() -> None:
     assert b110 != b180, "110% и 180% рисуются одинаково — бар врёт"
     assert b110.count("<tg-emoji") > 10, "перебор обязан торчать ЗА трек, а не прятаться внутри"
     assert text_width(b180) <= SAFE, "бар перебора не смеет вылезать за пузырь"
+
+
+def test_bar_agrees_with_verdict() -> None:
+    """Бар и вердикт обязаны жить по ОДНОМУ порогу перебора.
+
+    Был баг: при 102% вердикт писал «Всё в цели» (допуск 5%), а бар уже рисовал красный хвост —
+    экран спорил сам с собой. Хуже прямой ошибки: пользователь перестаёт верить обоим.
+    """
+    from app.domain.goals import Goal
+    from app.domain.value_objects import Macros
+
+    g = Goal(daily_kcal=100, protein_g=100, fat_g=100, carb_g=100)
+    within = Macros(kcal=102, protein=102, fat=102, carb=102)  # +2% — это ещё «в цели»
+    from app.bot.demo.kit import verdict
+
+    assert verdict(within, g) == "Всё в цели"
+    assert "🟥" not in bar(102, 100, "Ккал"), "вердикт говорит «в цели», а бар рисует перебор"
+    assert "🟥" in bar(120, 100, "Ккал"), "настоящий перебор обязан краснеть"
