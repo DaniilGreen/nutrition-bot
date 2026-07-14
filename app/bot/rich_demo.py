@@ -3,12 +3,17 @@
 Цвет добыт своим набором custom emoji: сегмент-полоска во всю ширину канваса → несколько подряд
 склеиваются в СПЛОШНОЙ цветной бар (палитра наша, растра нет).
 
-ВЁРСТКА — уроки первого захода (ширина на телефоне ≈ один экран, лишнего нет):
+ЦВЕТ = СТАТУС, И ТОЛЬКО СТАТУС. Точек-макросов (василёк-ккал, красный-белок…) нет намеренно:
+они красили по ИДЕНТИЧНОСТИ, а бар красит по СТАТУСУ — две системы цвета на одном экране
+конфликтуют (красная точка «Белок» рядом с жёлтым баром «недобор» сбивает). Освободившаяся
+ширина ушла в длину бара: 8 сегментов, шаг 12.5%.
+
+ВЁРСТКА — уроки трёх заходов (ширина на телефоне ≈ один экран, лишнего нет):
 * НЕТ строки-шапки <th> — она задавала минимальную ширину колонок и выдавливала подписи;
-* бар и % — В РАЗНЫХ ячейках (в одной колонка сжималась по бару, процент уезжал на 2-ю строку);
-* никаких <br> внутри ячеек;
-* бар 5 сегментов — оставляет зазор, чтобы «113%» не липло к полосе;
-* дельты (−790/+8) — в <footer>, чтобы не жрать ширину таблицы.
+* % — ПОД БАРОМ, в его же ячейке: колонке факта хватает «1410/2200» (9 симв.), её не сжимает,
+  у бара остаётся зазор, «113%» ни к чему не липнет;
+* valign="middle" всем ячейкам — иначе одностр. подпись и двустр. бар разъезжаются по вертикали;
+* дельты (−790/+8) — в <footer>, чтобы не воровать ширину у таблицы.
 
 СМЫСЛ (по ресёрчу рынка):
 * порядок Ккал → Б → Ж → У; макросы ПЕРВЫМИ, съеденное под <details>;
@@ -24,13 +29,7 @@ from zoneinfo import ZoneInfo
 
 from app.application.results import DailyStats
 
-# --- свой набор custom emoji (kbju_by_Nutrition_calorie_bot) ---
-EM_KCAL, EM_PROT, EM_FAT, EM_CARB = (
-    "5382216152195833809",  # 🔵 василёк
-    "5382357761562551012",  # 🔴 красный
-    "5382253144749155046",  # 🟡 янтарь
-    "5382178987843820107",  # 🟢 тил
-)
+# --- свой набор custom emoji (kbju_by_Nutrition_calorie_bot): сегменты бара ---
 SEG_OK, SEG_LOW, SEG_OVER, SEG_EMPTY = (
     "5382251469711910289",  # 🟩 в цели
     "5382022651034245448",  # 🟨 недобор
@@ -38,7 +37,7 @@ SEG_OK, SEG_LOW, SEG_OVER, SEG_EMPTY = (
     "5382140560771424183",  # ⬜ трек
 )
 _SEG = {"ok": (SEG_OK, "🟩"), "low": (SEG_LOW, "🟨"), "over": (SEG_OVER, "🟥")}
-_BAR_W = 5  # шире — и «113%» липнет к полосе
+_BAR_W = 8  # влезает ровно в ширину, освободившуюся от точек-макросов; шире — бар переносится
 
 
 def _n(v: float) -> str:
@@ -54,14 +53,14 @@ def _em(eid: str, fallback: str) -> str:
     return f'<tg-emoji emoji-id="{eid}">{fallback}</tg-emoji>'
 
 
-def _rows(st: DailyStats) -> list[tuple[str, str, str, float, float]]:
-    """(emoji_id, fallback, подпись, съедено, цель). Порядок как у MacroFactor: ккал первым."""
+def _rows(st: DailyStats) -> list[tuple[str, float, float]]:
+    """(подпись, съедено, цель). Порядок как у MacroFactor: ккал первым."""
     c, g = st.remaining.consumed, st.remaining.goal
     return [
-        (EM_KCAL, "🔵", "Ккал", c.kcal, g.daily_kcal),
-        (EM_PROT, "🔴", "Белок", c.protein, g.protein_g),
-        (EM_FAT, "🟡", "Жир", c.fat, g.fat_g),
-        (EM_CARB, "🟢", "Углеводы", c.carb, g.carb_g),
+        ("Ккал", c.kcal, g.daily_kcal),
+        ("Белок", c.protein, g.protein_g),
+        ("Жир", c.fat, g.fat_g),
+        ("Углеводы", c.carb, g.carb_g),
     ]
 
 
@@ -97,11 +96,20 @@ def _bar(cons: float, goal: float, label: str) -> str:
     return _em(eid, fb) * n + _em(SEG_EMPTY, "⬜") * (_BAR_W - n)
 
 
+def _macro_row(lab: str, c: float, g: float) -> str:
+    """[подпись] | [бар, под ним %] | [факт]. Ровность держат % под баром + valign=middle."""
+    return (
+        f'<tr><td valign="middle"><b>{lab}</b></td>'
+        f'<td valign="middle">{_bar(c, g, lab)}<br><b>{_pct(c, g)}%</b></td>'
+        f'<td align="right" valign="middle">{_n(c)}/{_n(g)}</td></tr>'
+    )
+
+
 # ---------- общие блоки ----------
 
 def _verdict(st: DailyStats) -> str:
-    low = [lab for _, _, lab, c, g in _rows(st) if _status(c, g, lab) == "low"]
-    over = [lab for _, _, lab, c, g in _rows(st) if _status(c, g, lab) == "over"]
+    low = [lab for lab, c, g in _rows(st) if _status(c, g, lab) == "low"]
+    over = [lab for lab, c, g in _rows(st) if _status(c, g, lab) == "over"]
     if not low and not over:
         return "Всё в цели"
     parts = []
@@ -114,7 +122,7 @@ def _verdict(st: DailyStats) -> str:
 
 def _deltas_footer(st: DailyStats) -> str:
     """Дельты живут в подвале — не воруют ширину у таблицы."""
-    parts = [f"{lab.lower()} {_delta(c, g)}" for _, _, lab, c, g in _rows(st)]
+    parts = [f"{lab.lower()} {_delta(c, g)}" for lab, c, g in _rows(st)]
     return f"<footer>Δ до цели: {' · '.join(parts)}</footer>"
 
 
@@ -142,22 +150,6 @@ def _eaten(st: DailyStats) -> str:
     word = "приём" if st.meals_count == 1 else "приёма" if st.meals_count < 5 else "приёмов"
     body = "<ul>" + "".join(items[:12]) + "</ul>"
     return f"<details><summary>🍽 Съедено · {st.meals_count} {word}</summary>{body}</details>"
-
-
-def _macro_row(eid: str, fb: str, lab: str, c: float, g: float) -> str:
-    """Строка: [точка+подпись] | [бар, под ним %] | [факт].
-
-    Ключ к ровности — ДВЕ вещи:
-    1) % живёт ПОД БАРОМ, в его же ячейке → колонка факта требует всего «1410/2200» (9 симв.)
-       и больше не сжимается; у бара остаётся зазор, «113%» ни к чему не липнет.
-    2) valign="middle" на подписи и факте → они центрируются по высоте двухстрочной ячейки
-       с баром. Без этого ячейки разной высоты разъезжались по вертикали — это и было «криво».
-    """
-    return (
-        f'<tr><td valign="middle">{_em(eid, fb)} <b>{lab}</b></td>'
-        f'<td valign="middle">{_bar(c, g, lab)}<br><b>{_pct(c, g)}%</b></td>'
-        f'<td align="right" valign="middle">{_n(c)}/{_n(g)}</td></tr>'
-    )
 
 
 # ---------- ФИНАЛИСТЫ ----------
