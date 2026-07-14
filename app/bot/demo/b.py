@@ -144,8 +144,14 @@ def weight(d: DemoData) -> str:
     logs = d.weight.logs
     if not logs:
         return _hero("Вес не записан", "напиши «вес 86.8»")
-    if d.trend_kg is None or len(logs) < 2:
-        return _hero(f"{logs[0].weight_kg} кг", "одно взвешивание — тренда пока нет")
+    if not d.trend_ok:
+        stale = d.days_since_weigh_in or 0
+        why = (
+            f"последний замер {stale} дн. назад — тренд протух"
+            if stale > 10
+            else f"замеров всего {len(logs)} — линии пока нет"
+        )
+        return _hero(f"{logs[0].weight_kg} кг", why) + "<p>Встань на весы — покажу линию.</p>"
     lis = "".join(
         f"<li>{log.measured_at.strftime('%d.%m')} · <b>{log.weight_kg}</b> кг</li>"
         for log in logs[:8]

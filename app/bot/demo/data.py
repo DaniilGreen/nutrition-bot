@@ -14,10 +14,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 
 from app.application.assistant import Assistant
-from app.application.entities import Meal, MealItem, Product, User
+from app.application.entities import Meal, MealItem, Product, User, WeightLog
 from app.application.results import DailyStats, MonthReport, WeightTrend
 from app.bot.dashboard_image import _streak  # единственное определение серии — не плодим второе
 from app.bot.demo.kit import sigma_kcal
@@ -90,6 +90,29 @@ class DemoData:
         return self.week7.avg_macros.kcal
 
     @property
+    def days_since_weigh_in(self) -> int | None:
+        """Сколько дней назад последнее взвешивание. Тренд без этого числа читать нельзя."""
+        if not self.weight.logs:
+            return None
+        last = self.weight.logs[0].measured_at
+        return max(0, (datetime.now(UTC) - last).days)
+
+    @property
+    def trend_ok(self) -> bool:
+        """Можно ли ПОКАЗЫВАТЬ тренд.
+
+        Нельзя, если замеров мало или последний протух: линия, построенная по четырём точкам
+        месячной давности, — не сглаживание, а выдумка. Честнее сказать «встань на весы».
+        """
+        stale = self.days_since_weigh_in
+        return (
+            len(self.weight.logs) >= MIN_LOGS
+            and stale is not None
+            and stale <= STALE_DAYS
+            and self.trend_kg is not None
+        )
+
+    @property
     def protein_per_kg(self) -> float | None:
         """Белок на кг массы. При дефиците цель 1.6–2.2 г/кг: абсолютные «164 г» ничего не
         значат, пока не знаешь — это 60-килограммовый человек или 100-килограммовый."""
@@ -104,17 +127,34 @@ class DemoData:
         return round(self.week7.avg_macros.protein / self.weight_kg, 2)
 
 
-def _ema(values: list[float], alpha: float = 0.25) -> float | None:
-    """Экспоненциальное сглаживание веса (α=0.25 ≈ окно ~7 взвешиваний).
+ALPHA_PER_DAY = 0.12  # эффективное окно ≈ 16 дней
+STALE_DAYS = 10  # последний замер старше — тренд протух; показывать его нельзя
+MIN_LOGS = 4  # замеров меньше — линии просто нет, и врать об этом не надо
 
-    Дневной вес — шум: вода, гликоген и содержимое кишечника дают ±1–1.5 кг за сутки. Тренд —
-    сигнал. По нему решают «дефицит работает или нет», а не по «вчера 80.2, сегодня 81.1».
+
+def _ema(logs: list[WeightLog]) -> float | None:
+    """Сглаживание веса, зависящее ОТ ВРЕМЕНИ, а не от числа замеров.
+
+    Наивная EMA (α на каждый замер) на нерегулярных взвешиваниях ВРЁТ. У владельца 4 замера:
+    86.8, 86.6, 86.2 подряд в июне и 83.6 через неделю — наивная формула выдавала «тренд 85.9 кг»
+    при последнем реальном взвешивании 83.6. Расхождение 2.3 кг: три старые точки весили столько
+    же, сколько одна свежая. Это не сглаживание, это ложь.
+
+    Правильно: α_eff = 1 − (1 − α)^Δd — не вставал на весы неделю, значит новое измерение весит
+    больше. Δd < 1 дня (два взвешивания за утро) считаем как день, иначе второе просто исчезает.
+
+    Зачем сглаживать вообще: дневной вес — шум (вода, гликоген, содержимое ЖКТ: ±1–1.5 кг за
+    сутки). По линии решают «дефицит работает или нет», а не по «вчера 80.2, сегодня 81.1».
     """
-    if not values:
+    if not logs:
         return None
-    acc = values[0]
-    for v in values[1:]:
-        acc = alpha * v + (1 - alpha) * acc
+    acc = logs[0].weight_kg
+    prev = logs[0].measured_at
+    for log in logs[1:]:
+        days = max(1.0, (log.measured_at - prev).total_seconds() / 86400)
+        alpha = 1 - (1 - ALPHA_PER_DAY) ** days
+        acc = alpha * log.weight_kg + (1 - alpha) * acc
+        prev = log.measured_at
     return round(acc, 1)
 
 
@@ -140,7 +180,7 @@ async def collect(assistant: Assistant, user: User) -> DemoData:
     products = await assistant.fixable_products(limit=6)
 
     # logs идут newest-first → для EMA нужен хронологический порядок
-    kgs = [log.weight_kg for log in reversed(weight.logs)]
+    chron = list(reversed(weight.logs))
 
     return DemoData(
         today=today,
@@ -150,8 +190,8 @@ async def collect(assistant: Assistant, user: User) -> DemoData:
         month=month,
         weight=weight,
         products=products,
-        weight_kg=kgs[-1] if kgs else None,
-        trend_kg=_ema(kgs),
+        weight_kg=chron[-1].weight_kg if chron else None,
+        trend_kg=_ema(chron),
         streak=_streak(days, goal.daily_kcal),
         est_kcal_share=_est_share(today),
     )
