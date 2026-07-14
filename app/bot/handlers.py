@@ -45,7 +45,6 @@ from app.application.results import (
     WeightTrend,
 )
 from app.bot.dashboard_image import (
-    _streak,
     render_dashboard,
     render_day_card,
     render_goal_card,
@@ -93,7 +92,7 @@ from app.bot.keyboards import (
     undo_picker_keyboard,
     variant_keyboard,
 )
-from app.bot.rich_demo import build_demo_markdown
+from app.bot.rich_demo import build_variants_html
 from app.bot.states import MealStates, ProfileStates
 from app.domain.goals import Goal, goal_from_profile
 from app.domain.timeframe import tz_from_longitude, tz_from_utc_offset
@@ -485,16 +484,13 @@ async def btn_bug(message: Message, state: FSMContext) -> None:
 async def btn_demo(
     message: Message, bot: Bot, app_user: User, assistant: Assistant, state: FSMContext
 ) -> None:
-    """ВРЕМЕННО: демо дизайна на Rich-таблицах (Bot API 10.1) — все разделы одним сообщением."""
+    """ВРЕМЕННО: сравнение подач бара (Rich Messages, HTML) — выбрать дизайн глазами."""
     await state.clear()
     st = await assistant.today(app_user)
     week_days, goal = await assistant.day_calories(app_user, 7)
-    month_days, _ = await assistant.day_calories(app_user, 28)
-    rep = await assistant.month_report(app_user)
     dv = await assistant.day_view(app_user)
     products = await assistant.fixable_products(limit=6)
-    streak = _streak(month_days, goal.daily_kcal)  # тот же счётчик, что на /streak
-    md = build_demo_markdown(st, week_days, goal, rep, dv, products, month_days, streak)
+    html = build_variants_html(st, week_days, goal, dv, products)
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🧪 Кнопка тут работает?", callback_data="demo_ping")]
@@ -503,22 +499,19 @@ async def btn_demo(
     try:
         await bot.send_rich_message(
             chat_id=message.chat.id,
-            rich_message=InputRichMessage(markdown=md),
+            rich_message=InputRichMessage(html=html),
             reply_markup=kb,
         )
-    except TelegramBadRequest as e:  # разметку не приняли — показываем ошибку и сырой markdown
+    except TelegramBadRequest as e:  # разметку не приняли — показываем ошибку и сырой html
         await message.answer(f"❌ Rich-сообщение отклонено:\n{escape(str(e), quote=False)}")
-        await message.answer(f"<pre>{escape(md[:3000], quote=False)}</pre>")
+        await message.answer(f"<pre>{escape(html[:3000], quote=False)}</pre>")
         return
 
-    # Бары/хитмап/доли Б/Ж/У теперь ЖИВУТ В ТАБЛИЦЕ (цветными блоками). Картинкой остаётся
-    # только то, что блоками не нарисуешь — линия веса.
-    trend = await assistant.weight_trend(app_user)
-    if len(trend.logs) >= 2:
-        await message.answer_photo(
-            BufferedInputFile(render_weight_chart(_weight_points(trend)), "weight.png"),
-            caption="⚖️ Вес — линию таблицей не нарисуешь, тут картинка уместна",
-        )
+    # D — та же «Сегодня» картинкой (как сейчас в проде), чтобы сравнить с A/B/C выше.
+    await message.answer_photo(
+        BufferedInputFile(render_today(st.remaining), "today.png"),
+        caption="D. Картинкой (как сейчас в проде) — сравни с A/B/C выше",
+    )
 
 
 @router.message(MealStates.awaiting_bug, F.text)
