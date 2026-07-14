@@ -60,6 +60,11 @@ def _protein_spread(d: DemoData) -> str:
     )
 
 
+
+def _title(d: DemoData) -> str:
+    """Заголовок дня. Гард на пустой days: падение = юзер видит «что-то пошло не так»."""
+    return kit.day_ru(d.days[-1][0]) if d.days else "Сегодня"
+
 def today(d: DemoData) -> str:
     c, g = d.today.remaining.consumed, d.goal
     if not d.today.meals:
@@ -133,7 +138,7 @@ def day(d: DemoData) -> str:
     if not d.today.meals:
         return "<h3>🗒 День</h3><p>Ничего не записано.</p>"
     return (
-        f"<h3>🗒 {kit.day_ru(d.days[-1][0])}</h3>"
+        f"<h3>🗒 {_title(d)}</h3>"
         + _feed(d)
         + "<hr/>"
         + _protein_spread(d)

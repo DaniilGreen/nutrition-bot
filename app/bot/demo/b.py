@@ -37,6 +37,11 @@ def _fat_carb(d: DemoData) -> str:
     )
 
 
+
+def _title(d: DemoData) -> str:
+    """Заголовок дня. Гард на пустой days: падение = юзер видит «что-то пошло не так»."""
+    return kit.day_ru(d.days[-1][0]) if d.days else "Сегодня"
+
 def today(d: DemoData) -> str:
     c, g = d.today.remaining.consumed, d.goal
     if not d.today.meals:
@@ -111,7 +116,7 @@ def day(d: DemoData) -> str:
     if not d.today.meals:
         return _hero("День пуст", "ничего не записано")
     return (
-        _hero(kit.day_ru(d.days[-1][0]), f"{n(c.kcal)} / {n(g.daily_kcal)} ккал")
+        _hero(_title(d), f"{n(c.kcal)} / {n(g.daily_kcal)} ккал")
         + blocks.culprit(d)
         + blocks.accuracy(d)
         + blocks.clarify(d)
