@@ -494,8 +494,11 @@ async def btn_demo(
     title, build = DESIGNS[key]
     data = await collect(assistant, app_user)
 
-    await message.answer(f"⬇️ <b>{escape(title, quote=False)}</b> — все разделы подряд")
-    for section, html in build(data):
+    screens = build(data)
+    await message.answer(
+        f"⬇️ <b>{escape(title, quote=False)}</b> — {len(screens)} экранов подряд"
+    )
+    for section, html in screens:
         try:
             await bot.send_rich_message(
                 chat_id=message.chat.id,
