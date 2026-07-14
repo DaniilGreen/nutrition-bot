@@ -45,6 +45,7 @@ from app.application.results import (
     WeightTrend,
 )
 from app.bot.dashboard_image import (
+    _streak,
     render_dashboard,
     render_day_card,
     render_goal_card,
@@ -488,10 +489,12 @@ async def btn_demo(
     await state.clear()
     st = await assistant.today(app_user)
     week_days, goal = await assistant.day_calories(app_user, 7)
+    month_days, _ = await assistant.day_calories(app_user, 28)
     rep = await assistant.month_report(app_user)
     dv = await assistant.day_view(app_user)
     products = await assistant.fixable_products(limit=6)
-    md = build_demo_markdown(st, week_days, goal, rep, dv, products)
+    streak = _streak(month_days, goal.daily_kcal)  # тот же счётчик, что на /streak
+    md = build_demo_markdown(st, week_days, goal, rep, dv, products, month_days, streak)
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🧪 Кнопка тут работает?", callback_data="demo_ping")]
@@ -508,40 +511,14 @@ async def btn_demo(
         await message.answer(f"<pre>{escape(md[:3000], quote=False)}</pre>")
         return
 
-    # ГИБРИД: цифры — таблицами (выше), графика — нашими PNG альбомом (ниже).
-    # Встроить картинки ВНУТРЬ rich-сообщения нельзя до Bot API 10.2 (у aiogram 3.29 — 10.1):
-    # там media только по HTTP(S)-URL, а наши PNG рендерятся в память. ponytail: альбом рядом.
-    album: list[InputMediaPhoto] = [
-        InputMediaPhoto(
-            media=BufferedInputFile(render_today(st.remaining), "today.png"),
-            caption="📊 Сегодня — бары + кольцо Б/Ж/У",
-        )
-    ]
-    if any(k > 0 for _, k in week_days):
-        album.append(
-            InputMediaPhoto(
-                media=BufferedInputFile(render_weekly_chart(week_days, goal.daily_kcal), "w.png"),
-                caption="📈 Неделя",
-            )
-        )
-    month_days, _ = await assistant.day_calories(app_user, 28)
-    if any(k > 0 for _, k in month_days):
-        album.append(
-            InputMediaPhoto(
-                media=BufferedInputFile(render_heatmap(month_days, goal.daily_kcal), "s.png"),
-                caption="📅 Дни в цели",
-            )
-        )
+    # Бары/хитмап/доли Б/Ж/У теперь ЖИВУТ В ТАБЛИЦЕ (цветными блоками). Картинкой остаётся
+    # только то, что блоками не нарисуешь — линия веса.
     trend = await assistant.weight_trend(app_user)
     if len(trend.logs) >= 2:
-        album.append(
-            InputMediaPhoto(
-                media=BufferedInputFile(render_weight_chart(_weight_points(trend)), "kg.png"),
-                caption="⚖️ Вес",
-            )
+        await message.answer_photo(
+            BufferedInputFile(render_weight_chart(_weight_points(trend)), "weight.png"),
+            caption="⚖️ Вес — линию таблицей не нарисуешь, тут картинка уместна",
         )
-    # list инвариантен, а media ждёт union без Animation — шлём только фото, поэтому безопасно
-    await bot.send_media_group(chat_id=message.chat.id, media=album)  # type: ignore[arg-type]
 
 
 @router.message(MealStates.awaiting_bug, F.text)
