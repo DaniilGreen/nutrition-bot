@@ -92,7 +92,7 @@ from app.bot.keyboards import (
     undo_picker_keyboard,
     variant_keyboard,
 )
-from app.bot.rich_demo import build_variants_html
+from app.bot.rich_demo import build_variants
 from app.bot.states import MealStates, ProfileStates
 from app.domain.goals import Goal, goal_from_profile
 from app.domain.timeframe import tz_from_longitude, tz_from_utc_offset
@@ -484,34 +484,41 @@ async def btn_bug(message: Message, state: FSMContext) -> None:
 async def btn_demo(
     message: Message, bot: Bot, app_user: User, assistant: Assistant, state: FSMContext
 ) -> None:
-    """ВРЕМЕННО: сравнение подач бара (Rich Messages, HTML) — выбрать дизайн глазами."""
+    """ВРЕМЕННО: 7 вариантов дизайна «Сегодня» БЕЗ картинок — выбрать тапом по кнопке."""
     await state.clear()
     st = await assistant.today(app_user)
     week_days, goal = await assistant.day_calories(app_user, 7)
     dv = await assistant.day_view(app_user)
     products = await assistant.fixable_products(limit=6)
-    html = build_variants_html(st, week_days, goal, dv, products)
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🧪 Кнопка тут работает?", callback_data="demo_ping")]
-        ]
-    )
-    try:
-        await bot.send_rich_message(
-            chat_id=message.chat.id,
-            rich_message=InputRichMessage(html=html),
-            reply_markup=kb,
-        )
-    except TelegramBadRequest as e:  # разметку не приняли — показываем ошибку и сырой html
-        await message.answer(f"❌ Rich-сообщение отклонено:\n{escape(str(e), quote=False)}")
-        await message.answer(f"<pre>{escape(html[:3000], quote=False)}</pre>")
-        return
 
-    # D — та же «Сегодня» картинкой (как сейчас в проде), чтобы сравнить с A/B/C выше.
-    await message.answer_photo(
-        BufferedInputFile(render_today(st.remaining), "today.png"),
-        caption="D. Картинкой (как сейчас в проде) — сравни с A/B/C выше",
-    )
+    for i, html in enumerate(build_variants(st, week_days, goal, dv, products), 1):
+        # style=success/danger/primary — цветные кнопки, без Premium и прочих условий
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=f"✅ Хочу вариант {i}",
+                        callback_data=f"demo_pick:{i}",
+                        style="success",
+                    ),
+                    InlineKeyboardButton(
+                        text="✖️ Не то", callback_data="demo_pick:0", style="danger"
+                    ),
+                ]
+            ]
+        )
+        try:
+            await bot.send_rich_message(
+                chat_id=message.chat.id,
+                # skip_entity_detection: иначе «1860/2200» может уехать в номер карты/кэштег
+                rich_message=InputRichMessage(html=html, skip_entity_detection=True),
+                reply_markup=kb,
+            )
+        except TelegramBadRequest as e:  # разметку не приняли — показываем, чтобы починить
+            await message.answer(
+                f"❌ Вариант {i} отклонён: {escape(str(e), quote=False)}"
+            )
+            await message.answer(f"<pre>{escape(html[:1500], quote=False)}</pre>")
 
 
 @router.message(MealStates.awaiting_bug, F.text)
@@ -1129,10 +1136,16 @@ async def on_day_nav(callback: CallbackQuery, app_user: User, assistant: Assista
     await callback.answer()
 
 
-@router.callback_query(F.data == "demo_ping")
-async def on_demo_ping(callback: CallbackQuery) -> None:
-    """ВРЕМЕННО: проверка, что inline-кнопки живут на rich-сообщении."""
-    await callback.answer("✅ Кнопки на rich-сообщении работают", show_alert=True)
+@router.callback_query(F.data.startswith("demo_pick:"))
+async def on_demo_pick(callback: CallbackQuery) -> None:
+    """ВРЕМЕННО: выбор варианта дизайна тапом."""
+    n = (callback.data or "demo_pick:0").split(":", 1)[1]
+    text = (
+        "✖️ Понял, этот не берём."
+        if n == "0"
+        else f"✅ Принял: вариант {n}. Напиши, что в нём докрутить — и разведу по всем разделам."
+    )
+    await callback.answer(text, show_alert=True)
 
 
 @router.callback_query()  # замыкающий: ловит любую устаревшую кнопку (после рестарта/времени)
