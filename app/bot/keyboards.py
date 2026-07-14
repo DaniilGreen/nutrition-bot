@@ -30,9 +30,11 @@ BTN_GOAL = "🎯 Цель"
 BTN_PROFILE = "⚙️ Профиль"
 BTN_UNDO = "↩️ Отменить"
 BTN_BUG = "🐛 Баг"
+BTN_DEMO = "🧪 Демо"  # ВРЕМЕННО: оценка нового дизайна на Rich-таблицах (убрать после решения)
 
 MENU_BUTTONS = (
     BTN_TODAY, BTN_WEEK, BTN_HISTORY, BTN_WEIGHT, BTN_GOAL, BTN_PROFILE, BTN_UNDO, BTN_BUG,
+    BTN_DEMO,
 )
 
 
@@ -40,7 +42,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     for text in MENU_BUTTONS:
         builder.button(text=text)
-    builder.adjust(3, 3, 2)
+    builder.adjust(3, 3, 3)
     return builder.as_markup(resize_keyboard=True, is_persistent=True)
 
 

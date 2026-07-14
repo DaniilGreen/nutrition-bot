@@ -22,7 +22,10 @@ from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
     ErrorEvent,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     InputMediaPhoto,
+    InputRichMessage,
     Message,
 )
 from openai import RateLimitError
@@ -61,6 +64,7 @@ from app.bot.formatters import (
 )
 from app.bot.keyboards import (
     BTN_BUG,
+    BTN_DEMO,
     BTN_GOAL,
     BTN_HISTORY,
     BTN_PROFILE,
@@ -88,6 +92,7 @@ from app.bot.keyboards import (
     undo_picker_keyboard,
     variant_keyboard,
 )
+from app.bot.rich_demo import build_demo_markdown
 from app.bot.states import MealStates, ProfileStates
 from app.domain.goals import Goal, goal_from_profile
 from app.domain.timeframe import tz_from_longitude, tz_from_utc_offset
@@ -473,6 +478,34 @@ async def cmd_bug(
 async def btn_bug(message: Message, state: FSMContext) -> None:
     await state.set_state(MealStates.awaiting_bug)
     await message.answer(_BUG_PROMPT)
+
+
+@router.message(F.text == BTN_DEMO)
+async def btn_demo(
+    message: Message, bot: Bot, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
+    """ВРЕМЕННО: демо дизайна на Rich-таблицах (Bot API 10.1) — все разделы одним сообщением."""
+    await state.clear()
+    st = await assistant.today(app_user)
+    week_days, goal = await assistant.day_calories(app_user, 7)
+    rep = await assistant.month_report(app_user)
+    dv = await assistant.day_view(app_user)
+    products = await assistant.fixable_products(limit=6)
+    md = build_demo_markdown(st, week_days, goal, rep, dv, products)
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🧪 Кнопка тут работает?", callback_data="demo_ping")]
+        ]
+    )
+    try:
+        await bot.send_rich_message(
+            chat_id=message.chat.id,
+            rich_message=InputRichMessage(markdown=md),
+            reply_markup=kb,
+        )
+    except TelegramBadRequest as e:  # разметку не приняли — показываем ошибку и сырой markdown
+        await message.answer(f"❌ Rich-сообщение отклонено:\n{escape(str(e), quote=False)}")
+        await message.answer(f"<pre>{escape(md[:3000], quote=False)}</pre>")
 
 
 @router.message(MealStates.awaiting_bug, F.text)
@@ -1088,6 +1121,12 @@ async def on_day_nav(callback: CallbackQuery, app_user: User, assistant: Assista
     else:  # старое ТЕКСТОВОЕ сообщение истории (до картинок) — шлём новую карточку
         await callback.message.answer_photo(photo, caption=cap, reply_markup=kb)
     await callback.answer()
+
+
+@router.callback_query(F.data == "demo_ping")
+async def on_demo_ping(callback: CallbackQuery) -> None:
+    """ВРЕМЕННО: проверка, что inline-кнопки живут на rich-сообщении."""
+    await callback.answer("✅ Кнопки на rich-сообщении работают", show_alert=True)
 
 
 @router.callback_query()  # замыкающий: ловит любую устаревшую кнопку (после рестарта/времени)
