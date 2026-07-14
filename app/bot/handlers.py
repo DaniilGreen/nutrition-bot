@@ -484,14 +484,11 @@ async def btn_bug(message: Message, state: FSMContext) -> None:
 async def btn_demo(
     message: Message, bot: Bot, app_user: User, assistant: Assistant, state: FSMContext
 ) -> None:
-    """ВРЕМЕННО: 7 вариантов дизайна «Сегодня» БЕЗ картинок — выбрать тапом по кнопке."""
+    """ВРЕМЕННО: два финалиста дизайна «Сегодня» БЕЗ картинок — выбрать тапом."""
     await state.clear()
     st = await assistant.today(app_user)
-    week_days, goal = await assistant.day_calories(app_user, 7)
-    dv = await assistant.day_view(app_user)
-    products = await assistant.fixable_products(limit=6)
 
-    for i, html in enumerate(build_variants(st, week_days, goal, dv, products), 1):
+    for i, html in zip((1, 5), build_variants(st), strict=True):
         # style=success/danger/primary — цветные кнопки, без Premium и прочих условий
         kb = InlineKeyboardMarkup(
             inline_keyboard=[
