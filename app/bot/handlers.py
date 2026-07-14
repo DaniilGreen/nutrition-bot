@@ -506,6 +506,42 @@ async def btn_demo(
     except TelegramBadRequest as e:  # разметку не приняли — показываем ошибку и сырой markdown
         await message.answer(f"❌ Rich-сообщение отклонено:\n{escape(str(e), quote=False)}")
         await message.answer(f"<pre>{escape(md[:3000], quote=False)}</pre>")
+        return
+
+    # ГИБРИД: цифры — таблицами (выше), графика — нашими PNG альбомом (ниже).
+    # Встроить картинки ВНУТРЬ rich-сообщения нельзя до Bot API 10.2 (у aiogram 3.29 — 10.1):
+    # там media только по HTTP(S)-URL, а наши PNG рендерятся в память. ponytail: альбом рядом.
+    album: list[InputMediaPhoto] = [
+        InputMediaPhoto(
+            media=BufferedInputFile(render_today(st.remaining), "today.png"),
+            caption="📊 Сегодня — бары + кольцо Б/Ж/У",
+        )
+    ]
+    if any(k > 0 for _, k in week_days):
+        album.append(
+            InputMediaPhoto(
+                media=BufferedInputFile(render_weekly_chart(week_days, goal.daily_kcal), "w.png"),
+                caption="📈 Неделя",
+            )
+        )
+    month_days, _ = await assistant.day_calories(app_user, 28)
+    if any(k > 0 for _, k in month_days):
+        album.append(
+            InputMediaPhoto(
+                media=BufferedInputFile(render_heatmap(month_days, goal.daily_kcal), "s.png"),
+                caption="📅 Дни в цели",
+            )
+        )
+    trend = await assistant.weight_trend(app_user)
+    if len(trend.logs) >= 2:
+        album.append(
+            InputMediaPhoto(
+                media=BufferedInputFile(render_weight_chart(_weight_points(trend)), "kg.png"),
+                caption="⚖️ Вес",
+            )
+        )
+    # list инвариантен, а media ждёт union без Animation — шлём только фото, поэтому безопасно
+    await bot.send_media_group(chat_id=message.chat.id, media=album)  # type: ignore[arg-type]
 
 
 @router.message(MealStates.awaiting_bug, F.text)
