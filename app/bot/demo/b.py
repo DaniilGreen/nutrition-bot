@@ -29,12 +29,9 @@ def _hero(title: str, sub: str) -> str:
 def _fat_carb(d: DemoData) -> str:
     """Жир — метка пола. Углеводы — число. Ни у того, ни у другого бара нет и не будет."""
     c, g = d.today.remaining.consumed, d.goal
-    floor = g.fat_g * FAT_FLOOR_RATIO
-    note = "ниже пола" if c.fat < floor else "в порядке"
-    return (
-        f"<p>Жир {n(c.fat)} г · пол {n(floor)} г — {note}<br>"
-        f"Углеводы {n(c.carb)} г — сдача, задачей не являются</p>"
-    )
+    # БЕЗ КОММЕНТАРИЕВ: «сдача, задачей не являются» — методология, и она уже написана на «Цели».
+    # Каждый день объяснять её заново — это не урок, а нравоучение.
+    return f"<p>Жир {n(c.fat)} / {n(g.fat_g)} г · Углеводы {n(c.carb)} / {n(g.carb_g)} г</p>"
 
 
 
@@ -50,10 +47,12 @@ def today(d: DemoData) -> str:
             + "<p>«Куриная грудка 250 г», голосом или фото этикетки.</p>"
             + blocks.anchor(d)
         )
-    left = g.daily_kcal - c.kcal
-    sub = f"ещё {n(left)} ккал в бюджете" if left > 0 else f"перебор {n(-left)} ккал"
+    # Герой — ФАКТ, а не приговор: «Недобор — ккал, белок, жир, углеводы» в обед обвиняет
+    # человека в четырёх провалах только за то, что он ещё не поужинал.
+    verd = kit.verdict(c, g, final=d.day_over)
+    sub = verd or f"белок {n(c.protein)} / {n(g.protein_g)} г"
     return (
-        _hero(kit.verdict(c, g), f"{n(c.kcal)} / {n(g.daily_kcal)} ккал · {sub}")
+        _hero(f"{n(c.kcal)} / {n(g.daily_kcal)} ккал · {pct(c.kcal, g.daily_kcal)}%", sub)
         + blocks.macro_block("Ккал", c.kcal, g.daily_kcal)
         + blocks.macro_block("Белок", c.protein, g.protein_g)
         + _fat_carb(d)
@@ -151,13 +150,13 @@ def weight(d: DemoData) -> str:
             if stale > 10
             else f"замеров всего {len(logs)} — линии пока нет"
         )
-        return _hero(f"{logs[0].weight_kg} кг", why) + "<p>Встань на весы — покажу линию.</p>"
+        return _hero(f"{logs[0].weight_kg:.1f} кг", why) + "<p>Встань на весы — покажу линию.</p>"
     lis = "".join(
-        f"<li>{log.measured_at.strftime('%d.%m')} · <b>{log.weight_kg}</b> кг</li>"
+        f"<li>{log.measured_at.strftime('%d.%m')} · <b>{log.weight_kg:.1f}</b> кг</li>"
         for log in logs[:8]
     )
     return (
-        _hero(f"Тренд {d.trend_kg} кг", f"последнее взвешивание {logs[0].weight_kg} кг")
+        _hero(f"Тренд {d.trend_kg} кг", f"последнее взвешивание {logs[0].weight_kg:.1f} кг")
         + "<p><i>Одно взвешивание — шум: вода и содержимое ЖКТ дают ±1–1.5 кг за сутки. "
         "Линия — сигнал.</i></p>"
         + f"<details><summary>📋 Замеры</summary><ul>{lis}</ul></details>"
@@ -201,7 +200,7 @@ def evening(d: DemoData) -> str:
             + blocks.anchor(d)
         )
     return (
-        _hero(kit.verdict(c, g), f"{n(c.kcal)} / {n(g.daily_kcal)} ккал")
+        _hero(kit.verdict(c, g, final=True), f"{n(c.kcal)} / {n(g.daily_kcal)} ккал")
         + blocks.macro_block("Белок", c.protein, g.protein_g)
         + blocks.over_note(d)
         + adv

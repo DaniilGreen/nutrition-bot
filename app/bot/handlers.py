@@ -480,6 +480,21 @@ async def btn_bug(message: Message, state: FSMContext) -> None:
     await message.answer(_BUG_PROMPT)
 
 
+@router.message(F.text == "🧪 Демо")
+async def btn_demo_legacy(message: Message, state: FSMContext) -> None:
+    """Старая кнопка из КЭША клавиатуры у уже онбордившихся юзеров.
+
+    Клавиатура пересылается только на /start, /help и в визардах — значит после переименования
+    у обоих юзеров в чате ещё висит «🧪 Демо». Без этого хендлера тап по ней провалился бы в
+    on_text и бот попытался бы ЗАПИСАТЬ «🧪 Демо» как приём пищи (а точность учёта — приоритет №1).
+    """
+    await state.clear()
+    await message.answer(
+        "Кнопка переехала: теперь три дизайна — 🅰 Дашборд · 🅱 Тренер · 🅲 Лента",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
 @router.message(F.text.in_(DEMO_BUTTONS))
 async def btn_demo(
     message: Message, bot: Bot, app_user: User, assistant: Assistant, state: FSMContext

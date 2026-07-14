@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo
 
 from app.application.assistant import Assistant
 from app.application.entities import Meal, MealItem, Product, User, WeightLog
@@ -38,6 +39,7 @@ class DemoData:
     weight_kg: float | None  # последнее взвешивание — для белка на кг
     trend_kg: float | None  # EMA веса: дневной вес скачет на воде, тренд — сигнал
     streak: int  # дней подряд в цели
+    local_hour: int  # час у пользователя: «недобор» и советы имеют смысл только к концу дня
     est_kcal_share: int  # % калорий за сегодня, посчитанных ОЦЕНКОЙ, а не по точному весу
 
     @property
@@ -88,6 +90,25 @@ class DemoData:
     @property
     def avg7_kcal(self) -> float:
         return self.week7.avg_macros.kcal
+
+    @property
+    def day_over(self) -> bool:
+        """День фактически закрыт → можно говорить «недобор» и подводить итоги.
+
+        До вечера недобор — не факт, а нетерпение: человек просто ещё не поужинал.
+        """
+        return self.local_hour >= 21
+
+    @property
+    def advice_due(self) -> bool:
+        """Пора ли советовать добор.
+
+        На завтраке совет «съешь 400 г куриной грудки» абсурден: впереди ещё два приёма, разрыв
+        закроется сам. Совет уместен, когда день почти прожит — по часам или по съеденному.
+        """
+        eaten = self.today.remaining.consumed.kcal
+        goal = self.goal.daily_kcal
+        return self.local_hour >= 17 or (goal > 0 and eaten >= 0.6 * goal)
 
     @property
     def days_since_weigh_in(self) -> int | None:
@@ -194,6 +215,7 @@ async def collect(assistant: Assistant, user: User) -> DemoData:
         trend_kg=_ema(chron),
         streak=_streak(days, goal.daily_kcal),
         est_kcal_share=_est_share(today),
+        local_hour=datetime.now(ZoneInfo(today.timezone)).hour,
     )
 
 

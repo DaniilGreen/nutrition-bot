@@ -15,6 +15,11 @@ from app.bot.demo.data import DemoData
 from app.bot.demo.kit import e, n, pct, tg_time, verdict
 
 
+def _short(name: str, limit: int = 16) -> str:
+    """Обрезка с многоточием: молча урезанное имя искажает продукт на экране, где его же чинят."""
+    return name if len(name) <= limit else name[: limit - 1] + "…"
+
+
 def _title(d: DemoData) -> str:
     """Заголовок дня. Гард на пустой days: падение = юзер видит «что-то пошло не так»."""
     return kit.day_ru(d.days[-1][0]) if d.days else "Сегодня"
@@ -29,7 +34,7 @@ def today(d: DemoData) -> str:
     bars = "".join(blocks.macro_block(lab, cons, goal) for lab, cons, goal in kit.macros_rows(c, g))
     return (
         "<h3>📊 Сегодня</h3>"
-        f"<p><i>{verdict(c, g)}</i></p>"
+        f"<p><i>{verdict(c, g, final=d.day_over)}</i></p>"
         + bars
         + blocks.anchor(d)
         + blocks.accuracy(d)
@@ -56,12 +61,18 @@ def meal(d: DemoData) -> str:
             f"<li>{mark}{e(it.name_snapshot)} — {grams}<b>{n(it.macros.kcal)}</b> ккал · "
             f"Б{n(it.macros.protein)} Ж{n(it.macros.fat)} У{n(it.macros.carb)}</li>"
         )
-    return (
-        f"<h3>✅ Записал · {tg_time(m.eaten_at, d.today.timezone)}</h3>"
-        f"<ul>{''.join(lis)}</ul>"
+    # При ОДНОЙ позиции строка «Приём: …» дословно повторяет её же — не печатаем.
+    total = (
         f"<p>Приём: <b>{n(m.totals.kcal)} ккал</b> ({pct(m.totals.kcal, g.daily_kcal)}% цели) · "
         f"Б{n(m.totals.protein)} Ж{n(m.totals.fat)} У{n(m.totals.carb)}</p>"
-        "<hr/>"
+        if len(m.items) > 1
+        else ""
+    )
+    return (
+        f"<h3>✅ Записал · {tg_time(m.eaten_at, d.today.timezone)}</h3>"
+        + f"<ul>{''.join(lis)}</ul>"
+        + total
+        + "<hr/>"
         + blocks.macro_block("Ккал", c.kcal, g.daily_kcal)
         + blocks.macro_block("Белок", c.protein, g.protein_g)
         + blocks.clarify(d)
@@ -77,7 +88,7 @@ def week(d: DemoData) -> str:
     bars = "".join(blocks.macro_block(lab, cons, goal) for lab, cons, goal in kit.macros_rows(a, g))
     return (
         "<h3>📈 Неделя · в среднем за день</h3>"
-        f"<p><i>{verdict(a, g)}</i></p>"
+        f"<p><i>{verdict(a, g, final=True)}</i></p>"
         + bars
         + f"<p>Дней в цели: <b>{w.days_in_goal}</b> из {w.days_logged} записанных</p>"
         + blocks.week_table(d)
@@ -109,7 +120,7 @@ def products(d: DemoData) -> str:
     for p in d.products:
         den = p.density
         rows.append(
-            f"<tr><td>{e(p.display_name[:16])}</td>"
+            f"<tr><td>{e(_short(p.display_name))}</td>"
             f'<td align="right">{n(den.kcal_per_100g)}</td>'
             f'<td align="right">{n(den.protein_per_100g)}·'
             f"{n(den.fat_per_100g)}·{n(den.carb_per_100g)}</td></tr>"

@@ -30,11 +30,9 @@ def anchor(d: DemoData) -> str:
     """
     if not d.logged7:
         return "<footer>За 7 дней записей нет — среднее считать не из чего.</footer>"
-    tail = f"записано {d.logged7} из 7 дней"
-    if d.logged7 < 5:
-        tail += " · дырявая неделя, среднее скорее занижено"
+    tail = "" if d.logged7 >= 5 else " · неделя дырявая, среднее занижено"
     avg, goal = n(d.avg7_kcal), n(d.goal.daily_kcal)
-    return f"<footer>7 дней: в среднем {avg} / {goal} ккал · {tail}</footer>"
+    return f"<footer>7 дней: {avg} / {goal} ккал · записано {d.logged7} из 7{tail}</footer>"
 
 
 def accuracy(d: DemoData) -> str:
@@ -74,8 +72,9 @@ def culprit(d: DemoData) -> str:
     """
     item = d.top_item
     kcal = d.today.remaining.consumed.kcal
-    if item is None or not kcal or item.macros.kcal / kcal < 0.25:
-        return ""  # явного лидера нет — и показывать нечего
+    if len(d.items) < 3 or item is None or not kcal or item.macros.kcal / kcal < 0.25:
+        # Лидера нет, либо позиций мало: «больше всего дала» из двух — пустой звук.
+        return ""
     share = round(100 * item.macros.kcal / kcal)
     return (
         f"<p>💰 Больше всего дала <b>{e(item.name_snapshot)}</b> — "
@@ -121,6 +120,8 @@ def advice(d: DemoData) -> str:
     сильнее совета. Тогда просим уточнить вес, а не выдумываем граммы творога."""
     from app.bot.demo import topup  # локальный импорт: topup не нужен прочим импортёрам blocks
 
+    if not d.advice_due:
+        return ""  # утром разрыв закроется сам — советовать 400 г грудки на завтрак абсурдно
     if not d.trust_ok:
         item = d.to_clarify
         if item is None:
@@ -143,17 +144,18 @@ def eaten(d: DemoData, *, open_: bool = False) -> str:
     rows = [(it.macros.kcal, it, m) for m in d.today.meals for it in m.items]
     rows.sort(key=lambda r: -r[0])
     lis = []
-    for kcal, it, m in rows[:12]:
+    for kcal, it, _m in rows[:12]:
         mark = "≈ " if it.is_estimate else ""
-        when = kit.tg_time(m.eaten_at, d.today.timezone)
-        lis.append(f"<li>{when} · {mark}{e(it.name_snapshot)} — <b>{n(kcal)}</b> ккал</li>")
-    k = d.today.meals_count
-    word = kit.plural(k, "приём", "приёма", "приёмов")
-    attr = " open" if open_ else ""
-    return (
-        f"<details{attr}><summary>🍽 Съедено · {k} {word} · по вкладу в ккал</summary>"
-        f"<ul>{''.join(lis)}</ul></details>"
+        # Времени тут НЕТ намеренно: список отсортирован по калориям, а «12:30» впереди строки
+        # обещает хронологию и путает. Хронология — в «Дне» и в ленте дизайна C.
+        lis.append(f"<li>{mark}{e(it.name_snapshot)} — <b>{n(kcal)}</b> ккал</li>")
+    k, items = d.today.meals_count, len(rows)
+    head = (
+        f"🍽 Съедено · {k} {kit.plural(k, 'приём', 'приёма', 'приёмов')} · "
+        f"{items} {kit.plural(items, 'позиция', 'позиции', 'позиций')}"
     )
+    attr = " open" if open_ else ""
+    return f"<details{attr}><summary>{head}</summary><ul>{''.join(lis)}</ul></details>"
 
 
 def week_table(d: DemoData) -> str:
@@ -185,7 +187,7 @@ def weight_block(d: DemoData) -> str:
     logs = d.weight.logs
     if not logs:
         return "<p>⚖️ Вес ещё не записан. Напиши «вес 86.8».</p>"
-    last = logs[0].weight_kg
+    last = f"{logs[0].weight_kg:.1f}"
     stale = d.days_since_weigh_in or 0
     if not d.trend_ok:
         why = (
@@ -195,8 +197,7 @@ def weight_block(d: DemoData) -> str:
         )
         return f"<p>⚖️ <b>{last} кг</b> · {why}.<br><i>Встань на весы — покажу линию.</i></p>"
     return (
-        f"<p>⚖️ Тренд <b>{d.trend_kg} кг</b> · последнее {last} кг · {len(logs)} замеров<br>"
-        "<i>Одно взвешивание — шум. Линия — сигнал.</i></p>"
+        f"<p>⚖️ Тренд <b>{d.trend_kg} кг</b> · последнее {last} кг · {len(logs)} замеров</p>"
     )
 
 
@@ -237,14 +238,13 @@ def branches(d: DemoData) -> str:
 
     return (
         "<h3>🎬 Ветки, которых сегодня не видно</h3>"
-        "<p><i>Цифры выдуманы — у тебя сегодня белок закрыт и калории в бюджете, поэтому эти "
-        "сообщения не сработали бы. Показываю, как они выглядят.</i></p>"
+        "<p><i>Цифры выдуманы. Эти сообщения показываются, только когда есть что сказать, — на "
+        "твоих сегодняшних данных часть из них молчит. Вот как они выглядят.</i></p>"
         "<p><b>1. Белка не хватает, место есть</b></p>" + advice(what_if(gap)) + "<hr/>"
         "<p><b>2. Жир уже перебран — добирать белок нечем</b></p>" + advice(what_if(fat_out)) +
         "<hr/>"
         "<p><b>3. Перебор калорий</b></p>" + over_note(what_if(big)) +
-        "<p><i>Ни стыда, ни компенсации: «отработать кардио» и «завтра поголодаю» — прямой путь "
-        "в цикл срывов.</i></p>"
+""
     )
 
 

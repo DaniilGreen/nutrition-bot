@@ -19,7 +19,14 @@ from app.bot.demo.data import DemoData, day_status
 from app.bot.demo.kit import e, n, pct, tg_time
 
 PROTEIN_PER_MEAL_RATIO = 0.3  # г/кг массы на приём — ниже этого приём «пустой» по белку
+MEAL_MIN_KCAL = 300  # порог белка применяем только к существенному приёму, не к чаю и гарниру
+MIN_MEALS_FOR_SPREAD = 3  # «распределение» из одного-двух чисел — не распределение
 _ICONS = {"none": "▫️", "ok": "🟢", "low": "🟡", "over": "🔴"}
+
+
+def _short(name: str, limit: int = 16) -> str:
+    """Обрезка с многоточием: молча урезанное имя искажает продукт на экране, где его же чинят."""
+    return name if len(name) <= limit else name[: limit - 1] + "…"
 
 
 def _meal_threshold(d: DemoData) -> float:
@@ -35,7 +42,9 @@ def _feed(d: DemoData) -> str:
     for m in d.today.meals:
         acc += m.totals.kcal
         names = ", ".join(f"{'≈' if it.is_estimate else ''}{e(it.name_snapshot)}" for it in m.items)
-        low = " · мало белка" if m.totals.protein < thr else ""
+        # Порог применим только к существенному приёму: у риса и чая белка не бывает,
+        # и метка «мало белка» на гарнире — капитан очевидность.
+        low = " · мало белка" if m.totals.kcal >= MEAL_MIN_KCAL and m.totals.protein < thr else ""
         out.append(
             f"<blockquote>{tg_time(m.eaten_at, d.today.timezone)} · {names}<br>"
             f"<b>{n(m.totals.kcal)}</b> ккал · белок <b>{n(m.totals.protein)}</b> г{low}"
@@ -45,19 +54,32 @@ def _feed(d: DemoData) -> str:
 
 
 def _protein_spread(d: DemoData) -> str:
-    """Распределение белка по приёмам — сердце этого дизайна."""
-    if not d.today.meals:
+    """Распределение белка по приёмам — сердце этого дизайна.
+
+    ДВА ПРАВИЛА, БЕЗ КОТОРЫХ БЛОК ВРЁТ:
+    1. Распределения из одного-двух чисел не бывает. При <3 приёмах молчим.
+    2. Совет обязан смотреть, КАКОЙ приём слабый. Старый шаблон писал «перенеси белок на утро»
+       даже когда провален был УЖИН (а завтрак с обедом отличные) — и даже когда единственный
+       приём БЫЛ утренним. Это не совет, это подстановка.
+    """
+    meals = [m for m in d.today.meals if m.totals.kcal >= MEAL_MIN_KCAL]
+    if len(meals) < MIN_MEALS_FOR_SPREAD:
         return ""
     thr = _meal_threshold(d)
-    parts = " · ".join(n(m.totals.protein) for m in d.today.meals)
-    weak = sum(1 for m in d.today.meals if m.totals.protein < thr)
+    parts = " · ".join(n(m.totals.protein) for m in meals)
     head = f"<p>🥩 Белок по приёмам: <b>{parts}</b> г (порог {n(thr)} г)</p>"
+
+    weak = [i for i, m in enumerate(meals) if m.totals.protein < thr]
     if not weak:
         return head + "<p>Распределён ровно — день закроется без ужина-монстра.</p>"
-    return head + (
-        f"<p>Приёмов ниже порога: {weak}. Перенеси часть белка на утро — иначе вечером он просто "
-        "не влезет в остаток калорий, и день закроется недобором.</p>"
+    early = [i for i in weak if i < len(meals) // 2]  # слабые приёмы в первой половине дня
+    where = "в начале дня" if early else "к вечеру"
+    tip = (
+        "Добавь белка в ранние приёмы — вечером он уже не влезет в остаток калорий."
+        if early
+        else "Ранние приёмы вытянули день, но вечер провис — на нём и добирай."
     )
+    return head + f"<p>Провисли приёмы {where}: {len(weak)}. {tip}</p>"
 
 
 
@@ -129,8 +151,7 @@ def week(d: DemoData) -> str:
         + blocks.macro_block("Ккал", a.kcal, d.goal.daily_kcal)
         + blocks.macro_block("Белок", a.protein, d.goal.protein_g)
         + f"<p>Записано {w.days_logged} из 7 · в цели {w.days_in_goal}</p>"
-        + "<footer>Скачки вверх-вниз опаснее ровного перебора: за жёстким недоедом почти всегда "
-        "идёт срыв. Ровная линия бьёт идеальные дни.</footer>"
+        + "<footer>Ровная линия бьёт идеальные дни.</footer>"
     )
 
 
@@ -162,7 +183,7 @@ def products(d: DemoData) -> str:
         den = p.density
         ppk = den.protein_per_100g / den.kcal_per_100g if den.kcal_per_100g else 0
         rows.append(
-            f"<tr><td>{e(p.display_name[:16])}</td>"
+            f"<tr><td>{e(_short(p.display_name))}</td>"
             f'<td align="right">{n(den.kcal_per_100g)}</td>'
             f'<td align="right">{ppk:.2f}</td></tr>'
         )
@@ -186,15 +207,15 @@ def weight(d: DemoData) -> str:
             if stale > 10
             else f"замеров всего {len(logs)} — линии пока нет"
         )
-        return f"<h3>⚖️ Вес</h3><p><b>{logs[0].weight_kg} кг</b> · {why}.</p>"
+        return f"<h3>⚖️ Вес</h3><p><b>{logs[0].weight_kg:.1f} кг</b> · {why}.</p>"
     lis = "".join(
-        f"<li>{log.measured_at.strftime('%d.%m')} · <b>{log.weight_kg}</b> кг</li>"
+        f"<li>{log.measured_at.strftime('%d.%m')} · <b>{log.weight_kg:.1f}</b> кг</li>"
         for log in logs[:10]
     )
     return (
         f"<h3>⚖️ Тренд {d.trend_kg} кг</h3>"
-        f"<blockquote>Последнее взвешивание {logs[0].weight_kg} кг"
-        "<cite>одно взвешивание — шум, линия — сигнал</cite></blockquote>"
+        f"<blockquote>Последнее взвешивание {logs[0].weight_kg:.1f} кг"
+        f"<cite>{len(logs)} замеров</cite></blockquote>"
         f"<ul>{lis}</ul>"
         "<footer>Вода и содержимое ЖКТ двигают вес на ±1–1.5 кг за сутки. Тренд сглаживает это "
         "и показывает, что происходит на самом деле.</footer>"

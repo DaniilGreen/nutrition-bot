@@ -70,14 +70,21 @@ def em(eid: str, fallback: str) -> str:
 
 
 def status(cons: float, goal: float, label: str) -> str:
-    """недобор / в цели / перебор. У белка недобор критичнее (мышцы при дефиците) → порог выше."""
+    """недобор / в цели / перебор.
+
+    У БЕЛКА ПЕРЕБОРА НЕ БЫВАЕТ. Это единственный макрос, превышение которого безвредно (лишний
+    белок просто окисляется, а сытость и термический эффект у него выше всех). Красить 120% белка
+    красным — значит ругать человека за единственное, что он сделал правильно. Порог недобора у
+    белка, наоборот, строже: при дефиците его нехватка бьёт по мышцам.
+    """
     if not goal:
         return "ok"
     r = cons / goal
-    low_edge = 0.90 if label.startswith("Белок") else 0.85
+    if label.startswith("Белок"):
+        return "ok" if r >= 0.90 else "low"
     if r > 1.05:
         return "over"
-    return "ok" if r >= low_edge else "low"
+    return "ok" if r >= 0.85 else "low"
 
 
 def dot(cons: float, goal: float, label: str) -> str:
@@ -111,8 +118,17 @@ def bar(cons: float, goal: float, label: str, w: int = BAR_W) -> str:
         eid, fb = _SEG[stt]
         filled = round(w * min(1.0, ratio))
         return em(eid, fb) * filled + em(SEG_EMPTY, "⬜") * (w - filled)
-    over = min(MAX_OVER, max(1, round(w * (ratio - 1.0))))
-    return em(SEG_OK, "🟩") * w + em(SEG_OVER, "🟥") * over
+
+    # ПЕРЕБОР — ВЕСЬ БАР КРАСНЫЙ, а не «зелёный с красным хвостиком».
+    # Была ошибка: первые 10 сегментов красились зелёным («цель же взята!») — и при 144% жира
+    # 71% полосы был зелёным, то есть провал выглядел успехом. Цвет = наполнение (как и просил
+    # владелец): перелил — вся полоса красная. Длина сверх трека несёт величину.
+    raw_over = round(w * (ratio - 1.0))
+    over = min(MAX_OVER, max(1, raw_over))
+    # «…» — честная метка насыщения: дальше бар физически не растёт (уедет на вторую строку),
+    # и без неё 140% и 300% выглядели БЫ одинаково. Точную величину всегда несёт %.
+    saturated = "…" if raw_over > MAX_OVER else ""
+    return em(SEG_OVER, "🟥") * (w + over) + saturated
 
 
 def sigma_kcal(items: list[tuple[float, bool]]) -> float:
@@ -159,16 +175,23 @@ def macro_line(label: str, cons: float, goal: float) -> str:
     return f"<b>{label}</b> · {n(cons)} / {n(goal)} · <b>{pct(cons, goal)}%</b>"
 
 
-def verdict(cons: Macros, goal: Goal) -> str:
-    """Одна честная фраза: где недобор, где перебор. Без «осталось» — его не любят."""
+def verdict(cons: Macros, goal: Goal, *, final: bool = False) -> str:
+    """Одна честная фраза: где недобор, где перебор.
+
+    «НЕДОБОР» — ПОНЯТИЕ КОНЦА ДНЯ, И ДНЁМ ЕГО ГОВОРИТЬ НЕЛЬЗЯ. В обед человек съел 1600 из 2200 —
+    разумеется, он «недобрал» всё подряд. Он просто ещё не ужинал. Бот, который в 13:00 объявляет
+    «Недобор — ккал, белок, жир, углеводы», обвиняет человека в четырёх провалах на пустом месте.
+    Поэтому днём (final=False) сообщаем ТОЛЬКО перебор: он-то правда уже случился и не рассосётся.
+    """
     rows = macros_rows(cons, goal)
-    low = [lab for lab, c, g in rows if status(c, g, lab) == "low"]
     over = [lab for lab, c, g in rows if status(c, g, lab) == "over"]
-    if not low and not over:
-        return "Всё в цели"
     parts = []
-    if low:
-        parts.append(f"Недобор — {', '.join(low).lower()}")
+    if final:
+        low = [lab for lab, c, g in rows if status(c, g, lab) == "low"]
+        if not low and not over:
+            return "Всё в цели"
+        if low:
+            parts.append(f"Недобор — {', '.join(low).lower()}")
     if over:
         parts.append(f"Перебор — {', '.join(over).lower()}")
     return " · ".join(parts)
