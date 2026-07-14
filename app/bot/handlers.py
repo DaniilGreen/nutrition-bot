@@ -55,6 +55,7 @@ from app.bot.dashboard_image import (
     render_weekly_chart,
     render_weight_chart,
 )
+from app.bot.demo import DESIGNS, collect
 from app.bot.formatters import (
     day_photo_caption,
     format_goal,
@@ -64,7 +65,6 @@ from app.bot.formatters import (
 )
 from app.bot.keyboards import (
     BTN_BUG,
-    BTN_DEMO,
     BTN_GOAL,
     BTN_HISTORY,
     BTN_PROFILE,
@@ -73,6 +73,7 @@ from app.bot.keyboards import (
     BTN_WEEK,
     BTN_WEIGHT,
     DAY_NAV_PREFIX,
+    DEMO_BUTTONS,
     LABEL_G_PREFIX,
     ONBOARD_PREFIX,
     PROD_RENAME_PREFIX,
@@ -92,7 +93,6 @@ from app.bot.keyboards import (
     undo_picker_keyboard,
     variant_keyboard,
 )
-from app.bot.rich_demo import build_variants
 from app.bot.states import MealStates, ProfileStates
 from app.domain.goals import Goal, goal_from_profile
 from app.domain.timeframe import tz_from_longitude, tz_from_utc_offset
@@ -480,42 +480,44 @@ async def btn_bug(message: Message, state: FSMContext) -> None:
     await message.answer(_BUG_PROMPT)
 
 
-@router.message(F.text == BTN_DEMO)
+@router.message(F.text.in_(DEMO_BUTTONS))
 async def btn_demo(
     message: Message, bot: Bot, app_user: User, assistant: Assistant, state: FSMContext
 ) -> None:
-    """ВРЕМЕННО: два финалиста дизайна «Сегодня» БЕЗ картинок — выбрать тапом."""
-    await state.clear()
-    st = await assistant.today(app_user)
+    """ВРЕМЕННО: полный дизайн-прогон. Одна кнопка = ВСЕ разделы в одном оформлении.
 
-    for i, html in zip((1, 5), build_variants(st), strict=True):
-        # style=success/danger/primary — цветные кнопки, без Premium и прочих условий
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text=f"✅ Хочу вариант {i}",
-                        callback_data=f"demo_pick:{i}",
-                        style="success",
-                    ),
-                    InlineKeyboardButton(
-                        text="✖️ Не то", callback_data="demo_pick:0", style="danger"
-                    ),
-                ]
-            ]
-        )
+    Три дизайна отличаются не покраской, а тем, на какой вопрос отвечает экран:
+    A «Дашборд» — покажи цифры; B «Тренер» — что делать; C «Лента» — как прошёл день.
+    """
+    await state.clear()
+    key = DEMO_BUTTONS[message.text or ""]
+    title, build = DESIGNS[key]
+    data = await collect(assistant, app_user)
+
+    await message.answer(f"⬇️ <b>{escape(title, quote=False)}</b> — все разделы подряд")
+    for section, html in build(data):
         try:
             await bot.send_rich_message(
                 chat_id=message.chat.id,
-                # skip_entity_detection: иначе «1860/2200» может уехать в номер карты/кэштег
+                # skip_entity_detection: иначе «1860/2200» уедет в номер карты/кэштег
                 rich_message=InputRichMessage(html=html, skip_entity_detection=True),
-                reply_markup=kb,
             )
-        except TelegramBadRequest as e:  # разметку не приняли — показываем, чтобы починить
-            await message.answer(
-                f"❌ Вариант {i} отклонён: {escape(str(e), quote=False)}"
-            )
-            await message.answer(f"<pre>{escape(html[:1500], quote=False)}</pre>")
+        except TelegramBadRequest as exc:  # разметку не приняли — показать, чтобы починить
+            await message.answer(f"❌ {section}: {escape(str(exc), quote=False)}")
+            await message.answer(f"<pre>{escape(html[:1200], quote=False)}</pre>")
+
+    # style=success/danger/primary — цветные кнопки, без Premium и прочих условий
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"✅ Беру {title}", callback_data=f"demo_pick:{key}", style="success"
+                ),
+                InlineKeyboardButton(text="✖️ Не то", callback_data="demo_pick:0", style="danger"),
+            ]
+        ]
+    )
+    await message.answer(f"👆 Это был <b>{escape(title, quote=False)}</b>", reply_markup=kb)
 
 
 @router.message(MealStates.awaiting_bug, F.text)
@@ -1135,14 +1137,15 @@ async def on_day_nav(callback: CallbackQuery, app_user: User, assistant: Assista
 
 @router.callback_query(F.data.startswith("demo_pick:"))
 async def on_demo_pick(callback: CallbackQuery) -> None:
-    """ВРЕМЕННО: выбор варианта дизайна тапом."""
-    n = (callback.data or "demo_pick:0").split(":", 1)[1]
-    text = (
-        "✖️ Понял, этот не берём."
-        if n == "0"
-        else f"✅ Принял: вариант {n}. Напиши, что в нём докрутить — и разведу по всем разделам."
+    """ВРЕМЕННО: выбор дизайна тапом."""
+    key = (callback.data or "demo_pick:0").split(":", 1)[1]
+    if key not in DESIGNS:
+        await callback.answer("✖️ Понял, этот не берём.", show_alert=True)
+        return
+    title, _ = DESIGNS[key]
+    await callback.answer(
+        f"✅ Принял: {title}. Скажи, что докрутить — и раскатаю на прод.", show_alert=True
     )
-    await callback.answer(text, show_alert=True)
 
 
 @router.callback_query()  # замыкающий: ловит любую устаревшую кнопку (после рестарта/времени)

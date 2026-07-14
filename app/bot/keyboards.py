@@ -30,11 +30,16 @@ BTN_GOAL = "🎯 Цель"
 BTN_PROFILE = "⚙️ Профиль"
 BTN_UNDO = "↩️ Отменить"
 BTN_BUG = "🐛 Баг"
-BTN_DEMO = "🧪 Демо"  # ВРЕМЕННО: оценка нового дизайна на Rich-таблицах (убрать после решения)
+# ВРЕМЕННО: три полных дизайна интерфейса на выбор. Каждая кнопка шлёт ВСЕ разделы в своём
+# оформлении. Убрать вместе с пакетом app/bot/demo после выбора.
+BTN_DEMO_A = "🅰 Дашборд"  # всё видно сразу, четыре бара
+BTN_DEMO_B = "🅱 Тренер"  # вердикт сверху, бары только ккал+белок, детали под кат
+BTN_DEMO_C = "🅲 Лента"  # хронология приёмов, белок по приёмам
+DEMO_BUTTONS = {BTN_DEMO_A: "a", BTN_DEMO_B: "b", BTN_DEMO_C: "c"}
 
 MENU_BUTTONS = (
     BTN_TODAY, BTN_WEEK, BTN_HISTORY, BTN_WEIGHT, BTN_GOAL, BTN_PROFILE, BTN_UNDO, BTN_BUG,
-    BTN_DEMO,
+    BTN_DEMO_A, BTN_DEMO_B, BTN_DEMO_C,
 )
 
 
@@ -42,7 +47,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     for text in MENU_BUTTONS:
         builder.button(text=text)
-    builder.adjust(3, 3, 3)
+    builder.adjust(3, 3, 2, 3)
     return builder.as_markup(resize_keyboard=True, is_persistent=True)
 
 
