@@ -66,26 +66,30 @@ def _variant_a(st: DailyStats) -> str:
 
 
 def _variant_b(st: DailyStats) -> str:
-    """Текстовый бар █/░ — одинарная ширина, не переносится."""
-    out = ["<h2>B. Текстовый бар (█░)</h2>", "<table>"]
+    """Бар ПОДСВЕТКОЙ ПРОБЕЛОВ: цветная полоса без единого глифа (глиф закрывал бы цвет)."""
+    out = ["<h2>B. Цветная полоса (mark на пробелах)</h2>", "<table>"]
     for lab, cons, goal in _rows(st):
         f = _filled(cons, goal)
-        bar = "█" * f + "░" * (_BAR_W - f)
+        fill = f"<mark>{'&nbsp;' * (f * 2)}</mark>" if f else ""
+        rest = "&nbsp;" * ((_BAR_W - f) * 2)
         out.append(
-            f"<tr><td><b>{lab}</b></td><td>{bar}</td><td>{_pct(cons, goal)}%</td></tr>"
+            f"<tr><td><b>{lab}</b></td><td>{fill}{rest}</td>"
+            f"<td>{_pct(cons, goal)}%</td></tr>"
         )
     out.append("</table>")
     return "\n".join(out)
 
 
 def _variant_c(st: DailyStats) -> str:
-    """Бар с подсветкой <mark> — цвет без квадратов."""
-    out = ["<h2>C. Бар с подсветкой (mark)</h2>", "<table>"]
+    """То же, но с видимым «треком»: подсветка + тонкая линия остатка."""
+    out = ["<h2>C. Полоса + трек</h2>", "<table>"]
     for lab, cons, goal in _rows(st):
         f = _filled(cons, goal)
-        bar = f"<mark>{'█' * f}</mark>{'░' * (_BAR_W - f)}" if f else "░" * _BAR_W
+        fill = f"<mark>{'&nbsp;' * (f * 2)}</mark>" if f else ""
+        rest = "·" * (_BAR_W - f)
         out.append(
-            f"<tr><td><b>{lab}</b></td><td>{bar}</td><td>{_pct(cons, goal)}%</td></tr>"
+            f"<tr><td><b>{lab}</b></td><td>{fill}{rest}</td>"
+            f"<td>{_pct(cons, goal)}%</td></tr>"
         )
     out.append("</table>")
     return "\n".join(out)
@@ -167,10 +171,10 @@ def build_variants_html(
 ) -> str:
     """4 подачи одних данных + разделы, где таблица объективно уместна."""
     parts = [
-        "<h1>🧪 Варианты дизайна бара</h1>",
-        "<p><i>Квадраты-эмодзи убрал: они двойной ширины, поэтому бар переносился и «съезжал». "
-        "Ниже — три подачи одних и тех же цифр, плюс четвёртая (картинка) отдельным сообщением. "
-        "Скажи, какая нравится.</i></p>",
+        "<h1>🧪 Варианты дизайна бара — заход 2</h1>",
+        "<p><i>Прошлый заход провалился: █ и ░ рисуются ОДНИМ цветом темы (контраста нет), "
+        "а непрозрачные блоки ещё и закрывали собой подсветку. Вывод: красить надо не глиф, "
+        "а пустоту. Ниже — полоса из подсвеченных пробелов: цвет есть, квадратов нет.</i></p>",
         _variant_a(st),
         _variant_b(st),
         _variant_c(st),
