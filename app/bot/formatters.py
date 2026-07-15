@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-from datetime import date
 from html import escape
 from zoneinfo import ZoneInfo
 
@@ -14,7 +13,6 @@ from app.application.results import (
     ClarificationNeeded,
     CorrectionFailed,
     DailyStats,
-    DayView,
     History,
     ItemAdjusted,
     ItemRemoved,
@@ -28,7 +26,7 @@ from app.application.results import (
     WeightLogged,
     WeightTrend,
 )
-from app.domain.goals import Goal, Remaining
+from app.domain.goals import Remaining
 
 _LOW_CONFIDENCE = 0.6  # ниже — помечаем разбор как сомнительный
 _SPARK = "▁▂▃▄▅▆▇█"
@@ -120,15 +118,6 @@ def _format_meal(r: MealLogged) -> str:
     return "\n".join(lines)
 
 
-def meal_photo_caption(r: MealLogged) -> str:
-    """Подпись к фото-карточке приёма: записанное + сноски, БЕЗ баров (они в картинке)."""
-    lines = _meal_head(r)
-    notes = _meal_notes(r)
-    if notes:
-        lines += ["", *notes]
-    return "\n".join(lines)
-
-
 def _format_clarification(r: ClarificationNeeded) -> str:
     return f"🤔 «{_esc(r.item_name)}» — какая порция? Жми кнопку или впиши граммы."
 
@@ -162,19 +151,6 @@ def _format_weight(r: WeightLogged) -> str:
     return text
 
 
-def format_goal(goal: Goal) -> str:
-    """Грид дневной цели в общем выровненном стиле (для /goal и завершения профиля)."""
-    rows = "\n".join(
-        [
-            f"{'🔥 Ккал':<10} {round(goal.daily_kcal)}",
-            f"{'🥩 Белок':<10} {round(goal.protein_g)} г",
-            f"{'🧈 Жир':<10} {round(goal.fat_g)} г",
-            f"{'🍞 Углеводы':<10} {round(goal.carb_g)} г",
-        ]
-    )
-    return f"<code>{rows}</code>"
-
-
 def _format_weight_trend(t: WeightTrend) -> str:
     if not t.logs:
         return "⚖️ Вес ещё не записан.\n📌 Записать — напиши «вес 86.8»."
@@ -202,11 +178,6 @@ def _format_stats(r: DailyStats) -> str:
     return f"📊 Сегодня · приёмов: {r.meals_count}\n{eaten}\n{_dashboard(r.remaining)}"
 
 
-def today_photo_caption(r: DailyStats) -> str:
-    """Подпись к фото-дашборду «Сегодня»: заголовок + список съеденного (бары — в картинке)."""
-    return f"📊 Сегодня · приёмов: {r.meals_count}\n{_eaten_lines(r.meals, r.timezone)}".rstrip()
-
-
 def _eaten_lines(meals: list[Meal], tz_name: str) -> str:
     """Компактный список съеденного за день: «чч:мм · продукт — N ккал» по позициям."""
     tz = ZoneInfo(tz_name)
@@ -218,20 +189,6 @@ def _eaten_lines(meals: list[Meal], tz_name: str) -> str:
             rows.append(f" {when} · {_esc(it.name_snapshot)} — {g}{_n(it.macros.kcal)} ккал")
             when = "     "  # последующие позиции приёма — без повтора времени
     return "<code>" + "\n".join(rows) + "</code>\n"
-
-
-def _day_title(d: date, days_ago: int) -> str:
-    label = "Сегодня" if days_ago == 0 else "Вчера" if days_ago == 1 else ""
-    ds = f"{d.day} {_MONTHS_RU[d.month - 1]}"
-    return f"{label}, {ds}" if label else ds
-
-
-def day_photo_caption(r: DayView) -> str:
-    """Подпись к карточке дня (История картинкой): заголовок + список (бары — в картинке)."""
-    title = _day_title(r.day, r.days_ago)
-    if not r.meals:
-        return f"🗒 {title} · ничего не записано"
-    return f"🗒 {title}\n{_eaten_lines(r.meals, r.timezone)}".rstrip()
 
 
 def _format_weekly(r: WeeklyStats) -> str:
