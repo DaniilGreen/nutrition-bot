@@ -85,7 +85,7 @@ def _meal_head(r: MealLogged) -> list[str]:
     lines = ["✅ Записал:"]
     for it in r.meal.items:
         m = it.macros
-        grams_part = f"{_n(it.grams)} г · " if it.grams else ""  # блюда с готовыми КБЖУ — без граммов
+        grams_part = f"{_n(it.grams)} г · " if it.grams else ""  # готовые КБЖУ — без граммов
         lines.append(
             f"• {_item_mark(it)}{_esc(it.name_snapshot)} — {grams_part}{_n(m.kcal)} ккал · "
             f"Б{_n(m.protein)} Ж{_n(m.fat)} У{_n(m.carb)}"
