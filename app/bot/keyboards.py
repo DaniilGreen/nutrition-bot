@@ -13,6 +13,7 @@ PORTION_CALLBACK_PREFIX = "portion"
 VARIANT_CALLBACK_PREFIX = "variant"
 LABEL_G_PREFIX = "label_g"  # пресет веса (порция/пачка) после фото этикетки (FR-27)
 DAY_NAV_PREFIX = "day_nav"  # навигация по дням в просмотре истории (вар. A)
+DAY_DEL_PREFIX = "day_del"  # удалить приём прямо с экрана «День»/«История» (день:meal_id)
 MEAL_UNDO_PREFIX = "meal_undo"
 UNDO_ITEM_PREFIX = "undo_item"
 ITEM_DEL_PREFIX = "item_del"
@@ -91,13 +92,29 @@ def prod_edit_keyboard(product_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def day_nav_keyboard(days_ago: int) -> InlineKeyboardMarkup:
-    """Вар. A: ← предыдущий день всегда; → следующий — только если не сегодня."""
+def day_nav_keyboard(
+    days_ago: int, meals: Sequence[Meal] = (), tz_name: str = "UTC"
+) -> InlineKeyboardMarkup:
+    """Навигация по дням (← пред всегда, → след если не сегодня) + удаление приёмов этого дня.
+
+    Кнопка 🗑 на каждый приём — чтобы удалять любой прошлый приём рядом с текстом дня (в сам текст
+    кнопку Telegram не встроить, поэтому клавиатурой под сообщением). days_ago в callback — чтобы
+    после удаления перерисовать ТОТ ЖЕ день.
+    """
     builder = InlineKeyboardBuilder()
     builder.button(text="← пред. день", callback_data=f"{DAY_NAV_PREFIX}:{days_ago + 1}")
     if days_ago > 0:
         builder.button(text="след. день →", callback_data=f"{DAY_NAV_PREFIX}:{days_ago - 1}")
-    builder.adjust(2)
+    tz = ZoneInfo(tz_name)
+    deletable = [m for m in meals if m.id is not None]
+    for meal in deletable:
+        when = meal.eaten_at.astimezone(tz).strftime("%H:%M")
+        names = _short(", ".join(i.name_snapshot for i in meal.items), 24)
+        builder.button(
+            text=f"🗑 {when} · {names}", callback_data=f"{DAY_DEL_PREFIX}:{days_ago}:{meal.id}"
+        )
+    nav = 2 if days_ago > 0 else 1  # ряд навигации, дальше каждое удаление на своей строке
+    builder.adjust(nav, *([1] * len(deletable)))
     return builder.as_markup()
 
 

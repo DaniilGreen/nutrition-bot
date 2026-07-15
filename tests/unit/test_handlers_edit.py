@@ -67,3 +67,15 @@ async def test_day_nav_edits_in_place(monkeypatch: pytest.MonkeyPatch) -> None:
 
     edit.assert_awaited_once()
     send.assert_not_awaited()
+
+
+async def test_day_del_removes_meal_and_edits_in_place(monkeypatch: pytest.MonkeyPatch) -> None:
+    assistant, user, meal = await _logged_two_item_meal()
+    edit = AsyncMock()
+    monkeypatch.setattr(handlers, "_rich_edit", edit)
+
+    await handlers.on_day_del(_callback(f"day_del:0:{meal.meal.id}"), user, assistant)
+
+    edit.assert_awaited_once()  # тот же день перерисован на месте
+    today = await assistant.today(user)
+    assert today.meals_count == 0  # приём действительно удалён

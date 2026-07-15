@@ -58,6 +58,7 @@ from app.bot.keyboards import (
     BTN_UNDO,
     BTN_WEEK,
     BTN_WEIGHT,
+    DAY_DEL_PREFIX,
     DAY_NAV_PREFIX,
     LABEL_G_PREFIX,
     ONBOARD_PREFIX,
@@ -1035,8 +1036,29 @@ async def on_day_nav(callback: CallbackQuery, app_user: User, assistant: Assista
     days_ago = max(0, int((callback.data or "day_nav:0").split(":", 1)[1]))
     rem, dv = await assistant.day_card(app_user, days_ago)
     # правим карточку НА МЕСТЕ — соседний день не «прыгает» в конец чата (edit rich, Bot API 10.1)
-    await _rich_edit(callback.message, screens.day(dv, rem), day_nav_keyboard(dv.days_ago))
+    await _rich_edit(
+        callback.message, screens.day(dv, rem), day_nav_keyboard(days_ago, dv.meals, dv.timezone)
+    )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith(f"{DAY_DEL_PREFIX}:"))
+async def on_day_del(callback: CallbackQuery, app_user: User, assistant: Assistant) -> None:
+    """Удалить приём прямо с экрана «День»/«История» и перерисовать ТОТ ЖЕ день на месте."""
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    _, days_ago_s, meal_id_s = (callback.data or "day_del:0:0").split(":")
+    days_ago = max(0, int(days_ago_s))
+    deleted = await assistant.delete_meal(app_user, int(meal_id_s))
+    rem, dv = await assistant.day_card(app_user, days_ago)  # состояние дня ПОСЛЕ удаления
+    await _rich_edit(
+        callback.message, screens.day(dv, rem), day_nav_keyboard(days_ago, dv.meals, dv.timezone)
+    )
+    if deleted.meal is None:
+        await callback.answer("Уже удалено")
+    else:
+        await callback.answer(f"🗑 Убрал приём ({round(deleted.meal.totals.kcal)} ккал)")
 
 
 @router.callback_query()  # замыкающий: ловит любую устаревшую кнопку (после рестарта/времени)
@@ -1078,7 +1100,7 @@ async def _show_weight(message: Message, app_user: User, assistant: Assistant) -
 
 async def _show_history(message: Message, app_user: User, assistant: Assistant) -> None:
     rem, dv = await assistant.day_card(app_user)  # день + стрелки ← →
-    await _rich(message, screens.day(dv, rem), day_nav_keyboard(dv.days_ago))
+    await _rich(message, screens.day(dv, rem), day_nav_keyboard(dv.days_ago, dv.meals, dv.timezone))
 
 
 async def _show_undo_picker(message: Message, app_user: User, assistant: Assistant) -> None:
