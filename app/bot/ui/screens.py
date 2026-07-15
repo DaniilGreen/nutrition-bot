@@ -164,12 +164,12 @@ def streak(days: Sequence[tuple[date, float]], goal_kcal: float) -> str:
     у.е. — влезает. Ряды — недели, свежий день внизу справа.
     """
     if not any(k > 0 for _, k in days):
-        return "<h3>📅 Дни в цели</h3><p>Пока пусто — запиши пару дней, появится календарь.</p>"
+        return "<h3>🗓 Дни в цели</h3><p>Пока пусто — запиши пару дней, появится календарь.</p>"
     cells = [em(*_seg_for(day_status(k, goal_kcal))) for _, k in days]
     rows = "".join("<p>" + "".join(cells[i : i + 7]) + "</p>" for i in range(0, len(cells), 7))
     hit = sum(1 for _, k in days if day_status(k, goal_kcal) == "ok")
     return (
-        "<h3>📅 Дни в цели</h3>"
+        "<h3>🗓 Дни в цели</h3>"
         + rows
         + f"<footer>🟢 в цели: {hit} из {len(days)} дней. Провал — не перебор, а пропуск.</footer>"
     )
@@ -233,20 +233,25 @@ def products(items: list[Product]) -> str:
 
 
 def day(dv: DayView, rem: Remaining) -> str:
-    """Один день истории (стрелки ← →). НЕ сегодня-центричный: без якоря и советов — это прошлое."""
+    """Один день истории (стрелки ← →). НЕ сегодня-центричный: без якоря и советов — это прошлое.
+
+    Приёмы — с временем и по группам (завтрак/обед/ужин видно), а не плоским списком: иначе на дне
+    с 2+ приёмами не понять, что когда съедено.
+    """
     title = _day_title(dv)
     if not dv.meals:
         return f"<h3>🗒 {title}</h3><p>Ничего не записано.</p>"
-    lis = "".join(
-        f"<li>{_item_mark(it)}{e(it.name_snapshot)} — <b>{n(it.macros.kcal)}</b> ккал</li>"
-        for m in dv.meals
-        for it in m.items
-    )
-    return (
-        f"<h3>🗒 {title}</h3>"
-        f"<details open><summary>🍽 Съедено</summary><ul>{lis}</ul></details>"
-        "<hr/>" + _bars(rem.consumed, rem.goal)
-    )
+    groups = []
+    for m in dv.meals:
+        items = "".join(
+            f"<li>{_item_mark(it)}{e(it.name_snapshot)} — <b>{n(it.macros.kcal)}</b> ккал</li>"
+            for it in m.items
+        )
+        groups.append(
+            f"<p>{tg_time(m.eaten_at, dv.timezone)} · <b>{n(m.totals.kcal)}</b> ккал</p>"
+            f"<ul>{items}</ul>"
+        )
+    return f"<h3>🗒 {title}</h3>" + "".join(groups) + "<hr/>" + _bars(rem.consumed, rem.goal)
 
 
 def item_removed(r: ItemRemoved) -> str:

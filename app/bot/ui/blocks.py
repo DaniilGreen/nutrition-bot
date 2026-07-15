@@ -1,7 +1,7 @@
-"""Содержательные блоки, общие для трёх дизайнов. Дизайн решает КАК показать, блок — ЧТО сказать.
+"""Содержательные блоки экранов. Экран решает КАК показать, блок — ЧТО сказать.
 
-Живут отдельно, потому что это не оформление, а продуктовые решения. Если каждый дизайн будет
-формулировать «перебор» по-своему, мы получим три разных продукта, а сравнивать надо оформление.
+Живут отдельно, потому что это не оформление, а продуктовые решения: чтобы «перебор», «якорь»,
+«добор» формулировались ОДИНАКОВО на всех экранах, а не разъезжались.
 
 Главный принцип, который они несут (из разбора нутрициолога):
     ПРОВАЛ — ЭТО НЕ ПЕРЕБОР. ПРОВАЛ — ЭТО НЕ ЗАПИСАТЬ.
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from app.bot.ui import kit
 from app.bot.ui.context import DayContext, day_status
-from app.bot.ui.kit import e, n, pct
+from app.bot.ui.kit import e, n
 
 KCAL_PER_KG_FAT = 7700  # ккал в килограмме жировой ткани — перевод абстракции в физику
 
@@ -64,23 +64,6 @@ def clarify(d: DayContext) -> str:
     )
 
 
-def culprit(d: DayContext) -> str:
-    """«Где были деньги» — топ-позиция по вкладу в калории.
-
-    Единственный факт о прошлом, который меняет будущий выбор. Не осуждающе: просто где деньги.
-    """
-    item = d.top_item
-    kcal = d.today.remaining.consumed.kcal
-    if len(d.items) < 3 or item is None or not kcal or item.macros.kcal / kcal < 0.25:
-        # Лидера нет, либо позиций мало: «больше всего дала» из двух — пустой звук.
-        return ""
-    share = round(100 * item.macros.kcal / kcal)
-    return (
-        f"<p>💰 Больше всего дала <b>{e(item.name_snapshot)}</b> — "
-        f"{n(item.macros.kcal)} ккал, {share}% дня.</p>"
-    )
-
-
 def over_note(d: DayContext) -> str:
     """Перебор: ни стыда, ни вранья. Число → физика → недельный контекст → «не компенсируй».
 
@@ -99,19 +82,6 @@ def over_note(d: DayContext) -> str:
         else " Компенсировать не надо: завтра просто обычная цель."
     )
     return f"<p>+{n(over)} ккал сверх цели ≈ {grams_fat} г жировой ткани.{tail}</p>"
-
-
-def protein_note(d: DayContext) -> str:
-    """Белок в г/кг. Абсолютные «164 г» ничего не значат, пока не знаешь массу человека.
-
-    При дефиците + силовых цель 1.6–2.2 г/кг: ниже — организм добирает аминокислоты из мышц,
-    и вес уходит не оттуда, откуда хотелось.
-    """
-    ppk = d.protein_per_kg
-    if ppk is None or not d.weight_kg:
-        return ""
-    goal_ppk = round(d.goal.protein_g / d.weight_kg, 1)
-    return f"<p>🥩 Белок {ppk} г/кг массы (цель {goal_ppk}). Коридор при дефиците — 1.6–2.2.</p>"
 
 
 def advice(d: DayContext) -> str:
@@ -223,6 +193,3 @@ def macro_block(label: str, cons: float, goal: float) -> str:
     return f"<p>{kit.macro_line(label, cons, goal)}<br>{kit.bar(cons, goal, label)}</p>"
 
 
-def pct_line(label: str, cons: float, goal: float) -> str:
-    """Компактная строка без бара — для макросов, которым бар не положен (жир, углеводы)."""
-    return f"{label} {n(cons)} / {n(goal)} г · {pct(cons, goal)}%"

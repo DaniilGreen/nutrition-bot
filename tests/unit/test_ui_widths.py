@@ -93,7 +93,6 @@ def _ctx(meals: list[Meal], *, hour: int = 20, has_weight: bool = True) -> DayCo
         products=_PRODUCTS if has_weight else [],
         weight_kg=86.8 if has_weight else None,
         trend_kg=87.2 if has_weight else None,
-        streak=4,
         local_hour=hour,
         est_kcal_share=38,
     )

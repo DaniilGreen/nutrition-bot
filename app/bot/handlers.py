@@ -884,14 +884,15 @@ async def on_item_del(callback: CallbackQuery, app_user: User, assistant: Assist
     parts = (callback.data or "item_del:0:0").split(":")
     meal_id, item_id = int(parts[1]), int(parts[2])
     result = await assistant.remove_item(app_user, meal_id, item_id)
-    with suppress(TelegramBadRequest):
-        await (
-            callback.message.delete()
-        )  # rich-карточку не отредактировать — шлём обновлённую заново
     if result is None:
-        await callback.message.answer("🗑 Запись отменена (позиций не осталось).")
+        await _rich_edit(callback.message, "<h3>🗑 Запись отменена</h3><p>Позиций не осталось.</p>")
     else:
-        await _send_meal_card(callback.message, result, app_user, assistant)
+        # Правим карточку НА МЕСТЕ: повторный тап по кнопке (remove_item вернёт тот же приём без
+        # изменений) даст «not modified», а не вторую карточку.
+        ctx = await gather(assistant, app_user)
+        await _rich_edit(
+            callback.message, screens.meal_card(ctx, result), meal_actions_keyboard(result.meal)
+        )
     await callback.answer("🗑 Убрал позицию")
 
 
@@ -1033,10 +1034,8 @@ async def on_day_nav(callback: CallbackQuery, app_user: User, assistant: Assista
         return
     days_ago = max(0, int((callback.data or "day_nav:0").split(":", 1)[1]))
     rem, dv = await assistant.day_card(app_user, days_ago)
-    # rich нельзя редактировать — удаляем текущую карточку и шлём соседний день заново
-    with suppress(TelegramBadRequest):
-        await callback.message.delete()
-    await _rich(callback.message, screens.day(dv, rem), day_nav_keyboard(dv.days_ago))
+    # правим карточку НА МЕСТЕ — соседний день не «прыгает» в конец чата (edit rich, Bot API 10.1)
+    await _rich_edit(callback.message, screens.day(dv, rem), day_nav_keyboard(dv.days_ago))
     await callback.answer()
 
 
@@ -1166,7 +1165,6 @@ async def _rich(
     """Отправить экран единым Rich-стилем (Bot API 10.1).
 
     skip_entity_detection: иначе Telegram примет «1860/2200» за номер карты и подчеркнёт.
-    Rich-сообщения НЕЛЬЗЯ редактировать (нет editRichMessage) — где нужна правка, шлём заново.
     """
     bot = message.bot
     assert bot is not None  # у полученного сообщения bot всегда привязан
@@ -1175,6 +1173,25 @@ async def _rich(
         rich_message=InputRichMessage(html=html, skip_entity_detection=True),
         reply_markup=markup,
     )
+
+
+async def _rich_edit(
+    message: Message, html: str, markup: InlineKeyboardMarkup | None = None
+) -> None:
+    """Править rich-сообщение НА МЕСТЕ (edit_text расширен полем rich_message в Bot API 10.1).
+
+    Так навигация ←→ и правка карточки не «прыгают» в конец чата, а повторный тап по кнопке даёт
+    «message is not modified» вместо второй карточки. Недоступно (>48 ч) — шлём заново.
+    """
+    try:
+        await message.edit_text(
+            rich_message=InputRichMessage(html=html, skip_entity_detection=True),
+            reply_markup=markup,
+        )
+    except TelegramBadRequest as exc:
+        if "not modified" in str(exc).lower():
+            return  # тот же контент (двойной тап) — не ошибка
+        await _rich(message, html, markup)
 
 
 async def _latest_weight(assistant: Assistant, user: User) -> float | None:

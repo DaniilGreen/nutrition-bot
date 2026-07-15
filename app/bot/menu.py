@@ -7,10 +7,10 @@ from aiogram.types import BotCommand
 _COMMANDS = [
     BotCommand(command="start", description="Старт и меню"),
     BotCommand(command="today", description="Сегодня"),
-    BotCommand(command="week", description="За неделю (график)"),
+    BotCommand(command="week", description="Среднее за неделю"),
     BotCommand(command="month", description="Отчёт за 30 дней"),
     BotCommand(command="streak", description="Календарь дней в цели"),
-    BotCommand(command="card", description="Карточка дня (картинка)"),
+    BotCommand(command="card", description="Карточка дня"),
     BotCommand(command="history", description="История"),
     BotCommand(command="undo", description="Отменить запись"),
     BotCommand(command="goal", description="Цель по калориям"),

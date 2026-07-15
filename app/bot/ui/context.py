@@ -19,9 +19,8 @@ from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 from app.application.assistant import Assistant
-from app.application.entities import Meal, MealItem, Product, User, WeightLog
+from app.application.entities import MealItem, Product, User, WeightLog
 from app.application.results import DailyStats, MonthReport, WeightTrend
-from app.bot.dashboard_image import _streak  # единственное определение серии — не плодим второе
 from app.bot.ui.kit import sigma_kcal
 from app.domain.goals import Goal, in_goal
 
@@ -39,13 +38,8 @@ class DayContext:
     # --- производные ---
     weight_kg: float | None  # последнее взвешивание — для белка на кг
     trend_kg: float | None  # EMA веса: дневной вес скачет на воде, тренд — сигнал
-    streak: int  # дней подряд в цели
     local_hour: int  # час у пользователя: «недобор» и советы имеют смысл только к концу дня
     est_kcal_share: int  # % калорий за сегодня, посчитанных ОЦЕНКОЙ, а не по точному весу
-
-    @property
-    def last_meal(self) -> Meal | None:
-        return self.today.meals[-1] if self.today.meals else None
 
     @property
     def items(self) -> list[MealItem]:
@@ -142,12 +136,6 @@ class DayContext:
             return None
         return round(self.today.remaining.consumed.protein / self.weight_kg, 2)
 
-    @property
-    def avg7_protein_per_kg(self) -> float | None:
-        if not self.weight_kg or not self.week7.days_logged:
-            return None
-        return round(self.week7.avg_macros.protein / self.weight_kg, 2)
-
 
 ALPHA_PER_DAY = 0.12  # эффективное окно ≈ 16 дней
 STALE_DAYS = 10  # последний замер старше — тренд протух; показывать его нельзя
@@ -214,7 +202,6 @@ async def gather(assistant: Assistant, user: User) -> DayContext:
         products=products,
         weight_kg=chron[-1].weight_kg if chron else None,
         trend_kg=_ema(chron),
-        streak=_streak(days, goal.daily_kcal),
         est_kcal_share=_est_share(today),
         local_hour=datetime.now(ZoneInfo(today.timezone)).hour,
     )

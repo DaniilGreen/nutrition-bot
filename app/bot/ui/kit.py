@@ -1,4 +1,4 @@
-"""Общий кит для трёх демо-дизайнов: физика вёрстки Rich Messages + примитивы.
+"""Примитивы единого дизайна: физика вёрстки Rich Messages + бары/вердикт/ширина.
 
 ФИЗИКА, ДОБЫТАЯ БОЛЬЮ (четыре кривых итерации). Нарушать — значит опять получить «уехало»:
 
@@ -13,7 +13,7 @@
   ПРАВИЛО 3. Никакого valign="middle" рядом с многострочной ячейкой: он центрирует
     одностроч­ную соседку по высоте многострочной → число повисает между строк.
 
-  ПРАВИЛО 4. Ширина проверяется тестом (tests/unit/test_demo_widths.py), а не глазами.
+  ПРАВИЛО 4. Ширина проверяется тестом (tests/unit/test_ui_widths.py), а не глазами.
     Модель откалибрована по реальным скриншотам iPhone: пузырь ≈ 760 у.е., кастом-эмодзи
     ≈ 46 у.е. (двойная ширина!), кириллица ≈ 18, цифра ≈ 16.
 
@@ -26,7 +26,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
+from datetime import datetime
 from html import escape
 from zoneinfo import ZoneInfo
 
@@ -42,7 +42,6 @@ SEG_OK, SEG_LOW, SEG_OVER, SEG_EMPTY = (
     "5382140560771424183",  # ⬜ пустой трек
 )
 _SEG = {"ok": (SEG_OK, "🟩"), "low": (SEG_LOW, "🟨"), "over": (SEG_OVER, "🟥")}
-_DOT = {"ok": "🟢", "low": "🟡", "over": "🔴"}  # компактный статус для таблиц (там бару нельзя)
 
 BAR_W = 10  # трек = ЦЕЛЬ (100%). Перебор дорисовывается ЗА треком, см. bar()
 MAX_OVER = 4  # максимум сегментов перебора: 10+4=14 × 46 ≈ 644 у.е. — всегда влезает в 700
@@ -85,11 +84,6 @@ def status(cons: float, goal: float, label: str) -> str:
     if r > 1.05:
         return "over"
     return "ok" if r >= 0.85 else "low"
-
-
-def dot(cons: float, goal: float, label: str) -> str:
-    """Точка-статус для таблиц: бар в ячейку нельзя (Правило 1), а один кружок — можно."""
-    return _DOT[status(cons, goal, label)]
 
 
 def pct(cons: float, goal: float) -> int:
@@ -146,10 +140,6 @@ def tg_time(dt: datetime, tzname: str) -> str:
     ts = int(dt.timestamp())
     local = dt.astimezone(ZoneInfo(tzname))
     return f'<tg-time unix="{ts}" format="t">{local:%H:%M}</tg-time>'
-
-
-def day_ru(d: date) -> str:
-    return f"{WD[d.weekday()]} {d.day} {MON[d.month - 1]}"
 
 
 def plural(k: int, one: str, few: str, many: str) -> str:
