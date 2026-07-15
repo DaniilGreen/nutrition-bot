@@ -305,15 +305,9 @@ async def cmd_undo(message: Message, app_user: User, assistant: Assistant) -> No
 async def cmd_products(message: Message, app_user: User, assistant: Assistant) -> None:
     products = await assistant.fixable_products(limit=10)
     if not products:
-        await message.answer(
-            "Пока всё точно — здесь появятся продукты, где я прикинул КБЖУ сам (≈), "
-            "когда запишешь такое блюдо."
-        )
+        await _rich(message, screens.products(products))  # пустой экран сам объяснит
         return
-    await message.answer(
-        "Продукты, где я прикинул КБЖУ сам (≈). Что поправить?",
-        reply_markup=products_fix_keyboard(products),
-    )
+    await _rich(message, screens.products(products), products_fix_keyboard(products))
 
 
 @router.message(Command("profile"))
