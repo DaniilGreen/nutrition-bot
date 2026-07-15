@@ -1044,21 +1044,22 @@ async def on_day_nav(callback: CallbackQuery, app_user: User, assistant: Assista
 
 @router.callback_query(F.data.startswith(f"{DAY_DEL_PREFIX}:"))
 async def on_day_del(callback: CallbackQuery, app_user: User, assistant: Assistant) -> None:
-    """Удалить приём прямо с экрана «День»/«История» и перерисовать ТОТ ЖЕ день на месте."""
+    """Удалить ОДНУ позицию прямо с экрана «День»/«История» и перерисовать ТОТ ЖЕ день на месте.
+
+    Позиция, а не запись целиком: сдвоенную запись (картофель+фарш) чистим по продукту. Если
+    позиция была последней в приёме — remove_item удалит и сам приём.
+    """
     if not isinstance(callback.message, Message):
         await callback.answer()
         return
-    _, days_ago_s, meal_id_s = (callback.data or "day_del:0:0").split(":")
+    _, days_ago_s, meal_id_s, item_id_s = (callback.data or "day_del:0:0:0").split(":")
     days_ago = max(0, int(days_ago_s))
-    deleted = await assistant.delete_meal(app_user, int(meal_id_s))
+    await assistant.remove_item(app_user, int(meal_id_s), int(item_id_s))
     rem, dv = await assistant.day_card(app_user, days_ago)  # состояние дня ПОСЛЕ удаления
     await _rich_edit(
         callback.message, screens.day(dv, rem), day_nav_keyboard(days_ago, dv.meals, dv.timezone)
     )
-    if deleted.meal is None:
-        await callback.answer("Уже удалено")
-    else:
-        await callback.answer(f"🗑 Убрал приём ({round(deleted.meal.totals.kcal)} ккал)")
+    await callback.answer("🗑 Убрал позицию")
 
 
 @router.callback_query()  # замыкающий: ловит любую устаревшую кнопку (после рестарта/времени)

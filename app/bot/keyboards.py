@@ -106,15 +106,18 @@ def day_nav_keyboard(
     if days_ago > 0:
         builder.button(text="след. день →", callback_data=f"{DAY_NAV_PREFIX}:{days_ago - 1}")
     tz = ZoneInfo(tz_name)
-    deletable = [m for m in meals if m.id is not None]
-    for meal in deletable:
+    # 🗑 на КАЖДУЮ позицию (а не на запись): владелец логирует по одному продукту, и даже сдвоенную
+    # запись (картофель+фарш из одного голосового) надо чистить по позиции. Время в подписи —
+    # чтобы различать одинаковые продукты в разное время (молоко 09:11 vs молоко 13:37).
+    items = [(m, it) for m in meals if m.id is not None for it in m.items if it.id is not None]
+    for meal, it in items:
         when = meal.eaten_at.astimezone(tz).strftime("%H:%M")
-        names = _short(", ".join(i.name_snapshot for i in meal.items), 24)
         builder.button(
-            text=f"🗑 {when} · {names}", callback_data=f"{DAY_DEL_PREFIX}:{days_ago}:{meal.id}"
+            text=f"🗑 {when} · {_short(it.name_snapshot, 24)}",
+            callback_data=f"{DAY_DEL_PREFIX}:{days_ago}:{meal.id}:{it.id}",
         )
     nav = 2 if days_ago > 0 else 1  # ряд навигации, дальше каждое удаление на своей строке
-    builder.adjust(nav, *([1] * len(deletable)))
+    builder.adjust(nav, *([1] * len(items)))
     return builder.as_markup()
 
 
