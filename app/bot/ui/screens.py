@@ -44,17 +44,19 @@ def today(d: DayContext) -> str:
     if not d.today.meals:
         return (
             "<h3>📊 Сегодня</h3><p>Пока пусто. Запиши приём — «куриная грудка 250 г», "
-            "голосом или фото этикетки 📷.</p>" + blocks.anchor(d)
+            "голосом или фото этикетки 📷.</p>"
         )
+    # Недельный якорь убран с «Сегодня» по просьбе владельца (остаётся в вечернем итоге). <hr/>
+    # разделяет прогресс по макросам и блок «точность / действие / съедено».
     return (
         "<h3>📊 Сегодня</h3>"
         f"<p><i>{verdict(c, g, final=d.day_over)}</i></p>"
         + _bars(c, g)
-        + blocks.anchor(d)
+        + "<hr/>"
         + blocks.accuracy(d)
         + blocks.over_note(d)
         + blocks.advice(d)
-        + blocks.eaten(d, open_=True)
+        + blocks.eaten(d)  # свёрнут по умолчанию
     )
 
 
