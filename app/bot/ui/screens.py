@@ -236,23 +236,21 @@ def products(items: list[Product]) -> str:
 def day(dv: DayView, rem: Remaining) -> str:
     """Один день истории (стрелки ← →). НЕ сегодня-центричный: без якоря и советов — это прошлое.
 
-    Приёмы — с временем и по группам (завтрак/обед/ужин видно), а не плоским списком: иначе на дне
-    с 2+ приёмами не понять, что когда съедено.
+    ПЛОСКИЙ список: строка на КАЖДУЮ позицию с её временем «время · продукт — ккал». Заголовка-
+    подытога приёма («13:37 · 852 ккал») НЕТ намеренно: владелец логирует по одному продукту, а не
+    составными приёмами, поэтому подытог у одиночной позиции дублировал бы её же (11:56 · 325 ккал →
+    «Фо бо 325 ккал» — одно и то же дважды). Время у позиции = время её приёма.
     """
     title = _day_title(dv)
     if not dv.meals:
         return f"<h3>🗒 {title}</h3><p>Ничего не записано.</p>"
-    groups = []
-    for m in dv.meals:
-        items = "".join(
-            f"<li>{_item_mark(it)}{e(it.name_snapshot)} — <b>{n(it.macros.kcal)}</b> ккал</li>"
-            for it in m.items
-        )
-        groups.append(
-            f"<p>{tg_time(m.eaten_at, dv.timezone)} · <b>{n(m.totals.kcal)}</b> ккал</p>"
-            f"<ul>{items}</ul>"
-        )
-    return f"<h3>🗒 {title}</h3>" + "".join(groups) + "<hr/>" + _bars(rem.consumed, rem.goal)
+    lines = "".join(
+        f"<li>{tg_time(m.eaten_at, dv.timezone)} · {_item_mark(it)}{e(it.name_snapshot)} — "
+        f"<b>{n(it.macros.kcal)}</b> ккал</li>"
+        for m in dv.meals
+        for it in m.items
+    )
+    return f"<h3>🗒 {title}</h3><ul>{lines}</ul><hr/>" + _bars(rem.consumed, rem.goal)
 
 
 def item_removed(r: ItemRemoved) -> str:
