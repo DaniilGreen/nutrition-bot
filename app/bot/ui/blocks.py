@@ -10,15 +10,14 @@
 """
 from __future__ import annotations
 
-from app.bot.demo import kit
-from app.bot.demo.data import DemoData, day_status
-from app.bot.demo.kit import e, n, pct
-from app.domain.value_objects import Macros
+from app.bot.ui import kit
+from app.bot.ui.context import DayContext, day_status
+from app.bot.ui.kit import e, n, pct
 
 KCAL_PER_KG_FAT = 7700  # ккал в килограмме жировой ткани — перевод абстракции в физику
 
 
-def anchor(d: DemoData) -> str:
+def anchor(d: DayContext) -> str:
     """Недельный якорь. ОБЯЗАН стоять рядом с дневной цифрой на каждом экране.
 
     Зачем: −530 ккал за день = 70 г жира (530/7700) — это в 10–20 раз меньше суточного шума веса
@@ -35,7 +34,7 @@ def anchor(d: DemoData) -> str:
     return f"<footer>7 дней: {avg} / {goal} ккал · записано {d.logged7} из 7{tail}</footer>"
 
 
-def accuracy(d: DemoData) -> str:
+def accuracy(d: DayContext) -> str:
     """Погрешность дня. Продукт продаёт точность — обязан честно говорить, где её не гарантирует.
 
     σ складывается В КВАДРАТУРЕ (ошибки позиций независимы). «1820 ± 230» — это не придирка:
@@ -54,7 +53,7 @@ def accuracy(d: DemoData) -> str:
     )
 
 
-def clarify(d: DemoData) -> str:
+def clarify(d: DayContext) -> str:
     """Что уточнить, чтобы погрешность упала сильнее всего. Одна цель, а не список из десяти."""
     item = d.to_clarify
     if item is None or item.macros.kcal < 150:  # мелочь уточнять — налог на внимание без отдачи
@@ -65,7 +64,7 @@ def clarify(d: DemoData) -> str:
     )
 
 
-def culprit(d: DemoData) -> str:
+def culprit(d: DayContext) -> str:
     """«Где были деньги» — топ-позиция по вкладу в калории.
 
     Единственный факт о прошлом, который меняет будущий выбор. Не осуждающе: просто где деньги.
@@ -82,7 +81,7 @@ def culprit(d: DemoData) -> str:
     )
 
 
-def over_note(d: DemoData) -> str:
+def over_note(d: DayContext) -> str:
     """Перебор: ни стыда, ни вранья. Число → физика → недельный контекст → «не компенсируй».
 
     «Компенсировать» не предлагаем НИКОГДА: «отработаю кардио» и «завтра поголодаю» — это вход
@@ -102,7 +101,7 @@ def over_note(d: DemoData) -> str:
     return f"<p>+{n(over)} ккал сверх цели ≈ {grams_fat} г жировой ткани.{tail}</p>"
 
 
-def protein_note(d: DemoData) -> str:
+def protein_note(d: DayContext) -> str:
     """Белок в г/кг. Абсолютные «164 г» ничего не значат, пока не знаешь массу человека.
 
     При дефиците + силовых цель 1.6–2.2 г/кг: ниже — организм добирает аминокислоты из мышц,
@@ -115,10 +114,10 @@ def protein_note(d: DemoData) -> str:
     return f"<p>🥩 Белок {ppk} г/кг массы (цель {goal_ppk}). Коридор при дефиците — 1.6–2.2.</p>"
 
 
-def advice(d: DemoData) -> str:
+def advice(d: DayContext) -> str:
     """Совет = добор. С гейтом доверия: при >50% оценок точечный совет вреден — база плывёт
     сильнее совета. Тогда просим уточнить вес, а не выдумываем граммы творога."""
-    from app.bot.demo import topup  # локальный импорт: topup не нужен прочим импортёрам blocks
+    from app.bot.ui import topup  # локальный импорт: topup не нужен прочим импортёрам blocks
 
     if not d.advice_due:
         return ""  # утром разрыв закроется сам — советовать 400 г грудки на завтрак абсурдно
@@ -133,7 +132,7 @@ def advice(d: DemoData) -> str:
     return topup.line(d.today.remaining.consumed, d.goal)
 
 
-def eaten(d: DemoData, *, open_: bool = False) -> str:
+def eaten(d: DayContext, *, open_: bool = False) -> str:
     """Съеденное. Позиции — ПО ВКЛАДУ В КАЛОРИИ, а не хронологически: человек должен за две
     секунды увидеть, где были деньги, а не восстанавливать распорядок дня.
 
@@ -158,7 +157,7 @@ def eaten(d: DemoData, *, open_: bool = False) -> str:
     return f"<details{attr}><summary>{head}</summary><ul>{''.join(lis)}</ul></details>"
 
 
-def week_table(d: DemoData) -> str:
+def week_table(d: DayContext) -> str:
     """Таблица недели. ТАБЛИЦА ЗДЕСЬ ЗАКОННА (Правило 2 кита): узкие числа, бара в ячейках нет.
 
     Статус дня — кружком, а не баром: бар в ячейку пихать нельзя, он ломает ширину колонок.
@@ -175,7 +174,7 @@ def week_table(d: DemoData) -> str:
     return f"<table striped>{''.join(rows)}</table>"
 
 
-def weight_block(d: DemoData) -> str:
+def weight_block(d: DayContext) -> str:
     """Вес: тренд — но ТОЛЬКО когда его честно есть из чего считать.
 
     Дневной вес — шум: вода, гликоген и содержимое ЖКТ дают ±1–1.5 кг за сутки. Показывать сырое
@@ -201,7 +200,7 @@ def weight_block(d: DemoData) -> str:
     )
 
 
-def coverage_block(d: DemoData) -> str:
+def coverage_block(d: DayContext) -> str:
     """Покрытие лога за 30 дней ВМЕСТО стрика.
 
     Стрик хрупок: один пропуск обнуляет, и человек либо пишет мусор ради серии (портит главный
@@ -213,38 +212,6 @@ def coverage_block(d: DemoData) -> str:
     return (
         f"<p>📈 Записано {m.days_logged} из {m.total_days} дней ({cov}%) · "
         f"в цели {m.days_in_goal} из {m.days_logged}</p>"
-    )
-
-
-def branches(d: DemoData) -> str:
-    """Витрина веток, которых на СЕГОДНЯШНИХ данных не видно.
-
-    Нужна только демо: у владельца сегодня белок закрыт, калории в бюджете — значит «чем добрать»,
-    перебор и «похоже, не всё записано» просто не сработают, и он решит, что их выкинули. Цифры
-    тут СИНТЕТИЧЕСКИЕ и подписаны как таковые. В проде этот блок не поедет.
-    """
-    from dataclasses import replace
-
-    from app.domain.goals import remaining
-
-    g = d.goal
-
-    def what_if(m: Macros) -> DemoData:
-        return replace(d, today=replace(d.today, remaining=remaining(m, g)))
-
-    gap = Macros(kcal=1400, protein=95, fat=40, carb=160)  # белка мало, место есть
-    fat_out = Macros(kcal=1200, protein=100, fat=g.fat_g * 1.4, carb=150)  # жир уже перебран
-    big = Macros(kcal=g.daily_kcal + 620, protein=162, fat=88, carb=300)  # перебор
-
-    return (
-        "<h3>🎬 Ветки, которых сегодня не видно</h3>"
-        "<p><i>Цифры выдуманы. Эти сообщения показываются, только когда есть что сказать, — на "
-        "твоих сегодняшних данных часть из них молчит. Вот как они выглядят.</i></p>"
-        "<p><b>1. Белка не хватает, место есть</b></p>" + advice(what_if(gap)) + "<hr/>"
-        "<p><b>2. Жир уже перебран — добирать белок нечем</b></p>" + advice(what_if(fat_out)) +
-        "<hr/>"
-        "<p><b>3. Перебор калорий</b></p>" + over_note(what_if(big)) +
-""
     )
 
 

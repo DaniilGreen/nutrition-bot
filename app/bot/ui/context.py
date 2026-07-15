@@ -1,7 +1,8 @@
-"""Данные для демо: один сбор — три дизайна. Плюс производные метрики (считаем ЗДЕСЬ).
+"""Дневной контекст: один сбор данных для всех «сегодняшних» экранов + производные метрики.
 
-Почему производные живут тут, а не в дизайнах: если каждый дизайн посчитает «среднее за неделю»
-по-своему, владелец увидит три разных числа и справедливо решит, что бот врёт. Формула одна.
+Один `gather()` кормит «Сегодня», карточку приёма и вечерний итог: у них общий костяк (остаток
+дня, недельный якорь, погрешность, добор). Производные метрики (EMA веса, доля оценок, средняя за
+7 дней) считаются ЗДЕСЬ и только здесь — чтобы одно и то же число не разъезжалось между экранами.
 
 ДВЕ ЛОВУШКИ КОДОВОЙ БАЗЫ, которые тут обойдены:
 1. «Неделя» существует в двух смыслах: картинка 📈 рисует СКОЛЬЗЯЩИЕ 7 дней (day_calories),
@@ -21,12 +22,12 @@ from app.application.assistant import Assistant
 from app.application.entities import Meal, MealItem, Product, User, WeightLog
 from app.application.results import DailyStats, MonthReport, WeightTrend
 from app.bot.dashboard_image import _streak  # единственное определение серии — не плодим второе
-from app.bot.demo.kit import sigma_kcal
+from app.bot.ui.kit import sigma_kcal
 from app.domain.goals import Goal, in_goal
 
 
 @dataclass
-class DemoData:
+class DayContext:
     today: DailyStats
     days: list[tuple[date, float]]  # последние 7 дней: (дата, ккал); 0.0 = день НЕ логировался
     goal: Goal
@@ -191,7 +192,7 @@ def _est_share(today: DailyStats) -> int:
     return round(100 * est / total)
 
 
-async def collect(assistant: Assistant, user: User) -> DemoData:
+async def gather(assistant: Assistant, user: User) -> DayContext:
     """Один поход в БД на все разделы демо. Пустые данные (нет веса/продуктов) — не падаем."""
     today = await assistant.today(user)
     days, goal = await assistant.day_calories(user, 7)
@@ -203,7 +204,7 @@ async def collect(assistant: Assistant, user: User) -> DemoData:
     # logs идут newest-first → для EMA нужен хронологический порядок
     chron = list(reversed(weight.logs))
 
-    return DemoData(
+    return DayContext(
         today=today,
         days=days,
         goal=goal,

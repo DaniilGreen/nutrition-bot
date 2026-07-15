@@ -5,6 +5,7 @@ UX: постоянное reply-меню, командное меню, «печа
 Каталог: /products → правка КБЖУ. Профиль: /profile → автоцель по Mifflin.
 Надёжность: глобальный error-handler ловит падения (в т.ч. AI) и отвечает юзеру.
 """
+
 from __future__ import annotations
 
 import logging
@@ -22,11 +23,10 @@ from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
     ErrorEvent,
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
-    InputMediaPhoto,
     InputRichMessage,
     Message,
+    ReplyKeyboardMarkup,
 )
 from openai import RateLimitError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +37,9 @@ from app.application.entities import User
 from app.application.ports import UserRepo
 from app.application.results import (
     ClarificationNeeded,
+    DailyStats,
+    ItemAdjusted,
+    ItemRemoved,
     LabelRead,
     MealLogged,
     Result,
@@ -44,25 +47,8 @@ from app.application.results import (
     WeightLogged,
     WeightTrend,
 )
-from app.bot.dashboard_image import (
-    render_dashboard,
-    render_day_card,
-    render_goal_card,
-    render_heatmap,
-    render_label_card,
-    render_month_card,
-    render_today,
-    render_weekly_chart,
-    render_weight_chart,
-)
-from app.bot.demo import DESIGNS, collect
-from app.bot.formatters import (
-    day_photo_caption,
-    format_goal,
-    format_result,
-    meal_photo_caption,
-    today_photo_caption,
-)
+from app.bot.dashboard_image import render_weight_chart  # единственный уцелевший PNG — линия веса
+from app.bot.formatters import format_result  # текстовые подсказки внутри диалога (не экраны)
 from app.bot.keyboards import (
     BTN_BUG,
     BTN_GOAL,
@@ -73,7 +59,6 @@ from app.bot.keyboards import (
     BTN_WEEK,
     BTN_WEIGHT,
     DAY_NAV_PREFIX,
-    DEMO_BUTTONS,
     LABEL_G_PREFIX,
     ONBOARD_PREFIX,
     PROD_RENAME_PREFIX,
@@ -94,66 +79,13 @@ from app.bot.keyboards import (
     variant_keyboard,
 )
 from app.bot.states import MealStates, ProfileStates
+from app.bot.ui import gather, screens
 from app.domain.goals import Goal, goal_from_profile
 from app.domain.timeframe import tz_from_longitude, tz_from_utc_offset
 from app.domain.value_objects import Density
 
 router = Router()
 logger = logging.getLogger(__name__)
-
-START_TEXT = (
-    "👋 Привет! Я считаю КБЖУ — просто расскажи, что съел.\n\n"
-    "Текстом или голосом:\n"
-    "• «куриная грудка 250 г»\n"
-    "• «два банана»\n"
-    "• «фо бо средняя порция»\n\n"
-    "📷 Фото этикетки — пришли снимок таблицы КБЖУ, прочитаю цифры сам\n"
-    "⚖️ Вес тела: «вес 86.8»\n"
-    "🎯 Твоя дневная норма КБЖУ — посчитаю по профилю: /profile (пол·вес·рост·возраст)\n"
-    "📖 Полная инструкция — /help\n"
-    "Кнопки меню — снизу 👇"
-)
-
-HELP_TEXT = (
-    "📖 <b>Как пользоваться</b>\n\n"
-    "Я считаю калории, белки, жиры и углеводы по твоим сообщениям и показываю, "
-    "сколько осталось до дневной цели. Пиши или наговаривай свободно — разберу сам.\n\n"
-    "🍽 <b>Записать еду</b>\n"
-    "• «куриная грудка 250 г» — точный вес\n"
-    "• «два банана», «3 яйца» — штуки\n"
-    "• «ложка мёда», «стакан кефира» — бытовые меры\n"
-    "• «фо бо», «шакшука» — хватит и одного названия блюда\n"
-    "🎤 Голос работает так же — наговори как удобно.\n\n"
-    "🤚 <b>Не указал сколько?</b>\n"
-    "На «овсянку» или «рис» без количества спрошу размер — жми «Маленькая / Средняя / Большая» "
-    "(или впиши граммы). Можно сразу словом: «большая тарелка борща».\n\n"
-    "📷 <b>Фото этикетки</b>\n"
-    "Пришли снимок таблицы пищевой ценности — прочитаю КБЖУ сам, спрошу только вес порции.\n\n"
-    "🏷 <b>Знаешь КБЖУ из меню/этикетки?</b>\n"
-    "Назови цифры прямо: «рис с гречей из кафе, 400 ккал, 30 белка, 10 жира, 50 углеводов» — "
-    "запишу ровно так, без пересчёта (или просто сфоткай этикетку — см. выше).\n\n"
-    "🤔 <b>Уточню вариант</b>\n"
-    "Для «творог» или «курица» спрошу: 5% / 9%, гриль / отварная — способ влияет на калории. "
-    "Можно уточнить сразу: «творог 9%», «курица гриль».\n\n"
-    "⚖️ <b>Вес тела</b>\n"
-    "«вес 86.8» — запишу и покажу тренд (кнопка ⚖️ Вес).\n\n"
-    "✏️ <b>Исправить</b>\n"
-    "• «удали рис» — уберу позицию\n"
-    "• ↩️ Отменить — снять последнюю запись или отдельный продукт из неё\n\n"
-    "📊 <b>Посмотреть</b> (всё картинками)\n"
-    "• 📊 Сегодня — съедено, остаток и кольцо Б/Ж/У\n"
-    "• 📈 Неделя — график калорий по дням\n"
-    "• 🗒 История — день со стрелками ← →\n"
-    "• /month — отчёт за 30 дней\n"
-    "• /streak — календарь «дней в цели»\n"
-    "• /card — карточка дня для шеринга\n\n"
-    "🎯 <b>Настрой под себя</b> — так остаток будет точным:\n"
-    "• ⚙️ Профиль — пол, вес, рост, возраст, цель → посчитаю норму\n"
-    "• /goal 1800 — задать цель вручную\n"
-    "• /products — поправить КБЖУ, если оценил неточно (помечено «≈»)\n"
-    "• /timezone — часовой пояс по геолокации, чтобы «день» совпадал с твоим\n\n"
-    "💡 Чем точнее профиль и каталог — тем точнее учёт. Сомневаешься в цифре? Глянь /products."
-)
 
 
 # --- надёжность: единый перехват ошибок ---------------------------------------
@@ -186,17 +118,14 @@ ONBOARD_PROMPT = (
 
 
 @router.message(CommandStart())
-async def on_start(
-    message: Message, app_user: User, users: UserRepo, state: FSMContext
-) -> None:
+async def on_start(message: Message, app_user: User, users: UserRepo, state: FSMContext) -> None:
     await state.clear()
-    if app_user.onboarded_at is None and app_user.id is not None:
-        # первый запуск (FR-24/D-12): приветствие + предложение настроить профиль-визард
-        await message.answer(START_TEXT, reply_markup=main_menu_keyboard())
+    onboarded = app_user.onboarded_at is not None
+    await _rich(message, screens.start(onboarded=onboarded), main_menu_keyboard())
+    if not onboarded and app_user.id is not None:
+        # первый запуск (FR-24/D-12): предложить настроить профиль-визард
         sent = await message.answer(ONBOARD_PROMPT, reply_markup=onboarding_intro_keyboard())
-        await state.update_data(intro_msg_id=sent.message_id)  # #7: чтобы погасить при вводе еды
-        return
-    await message.answer(START_TEXT, reply_markup=main_menu_keyboard())
+        await state.update_data(intro_msg_id=sent.message_id)  # #7: погасить при вводе еды
 
 
 @router.callback_query(F.data == f"{ONBOARD_PREFIX}:setup")
@@ -204,7 +133,9 @@ async def on_onboard_setup(
     callback: CallbackQuery, app_user: User, users: UserRepo, state: FSMContext
 ) -> None:
     if app_user.id is not None:
-        await users.set_onboarded(app_user.id)  # отмечаем сразу — визард можно не доводить (не зацикливать /start)
+        await users.set_onboarded(
+            app_user.id
+        )  # отмечаем сразу — визард можно не доводить (не зацикливать /start)
     if isinstance(callback.message, Message):
         with suppress(Exception):
             await callback.message.edit_reply_markup(reply_markup=None)  # убрать кнопки интро
@@ -238,13 +169,15 @@ async def on_wizard_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     if isinstance(callback.message, Message):
         with suppress(Exception):
             await callback.message.edit_reply_markup(reply_markup=None)
-        await callback.message.answer("Ок, отменил. Меню — снизу 👇", reply_markup=main_menu_keyboard())
+        await callback.message.answer(
+            "Ок, отменил. Меню — снизу 👇", reply_markup=main_menu_keyboard()
+        )
     await callback.answer()
 
 
 @router.message(Command("help"))
 async def on_help(message: Message) -> None:
-    await message.answer(HELP_TEXT, reply_markup=main_menu_keyboard())
+    await _rich(message, screens.help_(), main_menu_keyboard())
 
 
 def _resolve_tz_arg(arg: str) -> str | None:
@@ -304,7 +237,11 @@ async def on_location(message: Message, app_user: User, users: UserRepo) -> None
 
 @router.message(Command("goal"))
 async def on_goal(
-    message: Message, command: CommandObject, app_user: User, users: UserRepo
+    message: Message,
+    command: CommandObject,
+    app_user: User,
+    users: UserRepo,
+    assistant: Assistant,
 ) -> None:
     arg = (command.args or "").strip().replace(",", ".")
     try:
@@ -321,7 +258,7 @@ async def on_goal(
         carb_g=round(kcal * 0.45 / 4),
     )
     await users.set_goal(app_user.id, goal)
-    await _send_goal_card(message, goal, f"🎯 Цель обновлена\n{format_goal(goal)}")
+    await _send_goal_card(message, goal, app_user, assistant, header="🎯 Цель обновлена")
 
 
 @router.message(Command("today"))
@@ -336,32 +273,22 @@ async def cmd_week(message: Message, app_user: User, assistant: Assistant) -> No
 
 @router.message(Command("card"))
 async def cmd_card(message: Message, app_user: User, assistant: Assistant) -> None:
-    """Карточка дня картинкой — для шеринга (дата · бары · кольцо)."""
+    """Карточка дня для шеринга — тот же экран дня, но без стрелок навигации."""
     rem, dv = await assistant.day_card(app_user)
-    png = render_day_card(rem, dv.day)
-    await message.answer_photo(BufferedInputFile(png, "card.png"), caption="📤 Карточка дня")
+    await _rich(message, screens.day(dv, rem))
 
 
 @router.message(Command("streak"))
 async def cmd_streak(message: Message, app_user: User, assistant: Assistant) -> None:
-    """Календарь-хитмап за 4 недели: дни в цели зелёным, перебор красным."""
+    """Календарь «дней в цели» за 4 недели — цветные эмодзи 7 в ряд (пусто/наверх)."""
     days, goal = await assistant.day_calories(app_user, 28)
-    if not any(k > 0 for _, k in days):
-        await message.answer("Пока пусто — запиши пару дней, и тут появится календарь 📅")
-        return
-    png = render_heatmap(days, goal.daily_kcal)
-    await message.answer_photo(BufferedInputFile(png, "streak.png"), caption="📅 Дни в цели")
+    await _rich(message, screens.streak(days, goal.daily_kcal))
 
 
 @router.message(Command("month"))
 async def cmd_month(message: Message, app_user: User, assistant: Assistant) -> None:
-    """Отчёт за 30 дней картинкой: среднее КБЖУ, дней в цели, Δ веса."""
-    rep = await assistant.month_report(app_user)
-    if rep.days_logged == 0:
-        await message.answer("За последние 30 дней записей нет — поедим, потом покажу отчёт 📅")
-        return
-    png = render_month_card(rep)
-    await message.answer_photo(BufferedInputFile(png, "month.png"), caption="📅 Отчёт за 30 дней")
+    """Отчёт за 30 дней: покрытие лога, среднее КБЖУ/день, тренд веса."""
+    await _rich(message, screens.month(await gather(assistant, app_user)))
 
 
 @router.message(Command("history"))
@@ -435,11 +362,7 @@ async def btn_goal(
 ) -> None:
     await state.clear()
     goal = await assistant.current_goal(app_user)
-    await _send_goal_card(
-        message, goal,
-        f"🎯 Твоя дневная норма\n{format_goal(goal)}\n\n"
-        "Пересчитать по профилю — ⚙️ Профиль (/profile); вручную — <code>/goal 1800</code>.",
-    )
+    await _send_goal_card(message, goal, app_user, assistant, header="🎯 Твоя дневная норма")
 
 
 @router.message(F.text == BTN_PROFILE)
@@ -461,8 +384,12 @@ _BUG_DONE = "🐛 Спасибо! Записал багрепорт и посл�
 
 @router.message(Command("bug"))
 async def cmd_bug(
-    message: Message, command: CommandObject, app_user: User, assistant: Assistant,
-    session: AsyncSession, state: FSMContext,
+    message: Message,
+    command: CommandObject,
+    app_user: User,
+    assistant: Assistant,
+    session: AsyncSession,
+    state: FSMContext,
 ) -> None:
     note = (command.args or "").strip()
     if not note:
@@ -480,67 +407,31 @@ async def btn_bug(message: Message, state: FSMContext) -> None:
     await message.answer(_BUG_PROMPT)
 
 
-@router.message(F.text == "🧪 Демо")
-async def btn_demo_legacy(message: Message, state: FSMContext) -> None:
-    """Старая кнопка из КЭША клавиатуры у уже онбордившихся юзеров.
+@router.message(F.text.in_({"🧪 Демо", "🅰 Дашборд", "🅱 Тренер", "🅲 Лента"}))
+async def btn_demo_legacy(
+    message: Message, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
+    """Перехват СТАРЫХ демо-кнопок из кэша клавиатуры (демо выбрано и удалено).
 
-    Клавиатура пересылается только на /start, /help и в визардах — значит после переименования
-    у обоих юзеров в чате ещё висит «🧪 Демо». Без этого хендлера тап по ней провалился бы в
-    on_text и бот попытался бы ЗАПИСАТЬ «🧪 Демо» как приём пищи (а точность учёта — приоритет №1).
+    Клавиатура пересылается только на /start, /help и в визардах — значит у обоих юзеров в чате
+    ещё висят старые «🧪 Демо / 🅰 / 🅱 / 🅲». Без перехвата тап по ним провалился бы в on_text и
+    бот попытался бы ЗАПИСАТЬ «🅰 Дашборд» как приём пищи (точность учёта — приоритет №1). Заодно
+    самолечим клавиатуру: показываем «Сегодня» уже в новом дизайне с актуальным меню внизу.
     """
     await state.clear()
     await message.answer(
-        "Кнопка переехала: теперь три дизайна — 🅰 Дашборд · 🅱 Тренер · 🅲 Лента",
+        "Дизайн выбран и раскатан на весь бот 🎉 Меню обновил ниже.",
         reply_markup=main_menu_keyboard(),
     )
-
-
-@router.message(F.text.in_(DEMO_BUTTONS))
-async def btn_demo(
-    message: Message, bot: Bot, app_user: User, assistant: Assistant, state: FSMContext
-) -> None:
-    """ВРЕМЕННО: полный дизайн-прогон. Одна кнопка = ВСЕ разделы в одном оформлении.
-
-    Три дизайна отличаются не покраской, а тем, на какой вопрос отвечает экран:
-    A «Дашборд» — покажи цифры; B «Тренер» — что делать; C «Лента» — как прошёл день.
-    """
-    await state.clear()
-    key = DEMO_BUTTONS[message.text or ""]
-    title, build = DESIGNS[key]
-    data = await collect(assistant, app_user)
-
-    screens = build(data)
-    await message.answer(
-        f"⬇️ <b>{escape(title, quote=False)}</b> — {len(screens)} экранов подряд"
-    )
-    for section, html in screens:
-        try:
-            await bot.send_rich_message(
-                chat_id=message.chat.id,
-                # skip_entity_detection: иначе «1860/2200» уедет в номер карты/кэштег
-                rich_message=InputRichMessage(html=html, skip_entity_detection=True),
-            )
-        except TelegramBadRequest as exc:  # разметку не приняли — показать, чтобы починить
-            await message.answer(f"❌ {section}: {escape(str(exc), quote=False)}")
-            await message.answer(f"<pre>{escape(html[:1200], quote=False)}</pre>")
-
-    # style=success/danger/primary — цветные кнопки, без Premium и прочих условий
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"✅ Беру {title}", callback_data=f"demo_pick:{key}", style="success"
-                ),
-                InlineKeyboardButton(text="✖️ Не то", callback_data="demo_pick:0", style="danger"),
-            ]
-        ]
-    )
-    await message.answer(f"👆 Это был <b>{escape(title, quote=False)}</b>", reply_markup=kb)
+    await _show_today(message, app_user, assistant)
 
 
 @router.message(MealStates.awaiting_bug, F.text)
 async def on_bug_note(
-    message: Message, app_user: User, assistant: Assistant, session: AsyncSession,
+    message: Message,
+    app_user: User,
+    assistant: Assistant,
+    session: AsyncSession,
     state: FSMContext,
 ) -> None:
     await state.clear()
@@ -551,7 +442,10 @@ async def on_bug_note(
 
 @router.message(MealStates.awaiting_bug, F.photo)
 async def on_bug_photo(
-    message: Message, app_user: User, assistant: Assistant, session: AsyncSession,
+    message: Message,
+    app_user: User,
+    assistant: Assistant,
+    session: AsyncSession,
     state: FSMContext,
 ) -> None:
     """FR-26: скриншот в багрепорт — сохраняем file_id (а не уводим в read_label как этикетку)."""
@@ -565,7 +459,11 @@ async def on_bug_photo(
 
 @router.message(MealStates.awaiting_bug, F.voice)
 async def on_bug_voice(
-    message: Message, bot: Bot, app_user: User, assistant: Assistant, session: AsyncSession,
+    message: Message,
+    bot: Bot,
+    app_user: User,
+    assistant: Assistant,
+    session: AsyncSession,
     state: FSMContext,
 ) -> None:
     """FR-26: голосовой багрепорт — ТРАНСКРИБИРУЕМ и сохраняем текст (+ file_id), баг #9."""
@@ -664,7 +562,7 @@ async def on_portion_text(
     result = await assistant.continue_meal(app_user, draft, raw_input=raw)
     await session.commit()
     await state.clear()
-    await _reply_message(message, result, state, raw=raw)
+    await _reply_message(message, result, state, app_user, assistant, raw=raw)
 
 
 @router.message(MealStates.awaiting_variant, F.text)
@@ -700,7 +598,7 @@ async def on_variant_text(
     )
     await session.commit()
     await state.clear()
-    await _reply_message(message, result, state, raw=raw)
+    await _reply_message(message, result, state, app_user, assistant, raw=raw)
     if q_msg_id is not None:  # снять inline-кнопки старого вопроса (ответили текстом)
         with suppress(Exception):
             await bot.edit_message_reply_markup(
@@ -762,7 +660,7 @@ async def on_voice(
     await _send_typing(message)
     result = await assistant.process(app_user, transcript, input_type="voice")
     await session.commit()
-    await _reply_message(message, result, state, raw=transcript)
+    await _reply_message(message, result, state, app_user, assistant, raw=transcript)
     await _maybe_weight_chart(message, app_user, assistant, result)
 
 
@@ -798,18 +696,14 @@ async def on_photo(
             item.unit = Unit.GRAM
             final = await assistant.continue_meal(app_user, result.draft, raw_input="этикетка")
             await session.commit()
-            await _reply_message(message, final, state, raw="этикетка")
+            await _reply_message(message, final, state, app_user, assistant, raw="этикетка")
             return
-        card = render_label_card(
-            item.name, item.kcal_per_100g, item.protein_per_100g,
-            item.fat_per_100g, item.carb_per_100g,
-        )
-        await message.answer_photo(BufferedInputFile(card, "label.png"))  # инфо-карточка КБЖУ/100г
         await state.set_state(MealStates.awaiting_label_grams)
         await state.update_data(draft=result.draft, item_index=result.item_index, raw="этикетка")
-        await message.answer(
-            format_result(result),
-            reply_markup=label_grams_keyboard(item.unit_weight_g, item.serving_g),
+        await _rich(
+            message,
+            screens.label(result),  # КБЖУ/100 г таблицей + вопрос про вес порции
+            label_grams_keyboard(item.unit_weight_g, item.serving_g),
         )
     else:
         await message.answer(format_result(result))
@@ -840,7 +734,7 @@ async def on_label_grams(
     result = await assistant.continue_meal(app_user, draft, raw_input="этикетка")
     await session.commit()
     await state.clear()
-    await _reply_message(message, result, state, raw="этикетка")
+    await _reply_message(message, result, state, app_user, assistant, raw="этикетка")
 
 
 @router.callback_query(F.data.startswith(f"{LABEL_G_PREFIX}:"))
@@ -863,7 +757,9 @@ async def on_label_gram_btn(
     result = await assistant.continue_meal(app_user, draft, raw_input="этикетка")
     await session.commit()
     await state.clear()
-    await _render_after_continue(callback.message, result, state, raw="этикетка")
+    await _render_after_continue(
+        callback.message, result, state, app_user, assistant, raw="этикетка"
+    )
 
 
 @router.message(F.text)
@@ -880,14 +776,18 @@ async def on_text(
     await _send_typing(message)
     result = await assistant.process(app_user, message.text or "", input_type="text")
     await session.commit()  # фиксируем запись ДО ответа — «✅ записал» не врёт
-    await _reply_message(message, result, state, raw=message.text or "")
+    await _reply_message(message, result, state, app_user, assistant, raw=message.text or "")
     await _maybe_weight_chart(message, app_user, assistant, result)
 
 
 @router.message(
     StateFilter(
-        MealStates.awaiting_portion, MealStates.awaiting_variant, MealStates.awaiting_density,
-        MealStates.awaiting_rename, MealStates.awaiting_label_grams, MealStates.awaiting_bug,
+        MealStates.awaiting_portion,
+        MealStates.awaiting_variant,
+        MealStates.awaiting_density,
+        MealStates.awaiting_rename,
+        MealStates.awaiting_label_grams,
+        MealStates.awaiting_bug,
         ProfileStates.body,
     )
 )
@@ -920,7 +820,7 @@ async def on_portion(
 
     result = await assistant.continue_meal(app_user, draft, raw_input=raw)
     await session.commit()
-    await _render_after_continue(callback.message, result, state, raw=raw)
+    await _render_after_continue(callback.message, result, state, app_user, assistant, raw=raw)
 
 
 @router.callback_query(F.data.startswith("variant:"))
@@ -949,7 +849,7 @@ async def on_variant(
         app_user, draft, item_index, options[idx], raw_input=raw
     )
     await session.commit()
-    await _render_after_continue(callback.message, result, state, raw=raw)
+    await _render_after_continue(callback.message, result, state, app_user, assistant, raw=raw)
     await callback.answer()
 
 
@@ -962,21 +862,24 @@ async def on_meal_undo(callback: CallbackQuery, app_user: User, assistant: Assis
     result = await assistant.delete_meal(app_user, meal_id)
     if result.meal is None:
         await callback.answer("Уже удалено.")
-        await _edit_card(callback.message, "🗑 Запись уже удалена.")  # карточка-фото → edit_caption
+        with suppress(TelegramBadRequest):
+            await callback.message.delete()
         return
     kcal = round(result.meal.totals.kcal)
     if (callback.message.text or "").startswith("Что отменить"):  # пикер /undo → перерисовать
         history = await assistant.today_meals(app_user)
         if history.meals:
             await _safe_edit(
-                callback.message, "Что отменить? (по позициям)",
+                callback.message,
+                "Что отменить? (по позициям)",
                 undo_picker_keyboard(history.meals, history.timezone),
             )
         else:
             await _safe_edit(callback.message, "🗒 Больше нечего отменять — старое в 🗒 История.")
-    else:  # контекстная отмена под карточкой приёма (она теперь фото → edit_caption)
-        await _edit_card(callback.message, f"🗑 Отменил приём ({kcal} ккал).")
-    await callback.answer()
+    else:  # контекстная отмена под rich-карточкой: править нельзя — просто убираем её
+        with suppress(TelegramBadRequest):
+            await callback.message.delete()
+    await callback.answer(f"🗑 Отменил приём ({kcal} ккал)")
 
 
 @router.callback_query(F.data.startswith("item_del:"))
@@ -987,21 +890,15 @@ async def on_item_del(callback: CallbackQuery, app_user: User, assistant: Assist
     parts = (callback.data or "item_del:0:0").split(":")
     meal_id, item_id = int(parts[1]), int(parts[2])
     result = await assistant.remove_item(app_user, meal_id, item_id)
+    with suppress(TelegramBadRequest):
+        await (
+            callback.message.delete()
+        )  # rich-карточку не отредактировать — шлём обновлённую заново
     if result is None:
-        await _edit_card(callback.message, "🗑 Запись отменена (позиций не осталось).")
-    elif callback.message.photo:  # карточка-фото: перерисовать бары + обновить подпись
-        media = InputMediaPhoto(
-            media=BufferedInputFile(render_dashboard(result.remaining), "meal.png"),
-            caption=_cap(meal_photo_caption(result)),
-        )
-        kb = meal_actions_keyboard(result.meal)
-        with suppress(TelegramBadRequest):
-            await callback.message.edit_media(media, reply_markup=kb)
-    else:  # путь после уточнения — карточка текстом
-        await callback.message.edit_text(
-            format_result(result), reply_markup=meal_actions_keyboard(result.meal)
-        )
-    await callback.answer()
+        await callback.message.answer("🗑 Запись отменена (позиций не осталось).")
+    else:
+        await _send_meal_card(callback.message, result, app_user, assistant)
+    await callback.answer("🗑 Убрал позицию")
 
 
 @router.callback_query(F.data.startswith("undo_item:"))
@@ -1092,7 +989,10 @@ async def on_profile_activity(callback: CallbackQuery, state: FSMContext) -> Non
 
 @router.callback_query(ProfileStates.goal, F.data.startswith("prof_goal:"))
 async def on_profile_goal(
-    callback: CallbackQuery, app_user: User, assistant: Assistant, users: UserRepo,
+    callback: CallbackQuery,
+    app_user: User,
+    assistant: Assistant,
+    users: UserRepo,
     state: FSMContext,
 ) -> None:
     if not isinstance(callback.message, Message):
@@ -1122,15 +1022,12 @@ async def on_profile_goal(
     await assistant.log_weight(app_user, float(data["weight"]))
     await users.set_onboarded(app_user.id)  # профиль пройден → юзер онбординнут (FR-24)
 
+    await _send_goal_card(callback.message, goal, app_user, assistant, header="✅ Дневная цель")
     if data.get("onboarding"):  # первый запуск → передаём к записи еды + справке
-        tail = (
-            "\n\n🎉 Всё готово! Запиши первый приём — например «куриная грудка 250 г».\n"
-            "📍 Пришли геолокацию через /timezone — чтобы «день» статистики шёл по твоему поясу.\n"
-            "Полная инструкция — /help"
+        await callback.message.answer(
+            "🎉 Всё готово! Запиши первый приём — например «куриная грудка 250 г».\n"
+            "📍 /timezone — чтобы «день» статистики шёл по твоему поясу. Инструкция — /help"
         )
-    else:
-        tail = "\n\nПоменять: <code>/goal 1800</code>"
-    await _send_goal_card(callback.message, goal, f"✅ Дневная цель\n{format_goal(goal)}{tail}")
     await callback.answer()
 
 
@@ -1142,28 +1039,11 @@ async def on_day_nav(callback: CallbackQuery, app_user: User, assistant: Assista
         return
     days_ago = max(0, int((callback.data or "day_nav:0").split(":", 1)[1]))
     rem, dv = await assistant.day_card(app_user, days_ago)
-    photo = BufferedInputFile(render_day_card(rem, dv.day), "day.png")
-    cap, kb = _cap(day_photo_caption(dv)), day_nav_keyboard(dv.days_ago)
-    if callback.message.photo:
-        media = InputMediaPhoto(media=photo, caption=cap)
-        with suppress(TelegramBadRequest):
-            await callback.message.edit_media(media, reply_markup=kb)
-    else:  # старое ТЕКСТОВОЕ сообщение истории (до картинок) — шлём новую карточку
-        await callback.message.answer_photo(photo, caption=cap, reply_markup=kb)
+    # rich нельзя редактировать — удаляем текущую карточку и шлём соседний день заново
+    with suppress(TelegramBadRequest):
+        await callback.message.delete()
+    await _rich(callback.message, screens.day(dv, rem), day_nav_keyboard(dv.days_ago))
     await callback.answer()
-
-
-@router.callback_query(F.data.startswith("demo_pick:"))
-async def on_demo_pick(callback: CallbackQuery) -> None:
-    """ВРЕМЕННО: выбор дизайна тапом."""
-    key = (callback.data or "demo_pick:0").split(":", 1)[1]
-    if key not in DESIGNS:
-        await callback.answer("✖️ Понял, этот не берём.", show_alert=True)
-        return
-    title, _ = DESIGNS[key]
-    await callback.answer(
-        f"✅ Принял: {title}. Скажи, что докрутить — и раскатаю на прод.", show_alert=True
-    )
 
 
 @router.callback_query()  # замыкающий: ловит любую устаревшую кнопку (после рестарта/времени)
@@ -1181,55 +1061,31 @@ async def on_stale_callback(callback: CallbackQuery) -> None:
 async def _start_profile(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(ProfileStates.sex)
-    await message.answer("⚙️ Настрою дневную цель по профилю.\nТвой пол?", reply_markup=sex_keyboard())
+    await message.answer(
+        "⚙️ Настрою дневную цель по профилю.\nТвой пол?", reply_markup=sex_keyboard()
+    )
 
 
 async def _show_today(message: Message, app_user: User, assistant: Assistant) -> None:
-    stats = await assistant.today(app_user)
-    if stats.meals_count == 0:
-        await message.answer(format_result(stats))  # пусто → текстовый нудж
-        return
-    png = render_today(stats.remaining)  # бары + кольцо Б/Ж/У картинкой (ровно на Android)
-    caption = today_photo_caption(stats)
-    if len(caption) <= 1024:  # лимит подписи Telegram; длинный список — отдельным сообщением
-        await message.answer_photo(BufferedInputFile(png, "today.png"), caption=caption)
-    else:
-        await message.answer_photo(BufferedInputFile(png, "today.png"), caption="📊 Сегодня")
-        await message.answer(caption)
+    await _rich(message, screens.today(await gather(assistant, app_user)))
 
 
 async def _show_week(message: Message, app_user: User, assistant: Assistant) -> None:
-    days, goal = await assistant.day_calories(app_user, 7)
-    if not any(k > 0 for _, k in days):  # неделя пустая → текстовый нудж
-        await message.answer(format_result(await assistant.weekly(app_user)))
-        return
-    logged = sum(1 for _, k in days if k > 0)
-    avg = round(sum(k for _, k in days) / logged)
-    png = render_weekly_chart(days, goal.daily_kcal)
-    await message.answer_photo(
-        BufferedInputFile(png, "week.png"),
-        caption=f"📈 Неделя · дней с записями {logged}/7 · в среднем {avg} ккал/день",
-    )
+    await _rich(message, screens.week(await gather(assistant, app_user)))
 
 
 async def _show_weight(message: Message, app_user: User, assistant: Assistant) -> None:
-    trend = await assistant.weight_trend(app_user)
-    if len(trend.logs) < 2:  # 0–1 точка — график не построить, отдаём текст
-        await message.answer(format_result(trend))
-        return
-    await message.answer_photo(
-        BufferedInputFile(render_weight_chart(_weight_points(trend)), "weight.png"),
-        caption="⚖️ Тренд веса",
-    )
+    ctx = await gather(assistant, app_user)
+    await _rich(message, screens.weight(ctx))
+    if ctx.trend_ok:  # линию рисуем PNG, только когда тренд честно есть из чего строить
+        await message.answer_photo(
+            BufferedInputFile(render_weight_chart(_weight_points(ctx.weight)), "weight.png")
+        )
 
 
 async def _show_history(message: Message, app_user: User, assistant: Assistant) -> None:
-    rem, dv = await assistant.day_card(app_user)  # день карточкой-картинкой, стрелки ← →
-    png = render_day_card(rem, dv.day)
-    await message.answer_photo(
-        BufferedInputFile(png, "day.png"),
-        caption=_cap(day_photo_caption(dv)), reply_markup=day_nav_keyboard(dv.days_ago),
-    )
+    rem, dv = await assistant.day_card(app_user)  # день + стрелки ← →
+    await _rich(message, screens.day(dv, rem), day_nav_keyboard(dv.days_ago))
 
 
 async def _show_undo_picker(message: Message, app_user: User, assistant: Assistant) -> None:
@@ -1308,75 +1164,142 @@ async def _busy_with_flow(message: Message, state: FSMContext) -> bool:
     return True
 
 
-async def _send_meal_card(message: Message, result: MealLogged) -> None:
-    """Фото-карточка приёма: бары картинкой + список в подписи + кнопки отмены (новое сообщение)."""
-    photo = BufferedInputFile(render_dashboard(result.remaining), "meal.png")
-    caption = meal_photo_caption(result)
-    kb = meal_actions_keyboard(result.meal)
-    if len(caption) <= 1024:  # лимит подписи Telegram
-        await message.answer_photo(photo, caption=caption, reply_markup=kb)
-    else:  # длинный приём — фото с краткой подписью + список отдельным сообщением
-        await message.answer_photo(photo, caption="✅ Записал")
-        await message.answer(caption, reply_markup=kb)
+async def _rich(
+    message: Message,
+    html: str,
+    markup: InlineKeyboardMarkup | ReplyKeyboardMarkup | None = None,
+) -> Message:
+    """Отправить экран единым Rich-стилем (Bot API 10.1).
+
+    skip_entity_detection: иначе Telegram примет «1860/2200» за номер карты и подчеркнёт.
+    Rich-сообщения НЕЛЬЗЯ редактировать (нет editRichMessage) — где нужна правка, шлём заново.
+    """
+    bot = message.bot
+    assert bot is not None  # у полученного сообщения bot всегда привязан
+    return await bot.send_rich_message(
+        chat_id=message.chat.id,
+        rich_message=InputRichMessage(html=html, skip_entity_detection=True),
+        reply_markup=markup,
+    )
+
+
+async def _latest_weight(assistant: Assistant, user: User) -> float | None:
+    trend = await assistant.weight_trend(user, limit=1)
+    return trend.logs[0].weight_kg if trend.logs else None
+
+
+async def _send_meal_card(
+    message: Message, result: MealLogged, app_user: User, assistant: Assistant
+) -> None:
+    """Карточка приёма единым Rich-стилем: что записал + дневной прогресс всеми барами + кнопки."""
+    ctx = await gather(assistant, app_user)
+    await _rich(message, screens.meal_card(ctx, result), meal_actions_keyboard(result.meal))
+
+
+async def _reply_screen(
+    message: Message, result: Result, app_user: User, assistant: Assistant
+) -> None:
+    """Финальный результат (не вопрос) — единым Rich-стилем, каждый тип на свой экран."""
+    if isinstance(result, MealLogged):
+        await _send_meal_card(message, result, app_user, assistant)
+    elif isinstance(result, DailyStats):  # intent=QUERY «сколько осталось»
+        await _rich(message, screens.today(await gather(assistant, app_user)))
+    elif isinstance(result, ItemRemoved):
+        await _rich(message, screens.item_removed(result))
+    elif isinstance(result, ItemAdjusted):
+        await _rich(message, screens.item_adjusted(result))
+    else:  # WeightLogged / CorrectionFailed / Unknown — короткий текст + возможный график веса
+        await message.answer(format_result(result))
+        await _maybe_weight_chart(message, app_user, assistant, result)
+
+
+async def _ask_clarification(
+    message: Message, result: Result, state: FSMContext, *, raw: str, edit: bool
+) -> None:
+    """Вопрос-уточнение (порция/вариант) — короткий текст с клавиатурой. edit: править или слать."""
+    if isinstance(result, ClarificationNeeded):
+        await state.set_state(MealStates.awaiting_portion)
+        await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
+        options = result.draft.items[result.item_index].portion_options
+        if edit:
+            await _safe_edit(message, format_result(result), portion_keyboard(options))
+        else:
+            await message.answer(format_result(result), reply_markup=portion_keyboard(options))
+    else:
+        assert isinstance(result, VariantClarificationNeeded)
+        await state.set_state(MealStates.awaiting_variant)
+        if edit:
+            await state.update_data(
+                draft=result.draft,
+                item_index=result.item_index,
+                raw=raw,
+                q_msg_id=message.message_id,
+            )
+            await _safe_edit(message, format_result(result), variant_keyboard(result.options))
+        else:
+            sent = await message.answer(
+                format_result(result), reply_markup=variant_keyboard(result.options)
+            )
+            await state.update_data(
+                draft=result.draft,
+                item_index=result.item_index,
+                raw=raw,
+                q_msg_id=sent.message_id,
+            )
 
 
 async def _reply_message(
-    message: Message, result: Result, state: FSMContext, *, raw: str
+    message: Message,
+    result: Result,
+    state: FSMContext,
+    app_user: User,
+    assistant: Assistant,
+    *,
+    raw: str,
 ) -> None:
-    if isinstance(result, ClarificationNeeded):
-        await state.set_state(MealStates.awaiting_portion)
-        await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
-        options = result.draft.items[result.item_index].portion_options
-        await message.answer(format_result(result), reply_markup=portion_keyboard(options))
-    elif isinstance(result, VariantClarificationNeeded):
-        await state.set_state(MealStates.awaiting_variant)
-        sent = await message.answer(format_result(result), reply_markup=variant_keyboard(result.options))
-        await state.update_data(
-            draft=result.draft, item_index=result.item_index, raw=raw, q_msg_id=sent.message_id
-        )
-    elif isinstance(result, MealLogged):
-        await _send_meal_card(message, result)
+    if isinstance(result, ClarificationNeeded | VariantClarificationNeeded):
+        await _ask_clarification(message, result, state, raw=raw, edit=False)
     else:
-        await message.answer(format_result(result))
+        await _reply_screen(message, result, app_user, assistant)
 
 
 async def _render_after_continue(
-    message: Message, result: Result, state: FSMContext, *, raw: str
+    message: Message,
+    result: Result,
+    state: FSMContext,
+    app_user: User,
+    assistant: Assistant,
+    *,
+    raw: str,
 ) -> None:
-    """После ответа на уточнение (порция/вариант): следующий вопрос или финал — правит сообщение."""
-    if isinstance(result, ClarificationNeeded):
-        await state.set_state(MealStates.awaiting_portion)
-        await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
-        options = result.draft.items[result.item_index].portion_options
-        await _safe_edit(message, format_result(result), portion_keyboard(options))
-    elif isinstance(result, VariantClarificationNeeded):
-        await state.set_state(MealStates.awaiting_variant)
-        await state.update_data(
-            draft=result.draft, item_index=result.item_index, raw=raw, q_msg_id=message.message_id
-        )
-        await _safe_edit(message, format_result(result), variant_keyboard(result.options))
+    """После ответа на уточнение: следующий вопрос правим на месте, финал — новым Rich-сообщением.
+
+    Rich нельзя вклеить в старое сообщение-вопрос (нет editRichMessage), поэтому на финале вопрос
+    удаляем и шлём карточку заново.
+    """
+    if isinstance(result, ClarificationNeeded | VariantClarificationNeeded):
+        await _ask_clarification(message, result, state, raw=raw, edit=True)
+        return
+    await state.clear()
+    if isinstance(result, MealLogged | DailyStats | ItemRemoved | ItemAdjusted):
+        with suppress(TelegramBadRequest):
+            await message.delete()  # сообщение-вопрос убираем — rich не вклеить в него
+        await _reply_screen(message, result, app_user, assistant)
     else:
-        await state.clear()
-        if isinstance(result, MealLogged):  # финал и после кнопки — фото-карточкой, как при тексте
-            with suppress(TelegramBadRequest):
-                await message.edit_reply_markup(reply_markup=None)  # снять кнопки сообщения-вопроса
-            await _send_meal_card(message, result)
-        else:
-            await _safe_edit(message, format_result(result))
-
-
-def _cap(text: str) -> str:
-    """Подпись Telegram ≤1024 символов — длинную режем с многоточием."""
-    return text if len(text) <= 1024 else text[:1020] + "…"
+        await _safe_edit(message, format_result(result))
 
 
 def _weight_points(trend: WeightTrend) -> list[tuple[datetime, float]]:
     return [(log.measured_at, log.weight_kg) for log in reversed(trend.logs)]  # старые→новые
 
 
-async def _send_goal_card(message: Message, goal: Goal, caption: str) -> None:
-    png = render_goal_card(goal)
-    await message.answer_photo(BufferedInputFile(png, "goal.png"), caption=_cap(caption))
+async def _send_goal_card(
+    message: Message, goal: Goal, app_user: User, assistant: Assistant, *, header: str = ""
+) -> None:
+    """Экран цели единым Rich-стилем; header — необязательная строка над таблицей."""
+    wkg = await _latest_weight(assistant, app_user)
+    head = f"<p><b>{header}</b></p>" if header else ""
+    await _rich(message, head + screens.goal_screen(goal, wkg))
 
 
 async def _maybe_weight_chart(
@@ -1390,15 +1313,6 @@ async def _maybe_weight_chart(
         await message.answer_photo(
             BufferedInputFile(render_weight_chart(_weight_points(trend)), "weight.png")
         )
-
-
-async def _edit_card(message: Message, text: str, markup: object = None) -> None:
-    """Правка карточки приёма: фото → edit_caption, текст → edit_text (undo/remove-item)."""
-    if message.photo:
-        with suppress(TelegramBadRequest):
-            await message.edit_caption(caption=text, reply_markup=markup)  # type: ignore[arg-type]
-    else:
-        await _safe_edit(message, text, markup)
 
 
 async def _safe_edit(message: Message, text: str, markup: object = None) -> None:
