@@ -55,30 +55,6 @@ class DayContext:
         return sum(1 for i in self.items if i.is_estimate)
 
     @property
-    def top_item(self) -> MealItem | None:
-        """Где были деньги: позиция с максимальным вкладом в калории дня.
-
-        Это ЕДИНСТВЕННАЯ информация о прошлом, которая меняет будущий выбор. «Чай, 2 ккал»
-        не меняет ничего; «пицца 400 г — 1050 ккал, 38% дня» меняет следующий ужин.
-        """
-        return max(self.items, key=lambda i: i.macros.kcal, default=None)
-
-    @property
-    def to_clarify(self) -> MealItem | None:
-        """Что уточнить, чтобы точность дня выросла сильнее всего: argmax(kcal × 0.25) у оценок.
-
-        Уточнять 20 г зелени бессмысленно — это налог на внимание без отдачи. Уточнить 400 г
-        пасты — режет погрешность дня в разы.
-        """
-        est = [i for i in self.items if i.is_estimate]
-        return max(est, key=lambda i: i.macros.kcal, default=None)
-
-    @property
-    def trust_ok(self) -> bool:
-        """Можно ли давать точечные советы. При >50% оценок база плывёт сильнее совета."""
-        return self.est_kcal_share <= 50
-
-    @property
     def logged7(self) -> int:
         return self.week7.days_logged
 

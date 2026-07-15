@@ -87,7 +87,6 @@ def meal_card(d: DayContext, r: MealLogged) -> str:
         + _notes(r)
         + "<hr/>"
         + _bars(d.today.remaining.consumed, g)
-        + blocks.clarify(d)
         + blocks.advice(d)
     )
 
