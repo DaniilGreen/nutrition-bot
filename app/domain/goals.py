@@ -18,6 +18,12 @@ class Goal:
     protein_g: float
     fat_g: float
     carb_g: float
+    target: str = "maintain"  # cut | maintain | bulk — от неё зависит раскладка (см. rebalance)
+
+    @property
+    def atwater_kcal(self) -> float:
+        """Калории, сходящиеся с макросами: 4Б + 9Ж + 4У. ИНВАРИАНТ: == daily_kcal (см. INV-15)."""
+        return self.protein_g * 4 + self.fat_g * 9 + self.carb_g * 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +77,47 @@ def mifflin_st_jeor(
     return round(bmr * activity, 0)
 
 
+# --- Раскладка калорий на макросы: БЕЛОК — ЯКОРЬ, ЖИР — ПОЛ, УГЛЕВОДЫ — ОСТАТОК ---
+#
+# Белок якорим на МАССУ ТЕЛА, а не на долю калорий. Доля калорий означала бы: срезал калории —
+# срезал белок, а это ровно то, из-за чего на дефиците уходят мышцы (старый /goal так и делал:
+# 30% ккал).
+#
+# Больше всего белка нужно на СУШКЕ — вопреки распространённой интуиции «на массе больше». В
+# дефиците организм добирает аминокислоты из мышц, и высокий белок — единственная защита
+# (Longland 2016: 2.4 vs 1.2 г/кг при дефиците 40% — первая группа НАБРАЛА сухую массу). На массе
+# калорий вдоволь, потребность на кг ниже: прирост выходит на плато ~1.6 г/кг (Morton 2018).
+PROTEIN_PER_KG = {"cut": 2.2, "maintain": 1.8, "bulk": 2.0}
+# Жир — доля калорий, но НЕ ниже пола: гормоны и жирорастворимые витамины. На сушке долю поднимаем
+# (сытость на низких калориях), на массе опускаем — освобождаем место углеводам под тренировки.
+FAT_RATIO = {"cut": 0.30, "maintain": 0.28, "bulk": 0.25}
+FAT_FLOOR_PER_KG = 0.8
+
+# Углеводы — ОСТАТОК. Отсюда само собой выходит то, чего и ждёшь: на сушке калорий мало → углеводов
+# мало; на массе много → углеводов много. Специально их не крутим.
+
+
+def rebalance(kcal: float, weight_kg: float, target: str = "maintain") -> Goal:
+    """Разложить калории на макросы под цель. ИНВАРИАНТ: 4Б+9Ж+4У == daily_kcal (INV-15).
+
+    Итоговые ккал берём ОТ РЕАЛЬНЫХ макросов, а не от запрошенных: после округления граммов
+    сумма разошлась бы с числом на экране, и бот бы врал. Если запрошенные калории ниже, чем
+    белок+пол жира (нереалистичная цель), — вернём честный минимум, а не углеводы в минус.
+    """
+    protein_g = round(PROTEIN_PER_KG.get(target, 1.8) * weight_kg)
+    fat_g = round(max(kcal * FAT_RATIO.get(target, 0.28) / 9, FAT_FLOOR_PER_KG * weight_kg))
+    carb_g = round(max(0.0, kcal - protein_g * 4 - fat_g * 9) / 4)
+    return goal_from_macros(protein_g, fat_g, carb_g, target)
+
+
+def goal_from_macros(
+    protein_g: float, fat_g: float, carb_g: float, target: str = "maintain"
+) -> Goal:
+    """Цель от макросов: калории СЧИТАЮТСЯ (4Б+9Ж+4У), а не задаются. Обратное к rebalance."""
+    kcal = round(protein_g * 4 + fat_g * 9 + carb_g * 4)
+    return Goal(daily_kcal=kcal, protein_g=protein_g, fat_g=fat_g, carb_g=carb_g, target=target)
+
+
 def goal_from_profile(
     *,
     sex: Literal["male", "female"],
@@ -80,9 +127,10 @@ def goal_from_profile(
     activity: str,
     target: str,
 ) -> Goal:
-    """Цель из профиля: Mifflin × активность × цель, с разбивкой макросов.
+    """Цель из профиля: Mifflin × активность × цель → та же раскладка, что и у /goal (rebalance).
 
-    Белок фиксируем ~2 г/кг (важно при дефиците), жиры 25% ккал, углеводы — остаток.
+    ОДНА схема на весь бот: раньше /goal считал белок как 30% калорий, а визард — 2 г/кг, и цель
+    зависела от того, каким путём её задали.
     """
     tdee = mifflin_st_jeor(
         sex=sex,
@@ -91,8 +139,4 @@ def goal_from_profile(
         age=age,
         activity=ACTIVITY_FACTORS.get(activity, 1.375),
     )
-    kcal = round(tdee * TARGET_FACTORS.get(target, 1.0))
-    protein_g = round(2.0 * weight_kg)
-    fat_g = round(kcal * 0.25 / 9)
-    carb_g = round(max(0.0, kcal - protein_g * 4 - fat_g * 9) / 4)
-    return Goal(daily_kcal=kcal, protein_g=protein_g, fat_g=fat_g, carb_g=carb_g)
+    return rebalance(round(tdee * TARGET_FACTORS.get(target, 1.0)), weight_kg, target)

@@ -52,6 +52,9 @@ class UserGoalORM(Base):
     protein_g: Mapped[float] = mapped_column(Float)
     fat_g: Mapped[float] = mapped_column(Float)
     carb_g: Mapped[float] = mapped_column(Float)
+    # cut | maintain | bulk — от цели зависит раскладка макросов (domain/goals.rebalance).
+    # Единственное, что переживает визард: пол/рост/возраст он в БД не пишет.
+    target: Mapped[str] = mapped_column(String(16), server_default="maintain")
 
     user: Mapped[UserORM] = relationship(back_populates="goal")
 

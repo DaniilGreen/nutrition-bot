@@ -93,7 +93,7 @@ class SqlUserRepo:
         g = res.scalar_one_or_none()
         if g is None:
             return None
-        return Goal(g.daily_kcal, g.protein_g, g.fat_g, g.carb_g)
+        return Goal(g.daily_kcal, g.protein_g, g.fat_g, g.carb_g, g.target)
 
     async def set_goal(self, user_id: int, goal: Goal) -> None:
         res = await self._s.execute(select(UserGoalORM).where(UserGoalORM.user_id == user_id))
@@ -106,6 +106,7 @@ class SqlUserRepo:
                     protein_g=goal.protein_g,
                     fat_g=goal.fat_g,
                     carb_g=goal.carb_g,
+                    target=goal.target,
                 )
             )
         else:
@@ -113,6 +114,7 @@ class SqlUserRepo:
             g.protein_g = goal.protein_g
             g.fat_g = goal.fat_g
             g.carb_g = goal.carb_g
+            g.target = goal.target
         await self._s.flush()
 
     async def set_timezone(self, user_id: int, tzname: str) -> None:

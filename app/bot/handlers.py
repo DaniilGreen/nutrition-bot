@@ -81,7 +81,7 @@ from app.bot.keyboards import (
 )
 from app.bot.states import MealStates, ProfileStates
 from app.bot.ui import gather, screens
-from app.domain.goals import Goal, goal_from_profile
+from app.domain.goals import Goal, goal_from_macros, goal_from_profile, rebalance
 from app.domain.timeframe import tz_from_longitude, tz_from_utc_offset
 from app.domain.value_objects import Density
 
@@ -244,20 +244,34 @@ async def on_goal(
     users: UserRepo,
     assistant: Assistant,
 ) -> None:
-    arg = (command.args or "").strip().replace(",", ".")
-    try:
-        kcal = float(arg)
-    except ValueError:
-        await message.answer("Формат: <code>/goal 1800</code> — дневная цель по калориям.")
-        return
-
     assert app_user.id is not None
-    goal = Goal(
-        daily_kcal=kcal,
-        protein_g=round(kcal * 0.30 / 4),
-        fat_g=round(kcal * 0.25 / 9),
-        carb_g=round(kcal * 0.45 / 4),
-    )
+    try:
+        nums = [float(a) for a in (command.args or "").strip().replace(",", ".").split()]
+    except ValueError:
+        nums = []
+
+    current = await assistant.current_goal(app_user)
+    if len(nums) == 1:
+        # Режим 1: задаём КАЛОРИИ → макросы раскладываются под цель (белок якорь, жир пол,
+        # углеводы остаток). Нужен вес: белок якорится на массу тела, а не на долю калорий.
+        trend = await assistant.weight_trend(app_user, limit=1)
+        if not trend.logs:
+            await message.answer(
+                "Сначала запиши вес — «вес 86.8»: без него не разложу макросы "
+                "(белок считаю на кг массы, а не долей от калорий)."
+            )
+            return
+        goal = rebalance(nums[0], trend.logs[0].weight_kg, current.target)
+    elif len(nums) == 3:
+        # Режим 2: задаём МАКРОСЫ → калории считаются сами (4Б+9Ж+4У).
+        goal = goal_from_macros(nums[0], nums[1], nums[2], current.target)
+    else:
+        await message.answer(
+            "Формат:\n"
+            "<code>/goal 1800</code> — калории, макросы разложу под твою цель\n"
+            "<code>/goal 180 80 200</code> — Б Ж У, калории посчитаю сам"
+        )
+        return
     await users.set_goal(app_user.id, goal)
     await _send_goal_card(message, goal, app_user, assistant, header="🎯 Цель обновлена")
 
