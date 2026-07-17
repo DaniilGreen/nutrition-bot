@@ -60,12 +60,14 @@ from app.bot.keyboards import (
     BTN_WEIGHT,
     DAY_DEL_PREFIX,
     DAY_NAV_PREFIX,
+    GOAL_TARGET_PREFIX,
     LABEL_G_PREFIX,
     ONBOARD_PREFIX,
     PROD_RENAME_PREFIX,
     WIZ_CANCEL,
     activity_keyboard,
     day_nav_keyboard,
+    goal_target_keyboard,
     goal_type_keyboard,
     label_grams_keyboard,
     location_request_keyboard,
@@ -1076,6 +1078,33 @@ async def on_day_del(callback: CallbackQuery, app_user: User, assistant: Assista
     await callback.answer("🗑 Убрал позицию")
 
 
+@router.callback_query(F.data.startswith(f"{GOAL_TARGET_PREFIX}:"))
+async def on_goal_target(
+    callback: CallbackQuery, app_user: User, users: UserRepo, assistant: Assistant
+) -> None:
+    """Сменить цель (похудение/поддержание/набор) с экрана 🎯 Цель — без визарда.
+
+    Калории ОСТАВЛЯЕМ как есть, пересчитываем только раскладку: смена цели — это «как делить»,
+    а не «сколько есть». Сколько — задаётся /goal или профилем.
+    """
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    target = (callback.data or f"{GOAL_TARGET_PREFIX}:maintain").split(":", 1)[1]
+    assert app_user.id is not None
+    current = await assistant.current_goal(app_user)
+    wkg = await _latest_weight(assistant, app_user)
+    if wkg is None:
+        await callback.answer("Сначала запиши вес — «вес 86.8»", show_alert=True)
+        return
+    goal = rebalance(current.daily_kcal, wkg, target)
+    await users.set_goal(app_user.id, goal)
+    await _rich_edit(
+        callback.message, screens.goal_screen(goal, wkg), goal_target_keyboard(target)
+    )
+    await callback.answer(f"🎯 {screens.TARGET_RU.get(target, target)}")
+
+
 @router.callback_query()  # замыкающий: ловит любую устаревшую кнопку (после рестарта/времени)
 async def on_stale_callback(callback: CallbackQuery) -> None:
     """Не пойманный callback → гасим вечный спиннер Telegram и снимаем мёртвую клавиатуру."""
@@ -1344,10 +1373,13 @@ def _weight_points(trend: WeightTrend) -> list[tuple[datetime, float]]:
 async def _send_goal_card(
     message: Message, goal: Goal, app_user: User, assistant: Assistant, *, header: str = ""
 ) -> None:
-    """Экран цели единым Rich-стилем; header — необязательная строка над таблицей."""
+    """Экран цели единым Rich-стилем; header — необязательная строка над таблицей.
+
+    Кнопки цели — под сообщением: сменить одно поле, не проходя весь визард заново.
+    """
     wkg = await _latest_weight(assistant, app_user)
     head = f"<p><b>{header}</b></p>" if header else ""
-    await _rich(message, head + screens.goal_screen(goal, wkg))
+    await _rich(message, head + screens.goal_screen(goal, wkg), goal_target_keyboard(goal.target))
 
 
 async def _maybe_weight_chart(

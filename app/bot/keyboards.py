@@ -13,7 +13,8 @@ PORTION_CALLBACK_PREFIX = "portion"
 VARIANT_CALLBACK_PREFIX = "variant"
 LABEL_G_PREFIX = "label_g"  # пресет веса (порция/пачка) после фото этикетки (FR-27)
 DAY_NAV_PREFIX = "day_nav"  # навигация по дням в просмотре истории (вар. A)
-DAY_DEL_PREFIX = "day_del"  # удалить приём прямо с экрана «День»/«История» (день:meal_id)
+DAY_DEL_PREFIX = "day_del"  # удалить позицию прямо с экрана «День»/«История» (день:meal:item)
+GOAL_TARGET_PREFIX = "goal_tgt"  # сменить цель (cut/maintain/bulk) с экрана 🎯 Цель, без визарда
 MEAL_UNDO_PREFIX = "meal_undo"
 UNDO_ITEM_PREFIX = "undo_item"
 ITEM_DEL_PREFIX = "item_del"
@@ -213,6 +214,21 @@ def activity_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="🏃 Высокая", callback_data="prof_act:high")
     builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
     builder.adjust(3, 1)
+    return builder.as_markup()
+
+
+def goal_target_keyboard(current: str) -> InlineKeyboardMarkup:
+    """Смена цели прямо с экрана 🎯 Цель — без прогона всего визарда профиля.
+
+    Менять надо ОДНО поле, а визард заново спрашивает пол/вес/рост/возраст. Текущая цель помечена
+    ✓ — иначе непонятно, на чём стоишь (в заголовке экрана она есть, но кнопки читают отдельно).
+    """
+    builder = InlineKeyboardBuilder()
+    options = (("cut", "🔻 Похудение"), ("maintain", "⚖️ Поддержание"), ("bulk", "🔺 Набор"))
+    for key, label in options:
+        mark = "✓ " if key == current else ""
+        builder.button(text=f"{mark}{label}", callback_data=f"{GOAL_TARGET_PREFIX}:{key}")
+    builder.adjust(3)
     return builder.as_markup()
 
 
