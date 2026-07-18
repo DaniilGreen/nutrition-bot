@@ -263,7 +263,9 @@ class Assistant:
             )
 
         meal = await self._meals.log(user, parsed, raw_input=raw_input, input_type=input_type)
-        stats = await self._stats.daily(user)
+        # Остаток ТОГО дня, куда записали (при «вчера/завтра» — не сегодняшнего). offset −1 (вчера)
+        # → days_ago +1; +1 (завтра) → days_ago −1.
+        stats = await self._stats.daily(user, days_ago=-parsed.day_offset)
         return MealLogged(meal=meal, remaining=stats.remaining)
 
     async def _handle_correction(self, user: User, parsed: ParsedMessage) -> Result:

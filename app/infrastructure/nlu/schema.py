@@ -65,4 +65,9 @@ class NluResult(BaseModel):
     correction_op: Literal["delete", "replace", "adjust", "other"] | None = Field(
         default=None, description="Тип правки для intent=correction"
     )
+    day_offset: int = Field(
+        default=0,
+        description="Сдвиг дня приёма относительно сегодня: «вчера»=-1, «позавчера»=-2, "
+        "«завтра»=+1. Если день НЕ назван — строго 0 (сегодня). Диапазон -30..+7.",
+    )
     confidence: float = Field(description="Общая уверенность разбора, 0..1")

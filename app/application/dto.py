@@ -59,3 +59,4 @@ class ParsedMessage:
     weight_kg: float | None = None
     correction_op: str | None = None  # delete|replace|adjust|other для intent=correction
     confidence: float = 1.0
+    day_offset: int = 0  # «вчера»=-1, «завтра»=+1; 0=сегодня. Сдвигает день приёма (FR-33)

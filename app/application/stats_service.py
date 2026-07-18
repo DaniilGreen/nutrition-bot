@@ -29,9 +29,14 @@ class StatsService:
     async def current_goal(self, user: User) -> Goal:
         return await self._users.get_goal(_require_id(user)) or self._default_goal
 
-    async def daily(self, user: User) -> DailyStats:
+    async def daily(self, user: User, days_ago: int = 0) -> DailyStats:
+        """Статистика дня. days_ago=0 — сегодня; >0 — прошлые дни, <0 — будущие (предзапись).
+
+        Параметр нужен карточке приёма при бэкдейте (FR-33): показать остаток ТОГО дня, куда
+        записали, а не сегодняшнего.
+        """
         user_id = _require_id(user)
-        start, end = day_bounds_utc(self._clock(), user.timezone)
+        start, end = day_bounds_utc(self._clock() - timedelta(days=days_ago), user.timezone)
         meals = await self._meals.list_between(user_id, start, end)
         meals.sort(key=lambda m: m.eaten_at)  # хронологически — для списка съеденного в «Сегодня»
         consumed = sum_macros(meal.totals for meal in meals)

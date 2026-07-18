@@ -85,6 +85,7 @@ def _to_dto(result: NluResult) -> ParsedMessage:
         intent=Intent(result.intent),
         weight_kg=result.weight_kg,
         correction_op=result.correction_op,
+        day_offset=result.day_offset,
         confidence=result.confidence,
         items=[
             ParsedItem(

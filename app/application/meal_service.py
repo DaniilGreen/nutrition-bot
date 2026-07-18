@@ -14,6 +14,7 @@ from __future__ import annotations
 import difflib
 import re
 from collections.abc import Sequence
+from datetime import timedelta
 
 from app.application.dto import ParsedItem, ParsedMessage
 from app.application.entities import Meal, MealItem, Product, User
@@ -114,9 +115,12 @@ class MealService:
                 )
             )
 
+        # FR-33: «вчера»/«завтра» сдвигают ДЕНЬ приёма, время суток берём текущее (владелец: время
+        # неважно). Кламп — страховка от галлюцинации LLM (день из будущего/древности).
+        offset = max(-30, min(7, parsed.day_offset))
         meal = Meal(
             user_id=user_id,
-            eaten_at=self._clock(),
+            eaten_at=self._clock() + timedelta(days=offset),
             input_type=input_type,
             raw_input=raw_input,
             items=items,

@@ -15,7 +15,8 @@ rich — там, где есть бары/таблицы; plain — коротк
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from app.application.entities import MealItem, Product
 from app.application.results import DayView, ItemAdjusted, ItemRemoved, LabelRead, MealLogged
@@ -60,13 +61,29 @@ def today(d: DayContext) -> str:
     )
 
 
+def _meal_day_label(eaten_at: datetime, tz_name: str, today: date) -> str:
+    """« на вчера, 16 июл» для бэкдейта; пусто для сегодня (FR-33).
+
+    Без метки бэкдейт был бы молчаливым: юзер сказал «вчера», а карточка выглядит как сегодняшняя.
+    """
+    md = eaten_at.astimezone(ZoneInfo(tz_name)).date()
+    if md == today:
+        return ""
+    word = {-1: "вчера", -2: "позавчера", 1: "завтра", 2: "послезавтра"}.get((md - today).days)
+    ds = f"{md.day} {kit.MON[md.month - 1]}"
+    return f" на {word}, {ds}" if word else f" на {ds}"
+
+
 def meal_card(d: DayContext, r: MealLogged) -> str:
     """Карточка сразу после записи — самый горячий момент: человек ещё у тарелки, уточнить 5 сек.
 
-    Показываем ЧТО записали (метки ≈/📋), вклад приёма, дневной прогресс всеми барами и одну
-    подсказку (уточнить вес / добрать белок), если она уместна.
+    Показываем ЧТО записали (метки ≈/📋), вклад приёма, прогресс ЕГО дня всеми барами и одну
+    подсказку. При «вчера/завтра» бары и заголовок — про ТОТ день (r.remaining), а добор молчит:
+    он про сегодняшний конец дня, к прошлому/будущему дню неприменим.
     """
     m, g = r.meal, d.goal
+    today = d.days[-1][0] if d.days else m.eaten_at.astimezone(ZoneInfo(d.today.timezone)).date()
+    day_label = _meal_day_label(m.eaten_at, d.today.timezone, today)
     lis = []
     for it in m.items:
         grams = f"{n(it.grams)} г · " if it.grams else ""
@@ -81,13 +98,13 @@ def meal_card(d: DayContext, r: MealLogged) -> str:
         else ""
     )
     return (
-        f"<h3>✅ Записал · {tg_time(m.eaten_at, d.today.timezone)}</h3>"
+        f"<h3>✅ Записал{day_label} · {tg_time(m.eaten_at, d.today.timezone)}</h3>"
         + f"<ul>{''.join(lis)}</ul>"
         + total
         + _notes(r)
         + "<hr/>"
-        + _bars(d.today.remaining.consumed, g)
-        + blocks.advice(d)
+        + _bars(r.remaining.consumed, r.remaining.goal)  # прогресс ДНЯ ПРИЁМА (бэкдейт → тот день)
+        + (blocks.advice(d) if not day_label else "")  # добор — только про сегодня
     )
 
 
