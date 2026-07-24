@@ -29,7 +29,8 @@ class Settings(BaseSettings):
     default_goal_carb: float = 250
 
     reminder_enabled: bool = True
-    reminder_hour: int = 21  # локальный час вечернего итога
+    reminder_hour: int = 23  # локальное время вечернего итога — 23:59, у самого конца дня
+    reminder_minute: int = 59
 
     log_level: str = "INFO"
     db_echo: bool = False

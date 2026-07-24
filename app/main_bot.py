@@ -42,7 +42,9 @@ async def main() -> None:
     reminder_task: asyncio.Task[None] | None = None
     if settings.reminder_enabled:
         reminder_task = asyncio.create_task(
-            run_reminder_loop(bot, container, hour=settings.reminder_hour)
+            run_reminder_loop(
+                bot, container, hour=settings.reminder_hour, minute=settings.reminder_minute
+            )
         )
 
     try:

@@ -49,12 +49,14 @@ def tz_from_longitude(lon: float) -> str:
 
 
 def reminder_due(
-    now_utc: datetime, tzname: str, hour: int, last_sent: date | None
+    now_utc: datetime, tzname: str, hour: int, last_sent: date | None, minute: int = 0
 ) -> tuple[bool, date]:
-    """Пора ли слать вечернее напоминание: совпал локальный час и сегодня ещё не слали.
+    """Пора ли слать вечерний итог: локально дошло до HH:MM и сегодня ещё не слали.
 
-    Возвращает (надо_ли, локальная_дата) — дату используем как ключ дедупа.
+    Порог `>=`, а не «ровно час»: в минутное окно 23:59 иначе не попасть — промах тика означал
+    бы, что итога за день нет вообще. Дедуп по локальной дате не даёт слать дважды.
+    Возвращает (надо_ли, локальная_дата) — дата и есть ключ дедупа.
     """
     local = now_utc.astimezone(ZoneInfo(tzname))
     today = local.date()
-    return (local.hour == hour and last_sent != today, today)
+    return ((local.hour, local.minute) >= (hour, minute) and last_sent != today, today)

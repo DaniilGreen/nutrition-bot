@@ -54,6 +54,20 @@ def test_reminder_not_due_wrong_hour() -> None:
     assert due is False
 
 
+def test_reminder_due_at_23_59_local() -> None:
+    # 20:59 UTC == 23:59 в Москве — итог у самого конца дня
+    now = datetime(2026, 6, 18, 20, 59, tzinfo=timezone.utc)
+    due, day = reminder_due(now, "Europe/Moscow", 23, None, 59)
+    assert due is True
+    assert day == date(2026, 6, 18)  # день ещё сегодняшний, не съехал за полночь
+
+
+def test_reminder_not_due_before_23_59() -> None:
+    now = datetime(2026, 6, 18, 20, 58, tzinfo=timezone.utc)  # 23:58 МСК
+    due, _ = reminder_due(now, "Europe/Moscow", 23, None, 59)
+    assert due is False
+
+
 def test_tz_from_longitude_sign_inversion() -> None:
     # Москва (lon≈37.6) → восток → UTC+3; POSIX-инверсия: имя Etc/GMT-3
     assert tz_from_longitude(37.6) == "Etc/GMT-3"

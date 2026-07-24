@@ -21,12 +21,17 @@ logger = logging.getLogger(__name__)
 
 
 async def run_reminder_loop(
-    bot: Bot, container: Container, *, hour: int = 21, interval_sec: int = 600
+    bot: Bot,
+    container: Container,
+    *,
+    hour: int = 23,
+    minute: int = 59,
+    interval_sec: int = 60,  # окно до полуночи — минута; 10-минутный тик промахнётся
 ) -> None:
     sent: dict[int, date] = {}
     while True:
         try:
-            await _tick(bot, container, hour, sent)
+            await _tick(bot, container, hour, minute, sent)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -34,12 +39,16 @@ async def run_reminder_loop(
         await asyncio.sleep(interval_sec)
 
 
-async def _tick(bot: Bot, container: Container, hour: int, sent: dict[int, date]) -> None:
+async def _tick(
+    bot: Bot, container: Container, hour: int, minute: int, sent: dict[int, date]
+) -> None:
     async with container.db.session_factory() as session:
         assistant, users = container.assistant_for(session)
         now = container.clock()
         for user in await users.list_active():
-            due, today = reminder_due(now, user.timezone, hour, sent.get(user.telegram_id))
+            due, today = reminder_due(
+                now, user.timezone, hour, sent.get(user.telegram_id), minute
+            )
             if not due:
                 continue
             ctx = await gather(assistant, user)
