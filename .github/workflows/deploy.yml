@@ -1,0 +1,48 @@
+# Пуш в main → сервер подтягивает код и перезапускает стек.
+#
+# ponytail: без раннеров и registry — ssh + git pull + compose. Для двух пользователей
+# полноценный пайплайн (build → push в registry → pull) лишний слой; потолок такой
+# схемы — один сервер, появится второй → тогда registry.
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:        # задеплоить руками, без пустого коммита
+
+concurrency: deploy         # два пуша подряд не полезут на сервер одновременно
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ssh deploy
+        env:
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -o BatchMode=yes root@"$SSH_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd /opt/burnfat
+          git fetch --quiet origin main
+          git reset --hard --quiet origin/main   # деплой = точная копия main
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+          docker image prune -f >/dev/null       # 10 ГБ диска: старые слои иначе забьют его
+          REMOTE
+
+      - name: verify
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          set -euo pipefail
+          sleep 20   # миграции + выход бота на polling
+          ssh -o BatchMode=yes root@"$SSH_HOST" '
+            cd /opt/burnfat
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
+            docker compose logs --since 90s bot | grep -q "Run polling"
+          '
