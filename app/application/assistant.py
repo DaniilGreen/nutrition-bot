@@ -230,7 +230,11 @@ class Assistant:
 
     # --- каталог продуктов (правка кривых AI-оценок) ---
 
-    async def fixable_products(self, limit: int = 10) -> list[Product]:
+    async def fixable_products(self, limit: int = 10, query: str | None = None) -> list[Product]:
+        # Без запроса — 10 последних оценок («поправить только что записанное»). С запросом —
+        # поиск по всему каталогу: иначе всё старше десятки недостижимо для правки (FR-15.1).
+        if query:
+            return await self._products.search(query, limit)
         return await self._products.list_estimated(limit)
 
     async def get_product(self, product_id: int) -> Product | None:

@@ -77,7 +77,21 @@ class InMemoryProductRepo:
         return [p for p in self._by_key.values() if p.category == category]
 
     async def list_estimated(self, limit: int) -> list[Product]:
-        return [p for p in self._by_key.values() if p.is_estimate][:limit]
+        # Новейшие первыми — как в SQL-репозитории (order_by created_at desc). Порядок вставки
+        # в dict = порядок создания, поэтому просто разворачиваем: иначе фейк врал бы про
+        # «10 последних» и тест на лимит проходил бы вхолостую.
+        estimates = [p for p in self._by_key.values() if p.is_estimate]
+        return estimates[::-1][:limit]
+
+    async def search(self, query: str, limit: int) -> list[Product]:
+        q = query.casefold()
+        hits = [
+            p
+            for p in self._by_key.values()
+            if q in p.display_name.casefold() or q in p.canonical_key.casefold()
+        ]
+        hits.sort(key=lambda p: not p.is_estimate)  # оценки первыми — их и правят чаще
+        return hits[:limit]
 
     async def update_density(self, product_id: int, density: Density) -> Product | None:
         for p in self._by_key.values():

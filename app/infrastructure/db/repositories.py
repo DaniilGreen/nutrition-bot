@@ -193,6 +193,22 @@ class SqlProductRepo:
         )
         return [_product_to_domain(o) for o in res.scalars().all()]
 
+    async def search(self, query: str, limit: int) -> list[Product]:
+        # Ищем среди ВСЕХ продуктов, не только is_estimate: выверенный тоже правится, если в него
+        # внесли опечатку. Экранируем %/_ — иначе ввод «100%» стал бы маской «что угодно».
+        esc = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{esc}%"
+        res = await self._s.execute(
+            select(ProductORM)
+            .where(
+                ProductORM.display_name.ilike(pattern, escape="\\")
+                | ProductORM.canonical_key.ilike(pattern, escape="\\")
+            )
+            .order_by(ProductORM.is_estimate.desc(), ProductORM.created_at.desc())
+            .limit(limit)
+        )
+        return [_product_to_domain(o) for o in res.scalars().all()]
+
     async def update_density(self, product_id: int, density: Density) -> Product | None:
         orm = await self._s.get(ProductORM, product_id)
         if orm is None:

@@ -319,12 +319,16 @@ async def cmd_undo(message: Message, app_user: User, assistant: Assistant) -> No
 
 
 @router.message(Command("products"))
-async def cmd_products(message: Message, app_user: User, assistant: Assistant) -> None:
-    products = await assistant.fixable_products(limit=10)
+async def cmd_products(
+    message: Message, command: CommandObject, app_user: User, assistant: Assistant
+) -> None:
+    # `/products тофу` — поиск по каталогу (FR-15.1). Голый `/products` — 10 последних оценок.
+    query = (command.args or "").strip() or None
+    products = await assistant.fixable_products(limit=10, query=query)
     if not products:
-        await _rich(message, screens.products(products))  # пустой экран сам объяснит
+        await _rich(message, screens.products(products, query))  # пустой экран сам объяснит
         return
-    await _rich(message, screens.products(products), products_fix_keyboard(products))
+    await _rich(message, screens.products(products, query), products_fix_keyboard(products))
 
 
 @router.message(Command("profile"))
