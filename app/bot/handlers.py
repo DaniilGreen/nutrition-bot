@@ -789,6 +789,8 @@ async def on_label_gram_btn(
     if draft is None or not isinstance(callback.message, Message):
         await callback.answer("Фото устарело — пришли заново.")
         return
+    await callback.answer()  # тот же класс, что #21: без этого спиннер крутится до таймаута
+
     item = draft.items[int(data.get("item_index", 0))]
     item.grams = float((callback.data or "label_g:0").split(":", 1)[1])
     item.unit = Unit.GRAM
@@ -850,6 +852,8 @@ async def on_portion(
     if draft is None or not isinstance(callback.message, Message):
         await callback.answer("Запись устарела — отправь приём пищи заново.")
         return
+
+    await callback.answer()  # тот же класс, что #21: иначе спиннер крутится до таймаута
 
     item_index = int(data.get("item_index", 0))
     raw = str(data.get("raw", ""))

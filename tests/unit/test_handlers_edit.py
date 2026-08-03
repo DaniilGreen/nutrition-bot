@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -111,3 +113,48 @@ async def test_variant_answers_callback_before_llm(monkeypatch: pytest.MonkeyPat
     await handlers.on_variant(cb, user, assistant, AsyncMock(), state)
 
     assert answered_before == [True], "спиннер гасим ДО LLM, иначе коллбэк протухнет (#21)"
+
+
+# Методы, которые ходят в LLM/STT — то есть занимают секунды, а не миллисекунды.
+_SLOW = {"resolve_clarification", "continue_meal", "process", "process_voice", "read_label"}
+
+
+def test_every_slow_callback_answers_telegram_first() -> None:
+    """Баг #21 оказался КЛАССОМ: три хендлера уходили в LLM, не ответив Telegram.
+
+    Проверяем все разом, а не три починенных: спиннер на кнопке крутится, пока коллбэк не
+    отвечен, а через ~15 с он протухает — и ответ падает с «query is too old» уже ПОСЛЕ
+    успешной записи. Новый хендлер с той же болью должен ронять этот тест, а не прод.
+    """
+    tree = ast.parse(Path(handlers.__file__).read_text(encoding="utf-8"))
+    offenders = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.AsyncFunctionDef):
+            continue
+        if not any("callback_query" in ast.dump(d) for d in fn.decorator_list):
+            continue
+
+        answers: list[int] = []
+        slow: list[int] = []
+        for stmt in fn.body:
+            # guard-блок «if черновик потерян: ответить и выйти» — его answer() не считается
+            # ответом основного потока (именно на этом первая версия теста и слепла).
+            if isinstance(stmt, ast.If) and stmt.body and isinstance(stmt.body[-1], ast.Return):
+                continue
+            for node in ast.walk(stmt):
+                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                    continue
+                recv = node.func.value
+                if (
+                    node.func.attr == "answer"
+                    and isinstance(recv, ast.Name)
+                    and recv.id == "callback"
+                ):
+                    answers.append(node.lineno)
+                elif node.func.attr in _SLOW:
+                    slow.append(node.lineno)
+
+        if slow and (not answers or min(answers) > min(slow)):
+            offenders.append(fn.name)
+
+    assert not offenders, f"коллбэк уходит в LLM, не ответив Telegram: {offenders}"
