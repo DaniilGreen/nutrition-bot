@@ -118,6 +118,32 @@ def goal_from_macros(
     return Goal(daily_kcal=kcal, protein_g=protein_g, fat_g=fat_g, carb_g=carb_g, target=target)
 
 
+def set_macro(goal: Goal, macro: Literal["protein", "fat", "carb"], grams: float) -> Goal:
+    """Подвинуть ОДИН макрос, сохранив калорийность: разницу съедает другой (FR-16.1).
+
+    Кто съедает — по иерархии защиты (та же, что в `rebalance`): белок якорь, жир имеет пол,
+    углеводы остаток. Двигаем белок/жир → платят углеводы; двигаем углеводы → платит жир
+    (белок самый защищённый), а если жир упёрся в ноль — тогда белок.
+
+    Невыполнимую цель не подделываем: поглотитель зажимается в 0, а ккал пересчитываются ЧЕСТНО
+    от получившихся макросов — иначе поехал бы INV-15 (4Б+9Ж+4У == daily_kcal).
+    """
+    per_g = {"protein": 4.0, "fat": 9.0, "carb": 4.0}
+    new = {"protein": goal.protein_g, "fat": goal.fat_g, "carb": goal.carb_g}
+    new[macro] = max(0.0, round(grams))
+
+    absorbers = ["fat", "protein"] if macro == "carb" else ["carb"]
+    for absorber in absorbers:
+        delta = sum(new[m] * per_g[m] for m in new) - goal.daily_kcal
+        if abs(delta) < 0.5:  # уже сошлось — второй поглотитель не трогаем
+            break
+        new[absorber] = max(0.0, round(new[absorber] - delta / per_g[absorber]))
+
+    # ккал берём ОТ макросов, а не оставляем запрошенные: после округления и зажима в 0 они
+    # разошлись бы с числом на экране, и бот бы врал.
+    return goal_from_macros(new["protein"], new["fat"], new["carb"], goal.target)
+
+
 def goal_from_profile(
     *,
     sex: Literal["male", "female"],

@@ -83,7 +83,7 @@ from app.bot.keyboards import (
 )
 from app.bot.states import MealStates, ProfileStates
 from app.bot.ui import gather, screens
-from app.domain.goals import Goal, goal_from_macros, goal_from_profile, rebalance
+from app.domain.goals import Goal, goal_from_macros, goal_from_profile, rebalance, set_macro
 from app.domain.timeframe import tz_from_longitude, tz_from_utc_offset
 from app.domain.value_objects import Density
 
@@ -238,6 +238,23 @@ async def on_location(message: Message, app_user: User, users: UserRepo) -> None
     )
 
 
+# Слова, которыми юзер зовёт макрос. Голосом приходит и «белки», и «углеводы», и одна буква.
+_MACRO_WORDS = {
+    "б": "protein", "белок": "protein", "белки": "protein", "белка": "protein",
+    "ж": "fat", "жир": "fat", "жиры": "fat", "жира": "fat",
+    "у": "carb", "угл": "carb", "углевод": "carb", "углеводы": "carb", "углеводов": "carb",
+}  # fmt: skip
+
+
+def parse_macro_arg(raw: str) -> tuple[str, float] | None:
+    """«белок 180» · «б180» · «жиры 70,5» → ("protein", 180.0). Не распознали — None (FR-16.1)."""
+    m = re.fullmatch(r"([а-яёa-z]+)\s*(\d+(?:[.,]\d+)?)", raw.strip().casefold())
+    if not m:
+        return None
+    macro = _MACRO_WORDS.get(m.group(1))
+    return (macro, float(m.group(2).replace(",", "."))) if macro else None
+
+
 @router.message(Command("goal"))
 async def on_goal(
     message: Message,
@@ -253,7 +270,12 @@ async def on_goal(
         nums = []
 
     current = await assistant.current_goal(app_user)
-    if len(nums) == 1:
+    named = parse_macro_arg(command.args or "")
+    if named:
+        # Режим 3: двигаем ОДИН макрос, калорийность держим — разницу съедает другой (FR-16.1).
+        macro, grams = named
+        goal = set_macro(current, macro, grams)  # type: ignore[arg-type]
+    elif len(nums) == 1:
         # Режим 1: задаём КАЛОРИИ → макросы раскладываются под цель (белок якорь, жир пол,
         # углеводы остаток). Нужен вес: белок якорится на массу тела, а не на долю калорий.
         trend = await assistant.weight_trend(app_user, limit=1)
@@ -271,7 +293,8 @@ async def on_goal(
         await message.answer(
             "Формат:\n"
             "<code>/goal 1800</code> — калории, макросы разложу под твою цель\n"
-            "<code>/goal 180 80 200</code> — Б Ж У, калории посчитаю сам"
+            "<code>/goal 180 80 200</code> — Б Ж У, калории посчитаю сам\n"
+            "<code>/goal белок 180</code> — один макрос, калории оставлю прежними"
         )
         return
     await users.set_goal(app_user.id, goal)
