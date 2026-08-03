@@ -58,8 +58,9 @@ bot (aiogram) / web (FastAPI)  →  application (use-cases + Protocol-порты
 **Прод — не этот мак.** Оба бота живут на VPS `89.124.97.90` (с 03.08.2026, ради аптайма:
 мак закрыт → бот мёртв, вечерний итог не уходит). Мак — только dev.
 
-**Деплой = пуш в `main`.** GitHub Actions (`.github/workflows/deploy.yml`) идёт по ssh на сервер,
-делает `git reset --hard origin/main`, поднимает compose и проверяет, что бот вышел на polling.
+**Деплой = пуш в `main`.** GitHub Actions (`.github/workflows/deploy.yml`) сперва гоняет **тесты**
+(job `test` — гейт, красное = деплоя нет), затем идёт по ssh на сервер, делает
+`git reset --hard origin/main`, поднимает compose и проверяет, что бот вышел на polling.
 Ручной прогон без коммита — кнопка **Run workflow** (`workflow_dispatch`). Красный прогон =
 НЕ задеплоено; причина — `gh run view --repo DaniilGreen/nutrition-bot --log-failed`.
 
@@ -74,6 +75,9 @@ bot (aiogram) / web (FastAPI)  →  application (use-cases + Protocol-порты
   `ssh root@89.124.97.90 'cd /opt/burnfat && docker compose logs -f bot'`.
 - `.env` живёт ТОЛЬКО на сервере (chmod 600), в git его нет. Пересоздал сервер — копируй заново.
 - Бэкапы обеих БД: cron `/etc/cron.d/db-backups`, 04:17, хранение 14 дней в `/opt/backups`.
+- Сторож: `/opt/healthcheck.sh` раз в 10 мин (`/etc/cron.d/healthcheck`) — контейнеры живы и
+  диск < 90%. Проблема → одно сообщение в телегу владельцу, при восстановлении «инцидент
+  закрыт». Дедуп через флаг `/var/run/healthcheck.failing`, чтобы флап не спамил.
 
 ## 5. Коммиты (этот репо)
 
