@@ -35,11 +35,16 @@ web (FastAPI)  ─┴─►  application (use-cases: Assistant, *Service)
 
 ## Запуск
 
+Локально (dev):
+
 ```bash
 cp .env.example .env          # вписать BOT_TOKEN и OPENAI_API_KEY
 make up                       # db + bot + api, миграции применяются автоматически
 make logs                     # логи бота
 ```
+
+Прод крутится на VPS `89.124.97.90`, **деплой — пуш в `main`** (GitHub Actions). Подробности и
+предупреждение про конфликт токена с локальным ботом — в [CLAUDE.md](CLAUDE.md) §3–4.
 
 Без ключа OpenAI можно поднять на встроенном эвристическом парсере:
 `USE_FAKE_NLU=true` в `.env`.

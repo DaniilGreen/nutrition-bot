@@ -40,7 +40,11 @@ bot (aiogram) / web (FastAPI)  →  application (use-cases + Protocol-порты
 
 - Запуск: `make up` (db + bot + api, миграции применяются авто). Логи: `make logs`.
 - **`./app` смонтирован в контейнер** → правки кода видны сразу, но процесс бота должен
-  перечитать модули: **`docker compose restart bot`**.
+  перечитать модули: **`docker compose restart bot`**. Это ЛОКАЛЬНАЯ проверка, не деплой (§4).
+- ⚠️ **Локальный бот и прод — один токен Telegram.** Поднял `make up` при живом проде →
+  `Conflict: terminated by other getUpdates`, два инстанса дерутся за апдейты. Для локальной
+  работы либо гаси прод, либо отдельный тестовый `BOT_TOKEN`. Логика без Telegram (парсер,
+  подсчёт, форматтеры) проверяется тестами и probe — бот поднимать не нужно.
 - Тесты: `make test` (в контейнере). **ВАЖНО:** `./tests` НЕ смонтирован — для свежих тестов
   монтируй вручную:
   `docker compose run --rm --no-deps -v "$PWD/tests:/app/tests" api pytest -q`
@@ -49,10 +53,27 @@ bot (aiogram) / web (FastAPI)  →  application (use-cases + Protocol-порты
 - Нетривиальная логика (ветка/цикл/парсер/деньги/безопасность) → оставляй один runnable-чек
   (assert-`demo()` или маленький `test_*.py`). Ponytail: без фреймворков и фикстур.
 
-## 4. Деплой правки поведения
+## 4. Деплой
 
-1. Спека (если меняется поведение) → 2. код → 3. тест/probe зелёный →
-4. `docker compose restart bot` → 5. коммит. README/SPEC держать в соответствии.
+**Прод — не этот мак.** Оба бота живут на VPS `89.124.97.90` (с 03.08.2026, ради аптайма:
+мак закрыт → бот мёртв, вечерний итог не уходит). Мак — только dev.
+
+**Деплой = пуш в `main`.** GitHub Actions (`.github/workflows/deploy.yml`) идёт по ssh на сервер,
+делает `git reset --hard origin/main`, поднимает compose и проверяет, что бот вышел на polling.
+Ручной прогон без коммита — кнопка **Run workflow** (`workflow_dispatch`). Красный прогон =
+НЕ задеплоено; причина — `gh run view --repo DaniilGreen/nutrition-bot --log-failed`.
+
+Порядок правки: 1. спека (если меняется поведение) → 2. код → 3. тесты зелёные →
+4. коммит + **пуш** → 5. дождаться зелёного прогона. README/SPEC держать в соответствии.
+
+- Обновление ~30 сек: `./app` смонтирован, слои в кэше. Реальная пересборка — только если
+  тронул `requirements.txt`/`Dockerfile`.
+- На сервере `/opt/burnfat`, оверрей `docker-compose.prod.yml`: у `db` и `api`
+  `ports: !reset []` — наружу не публикуем (на публичном IP это была бы открытая база с
+  дефолтным паролем). Доступ к БД — `docker compose exec db psql`, к логам —
+  `ssh root@89.124.97.90 'cd /opt/burnfat && docker compose logs -f bot'`.
+- `.env` живёт ТОЛЬКО на сервере (chmod 600), в git его нет. Пересоздал сервер — копируй заново.
+- Бэкапы обеих БД: cron `/etc/cron.d/db-backups`, 04:17, хранение 14 дней в `/opt/backups`.
 
 ## 5. Коммиты (этот репо)
 
