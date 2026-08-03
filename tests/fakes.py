@@ -134,10 +134,12 @@ class InMemoryMealRepo:
         return xs[:limit]
 
     async def delete_last(self, user_id: int) -> Meal | None:
+        # Последний ПО ВСТАВКЕ = последний записанный, как created_at desc в SQL-репозитории.
+        # По eaten_at нельзя: с бэкдейтом (FR-33) вчерашняя запись «моложе» сегодняшнего обеда.
         xs = [m for m in self._meals if m.user_id == user_id]
         if not xs:
             return None
-        last = max(xs, key=lambda m: m.eaten_at)
+        last = xs[-1]
         self._meals.remove(last)
         return last
 

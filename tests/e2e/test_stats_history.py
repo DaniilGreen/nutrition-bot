@@ -55,6 +55,27 @@ async def test_no_offset_logs_today() -> None:
     assert (await assistant.today(user)).meals_count == 1
 
 
+async def test_undo_removes_last_recorded_not_latest_eaten() -> None:
+    """Регрессия от FR-33: «отменить» обязано убрать то, что записали ПОСЛЕДНИМ.
+
+    Записал обед на сегодня, потом «вчера курица» — и передумал. Отмена должна убрать вчерашнюю
+    запись, а не сегодняшний обед: с бэкдейтом «последний по времени еды» и «последний по времени
+    записи» — разные приёмы.
+    """
+    yesterday = dataclasses.replace(_chicken(165), day_offset=-1)
+    assistant, users, _ = _build(StubNlu(_chicken(165), yesterday))
+    user = await _new_user(users)
+
+    await assistant.process(user, "курица 250 грамм")  # сегодня
+    back = await assistant.process(user, "вчера курица 250 грамм")  # записан ПОСЛЕДНИМ
+    assert isinstance(back, MealLogged)
+
+    deleted = await assistant.undo(user)
+    assert deleted.meal is not None
+    assert deleted.meal.id == back.meal.id, "отменили не тот приём, который записали последним"
+    assert (await assistant.today(user)).meals_count == 1  # сегодняшний обед на месте
+
+
 async def test_weekly_aggregates() -> None:
     assistant, users, _ = _build(StubNlu(_chicken(165), _chicken(165)))
     user = await _new_user(users)
