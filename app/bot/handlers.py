@@ -883,12 +883,16 @@ async def on_variant(
         await callback.answer("Вариант не найден — отправь заново.")
         return
 
+    # Отвечаем Telegram СРАЗУ, до похода в LLM (баг-репорт #21). Иначе: спиннер на кнопке крутится
+    # все секунды запроса («кнопки подвисают»), а через ~15 с коллбэк протухает — и answer() в
+    # конце падает с «query is too old», выдавая «Что-то пошло не так» ПОСЛЕ успешной записи.
+    await callback.answer()
+
     result = await assistant.resolve_clarification(
         app_user, draft, item_index, options[idx], raw_input=raw
     )
     await session.commit()
     await _render_after_continue(callback.message, result, state, app_user, assistant, raw=raw)
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("meal_undo:"))

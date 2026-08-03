@@ -16,6 +16,7 @@ from app.application.results import MealLogged
 from app.bot import handlers
 from tests.e2e.test_editing import _chicken_and_rice
 from tests.e2e.test_meal_flow import _build, _new_user
+from tests.e2e.test_variants import _meal
 from tests.fakes import StubNlu
 
 
@@ -81,3 +82,32 @@ async def test_day_del_removes_one_item_and_edits_in_place(monkeypatch: pytest.M
     today = await assistant.today(user)
     remaining = [it for m in today.meals for it in m.items]
     assert len(remaining) == 1  # удалена ОДНА позиция, вторая осталась
+
+
+async def test_variant_answers_callback_before_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Баг-репорт #21: «кнопки подвисают и не отрабатывают».
+
+    Причина была в порядке: `callback.answer()` стоял ПОСЛЕ переоценки плотности через LLM.
+    Пока шёл запрос, спиннер на кнопке крутился, а через ~15 с коллбэк протухал — и answer()
+    падал с «query is too old», выдавая «Что-то пошло не так» уже ПОСЛЕ успешной записи.
+    """
+    draft = _meal("молоко", "milk", 60, clarify=["молоко 1.5%", "молоко 2.5%"])
+    assistant, users, _ = _build(StubNlu(_meal("молоко 2.5%", "milk_2_5", 52)))
+    user = await _new_user(users)
+
+    cb = _callback("variant:0")
+    state = AsyncMock()
+    state.get_data = AsyncMock(return_value={"draft": draft, "item_index": 0, "raw": "молоко"})
+    monkeypatch.setattr(handlers, "_render_after_continue", AsyncMock())
+
+    answered_before: list[bool] = []
+    slow = assistant.resolve_clarification
+
+    async def spy(*args: object, **kw: object) -> object:
+        answered_before.append(cb.bot.await_count > 0)  # успели ответить до похода в LLM?
+        return await slow(*args, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(assistant, "resolve_clarification", spy)
+    await handlers.on_variant(cb, user, assistant, AsyncMock(), state)
+
+    assert answered_before == [True], "спиннер гасим ДО LLM, иначе коллбэк протухнет (#21)"
