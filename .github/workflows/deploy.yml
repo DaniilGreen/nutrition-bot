@@ -8,6 +8,7 @@ name: deploy
 on:
   push:
     branches: [main]
+  pull_request:             # на PR гоняем ТОЛЬКО тесты — чтобы не мержить непроверенное
   workflow_dispatch:        # задеплоить руками, без пустого коммита
 
 concurrency: deploy         # два пуша подряд не полезут на сервер одновременно
@@ -29,6 +30,7 @@ jobs:
 
   deploy:
     needs: test
+    if: github.event_name != 'pull_request'   # PR только проверяем, катит только main
     runs-on: ubuntu-latest
     steps:
       - name: ssh deploy
