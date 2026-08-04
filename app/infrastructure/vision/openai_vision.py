@@ -11,6 +11,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from app.application.dto import ParsedItem, Unit
+from app.infrastructure.openai_compat import temperature_for
 
 SYSTEM_PROMPT = (
     "Ты читаешь таблицу пищевой ценности (КБЖУ) с фото этикетки продукта.\n"
@@ -47,7 +48,8 @@ class OpenAiVision:
         data_url = f"data:image/jpeg;base64,{b64}"
         completion = await self._client.beta.chat.completions.parse(
             model=self._model,
-            temperature=0,
+            # gpt-5.x отвергает явную temperature (400) — там параметр не шлём вовсе
+            temperature=temperature_for(self._model, 0.0),
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {

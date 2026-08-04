@@ -15,6 +15,7 @@ from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
 from app.domain.consensus import SAMPLE_TEMPERATURE
 from app.infrastructure.nlu.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.infrastructure.nlu.schema import NluResult
+from app.infrastructure.openai_compat import temperature_for
 
 
 class OpenAiNlu:
@@ -33,7 +34,8 @@ class OpenAiNlu:
                 {"role": "user", "content": build_user_prompt(text, known_keys)},
             ],
             response_format=NluResult,
-            temperature=temperature,
+            # gpt-5.x отвергает явную temperature (400) — там параметр не шлём вовсе
+            temperature=temperature_for(self._model, temperature),
         )
         parsed = completion.choices[0].message.parsed
         if parsed is None:
