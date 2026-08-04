@@ -83,6 +83,21 @@ def daily_sum_within(
     return round(hits / days, 3)
 
 
+# Чего стоит лишний вопрос против верного ответа. Не 0: спросить про тофу лучше, чем уверенно
+# занизить его вдвое — неверная плотность пиннится НАВСЕГДА (INV-2). Но и не 1: лишний вопрос —
+# трение, из-за которого приём не запишут, а это единственный разрушительный провал (D-28).
+FALSE_ABSTAIN_CREDIT = 0.5
+
+
+def row_score(e: ItemEval, tol: float) -> float:
+    """Оценка ОДНОЙ строки. Знаменатель фиксирован: по одной строке на каждую запись golden."""
+    if e.clarified:
+        return 1.0 if e.expected_clarify else FALSE_ABSTAIN_CREDIT
+    hit = float(within(e.est_kcal, e.true_kcal, tol))
+    # Ответил там, где ждали вопрос: рискнул. Верное число — половина, неверное — ноль.
+    return hit * FALSE_ABSTAIN_CREDIT if e.expected_clarify else hit
+
+
 def metrics(evals: list[ItemEval], tol_by_id: dict[str, float]) -> dict:
     """Сводка метрик NFR-1 со срезами по механизму (средние без срезов врут)."""
     logged = [e for e in evals if not e.clarified]
@@ -105,6 +120,13 @@ def metrics(evals: list[ItemEval], tol_by_id: dict[str, float]) -> dict:
     return {
         "n": len(evals),
         "logged": len(logged),
+        # Знаменатель ФИКСИРОВАН (= n): только по нему можно сравнивать модели с разной
+        # склонностью переспрашивать. Остальные метрики ниже делятся на logged и потому
+        # завышаются у модели, которая чаще воздерживается — сравнивать их между моделями нельзя.
+        "quality_score": (
+            round(sum(row_score(e, tol(e.gid)) for e in evals) / len(evals), 3) if evals else None
+        ),
+        "coverage": round(len(logged) / len(evals), 3) if evals else None,
         "pct_within_item": (
             round(sum(within(e.est_kcal, e.true_kcal, tol(e.gid)) for e in logged) / len(logged), 3)
             if logged
@@ -140,6 +162,8 @@ def metrics(evals: list[ItemEval], tol_by_id: dict[str, float]) -> dict:
 
 # Плоские числовые метрики для baseline/gate; True = «больше — лучше».
 _GATED = {
+    "quality_score": True,  # главная: единственная с фиксированным знаменателем
+    "coverage": True,  # доля записанного; без неё рост точности за счёт отказов не видно
     "pct_within_item": True,
     "daily_sum_within_15": True,
     "abstention_recall": True,
@@ -153,6 +177,8 @@ def scalars(m: dict) -> dict[str, float]:
     """Плоский срез метрик прогона для сравнения с baseline."""
     km = m.get("kcal_mape") or {}
     return {
+        "quality_score": m.get("quality_score") or 0.0,
+        "coverage": m.get("coverage") or 0.0,
         "pct_within_item": m.get("pct_within_item") or 0.0,
         "daily_sum_within_15": m.get("daily_sum_within_15") or 0.0,
         "abstention_recall": m.get("abstention_recall") or 0.0,
@@ -185,6 +211,9 @@ def gate_check(current: dict, baseline: dict, abs_floor: float = 0.03) -> tuple[
     for k, higher_better in _GATED.items():
         b = base.get(k)
         if not b:
+            # Раньше здесь стоял молчаливый continue: метрика, которой нет в замороженном
+            # baseline, не гейтилась ВООБЩЕ и никак себя не проявляла. Теперь это видно.
+            fails.append(f"{k}: нет в baseline — перезаморозь (--runs 5 --save-baseline)")
             continue
         margin = max(abs_floor, 2 * b["std"])
         if higher_better and cur[k] < b["mean"] - margin:
