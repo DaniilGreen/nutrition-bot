@@ -88,7 +88,10 @@ def _diagnostics(m: dict) -> None:
 
 
 def _summary(m: dict) -> dict:
-    return {k: m[k] for k in ("n", "logged", "pct_within_item", "daily_sum_within_15", "kcal_mape",
+    # quality_score и coverage — первыми: только у них знаменатель не зависит от поведения
+    # модели, остальные метрики между моделями сравнивать нельзя (см. harness.metrics).
+    return {k: m[k] for k in ("n", "logged", "quality_score", "coverage",
+                              "pct_within_item", "daily_sum_within_15", "kcal_mape",
                               "abstention_recall", "false_abstain_rate", "by_mechanism")}
 
 
