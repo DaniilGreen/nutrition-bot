@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from tests.eval.harness import (
+    FALSE_ABSTAIN_CREDIT,
     ItemEval,
     aggregate_runs,
     daily_sum_within,
@@ -112,3 +113,46 @@ def test_golden_set_parses_and_well_formed() -> None:
         if r.get("expect_clarify") and r["expected"]["kcal"] == 0:
             assert r["items"] == []  # чистое воздержание (kcal 0) → нечего сверять
         # гибрид (expect_clarify + items): ждём вопрос, но если бот залогирует — сверим по ккал
+
+
+def _hit(gid: str) -> ItemEval:
+    return ItemEval(gid, "m", 100.0, 100.0, False, False)
+
+
+def _miss(gid: str) -> ItemEval:
+    return ItemEval(gid, "m", 100.0, 300.0, False, False)
+
+
+def _abstained(gid: str) -> ItemEval:
+    return ItemEval(gid, "m", 100.0, 0.0, True, False)
+
+
+def test_quality_score_does_not_reward_extra_abstentions() -> None:
+    """Смысл метрики: модель НЕ должна выигрывать, отказываясь от строк, где промахнулась бы.
+
+    Ровно на этом врал pct_within_item — он делится на число отвеченных строк, поэтому
+    воздержание убирало промах из знаменателя и «поднимало» точность.
+    """
+    tol = {f"g{i}": 0.15 for i in range(4)}
+    answered = [_hit("g0"), _hit("g1"), _hit("g2"), _miss("g3")]
+    # та же модель, но на провальной строке предпочла переспросить
+    dodged = [_hit("g0"), _hit("g1"), _hit("g2"), _abstained("g3")]
+
+    old_answered = metrics(answered, tol)["pct_within_item"]
+    old_dodged = metrics(dodged, tol)["pct_within_item"]
+    assert old_dodged > old_answered  # старая метрика вознаграждала уклонение
+
+    new_answered = metrics(answered, tol)["quality_score"]
+    new_dodged = metrics(dodged, tol)["quality_score"]
+    assert new_dodged > new_answered  # уклонение всё ещё лучше вранья...
+    assert new_dodged < 1.0  # ...но это не «идеально»: лишний вопрос стоит денег
+
+
+def test_quality_score_has_fixed_denominator() -> None:
+    """Знаменатель — все строки, а не отвеченные: иначе модели несравнимы."""
+    tol = {f"g{i}": 0.15 for i in range(4)}
+    m = metrics([_hit("g0"), _hit("g1"), _abstained("g2"), _abstained("g3")], tol)
+    assert m["n"] == 4 and m["logged"] == 2
+    assert m["coverage"] == 0.5
+    # 2 попадания + 2 лишних вопроса по FALSE_ABSTAIN_CREDIT
+    assert m["quality_score"] == round((2 + 2 * FALSE_ABSTAIN_CREDIT) / 4, 3)
