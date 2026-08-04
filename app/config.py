@@ -16,7 +16,11 @@ class Settings(BaseSettings):
 
     llm_provider: str = "openai"
     openai_api_key: str = ""
-    openai_model: str = "gpt-4.1"
+    # gpt-4.1 даёт 30k TPM (Tier 1) — на этом лимите ~70% запросов падали с 429, бот был
+    # нерабочим. У gpt-5.1 те же деньги, но 500k TPM. По eval на честной метрике 4.1 точнее
+    # (0.920 против 0.812), НО это качество на ОТВЕЧЕННЫЙ запрос: с учётом доступности
+    # 0.920×0.3 против 0.812×1.0 — выигрывает 5.1. Порог уточнений в промпте — следующим шагом.
+    openai_model: str = "gpt-5.1"
     openai_stt_model: str = "whisper-1"
     use_fake_nlu: bool = False
     sample_k: int = 3  # сэмплов self-consistency (D-15); 5→3 ради ↓токенов и реже 429 (TPM 30k)
