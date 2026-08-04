@@ -289,7 +289,7 @@ def day(dv: DayView, rem: Remaining) -> str:
         return f"<h3>🗒 {title}</h3><p>Ничего не записано.</p>"
     lines = "".join(
         f"<li>{tg_time(m.eaten_at, dv.timezone)} · {_item_mark(it)}{e(it.name_snapshot)} — "
-        f"<b>{n(it.macros.kcal)}</b> ккал</li>"
+        f"{kit.g(it.grams)}<b>{n(it.macros.kcal)}</b> ккал</li>"
         for m in dv.meals
         for it in m.items
     )
