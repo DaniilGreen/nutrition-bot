@@ -69,6 +69,10 @@ class ProductRepo(Protocol):
 
     async def list_estimated(self, limit: int) -> list[Product]: ...
 
+    async def search(self, query: str, limit: int) -> list[Product]:
+        """Поиск по подстроке в имени/ключе, регистронезависимо (FR-15.1)."""
+        ...
+
     async def update_density(self, product_id: int, density: Density) -> Product | None: ...
 
     async def rename(self, product_id: int, name: str) -> Product | None:

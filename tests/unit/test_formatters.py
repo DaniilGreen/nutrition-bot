@@ -5,6 +5,7 @@ from datetime import datetime
 from app.application.entities import Meal, MealItem
 from app.application.results import DailyStats, MealLogged
 from app.bot.formatters import _bar, _esc, _sparkline, format_result
+from app.bot.handlers import parse_macro_arg
 from app.domain.goals import Goal, remaining
 from app.domain.value_objects import Macros
 
@@ -85,3 +86,22 @@ def test_meal_card_per_item_marks() -> None:
     assert "📋 салат из кафе" in text  # цифры юзера
     assert "• куриная грудка" in text  # каталог — без метки
     assert "≈ — прикинул сам" in text and "📋 — по твоим цифрам" in text  # сноски
+
+
+# --- FR-16.1: разбор «/goal белок 180» ---
+
+
+def test_parse_macro_arg_variants() -> None:
+    """Голосом прилетает как угодно: и слово целиком, и одна буква, и запятая в числе."""
+    assert parse_macro_arg("белок 180") == ("protein", 180.0)
+    assert parse_macro_arg("б180") == ("protein", 180.0)
+    assert parse_macro_arg("  Белки  180  ") == ("protein", 180.0)
+    assert parse_macro_arg("жиры 70,5") == ("fat", 70.5)
+    assert parse_macro_arg("углеводы 200") == ("carb", 200.0)
+    assert parse_macro_arg("у 200") == ("carb", 200.0)
+
+
+def test_parse_macro_arg_rejects_other_forms() -> None:
+    """Старые режимы не перехватываем: «1800» и «180 80 200» — не именованный макрос."""
+    for raw in ("", "1800", "180 80 200", "белок", "мясо 200", "180 белок"):
+        assert parse_macro_arg(raw) is None, raw

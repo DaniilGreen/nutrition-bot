@@ -77,7 +77,21 @@ class InMemoryProductRepo:
         return [p for p in self._by_key.values() if p.category == category]
 
     async def list_estimated(self, limit: int) -> list[Product]:
-        return [p for p in self._by_key.values() if p.is_estimate][:limit]
+        # Новейшие первыми — как в SQL-репозитории (order_by created_at desc). Порядок вставки
+        # в dict = порядок создания, поэтому просто разворачиваем: иначе фейк врал бы про
+        # «10 последних» и тест на лимит проходил бы вхолостую.
+        estimates = [p for p in self._by_key.values() if p.is_estimate]
+        return estimates[::-1][:limit]
+
+    async def search(self, query: str, limit: int) -> list[Product]:
+        q = query.casefold()
+        hits = [
+            p
+            for p in self._by_key.values()
+            if q in p.display_name.casefold() or q in p.canonical_key.casefold()
+        ]
+        hits.sort(key=lambda p: not p.is_estimate)  # оценки первыми — их и правят чаще
+        return hits[:limit]
 
     async def update_density(self, product_id: int, density: Density) -> Product | None:
         for p in self._by_key.values():
@@ -120,10 +134,12 @@ class InMemoryMealRepo:
         return xs[:limit]
 
     async def delete_last(self, user_id: int) -> Meal | None:
+        # Последний ПО ВСТАВКЕ = последний записанный, как created_at desc в SQL-репозитории.
+        # По eaten_at нельзя: с бэкдейтом (FR-33) вчерашняя запись «моложе» сегодняшнего обеда.
         xs = [m for m in self._meals if m.user_id == user_id]
         if not xs:
             return None
-        last = max(xs, key=lambda m: m.eaten_at)
+        last = xs[-1]
         self._meals.remove(last)
         return last
 

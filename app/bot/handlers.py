@@ -83,7 +83,7 @@ from app.bot.keyboards import (
 )
 from app.bot.states import MealStates, ProfileStates
 from app.bot.ui import gather, screens
-from app.domain.goals import Goal, goal_from_macros, goal_from_profile, rebalance
+from app.domain.goals import Goal, goal_from_macros, goal_from_profile, rebalance, set_macro
 from app.domain.timeframe import tz_from_longitude, tz_from_utc_offset
 from app.domain.value_objects import Density
 
@@ -238,6 +238,23 @@ async def on_location(message: Message, app_user: User, users: UserRepo) -> None
     )
 
 
+# Слова, которыми юзер зовёт макрос. Голосом приходит и «белки», и «углеводы», и одна буква.
+_MACRO_WORDS = {
+    "б": "protein", "белок": "protein", "белки": "protein", "белка": "protein",
+    "ж": "fat", "жир": "fat", "жиры": "fat", "жира": "fat",
+    "у": "carb", "угл": "carb", "углевод": "carb", "углеводы": "carb", "углеводов": "carb",
+}  # fmt: skip
+
+
+def parse_macro_arg(raw: str) -> tuple[str, float] | None:
+    """«белок 180» · «б180» · «жиры 70,5» → ("protein", 180.0). Не распознали — None (FR-16.1)."""
+    m = re.fullmatch(r"([а-яёa-z]+)\s*(\d+(?:[.,]\d+)?)", raw.strip().casefold())
+    if not m:
+        return None
+    macro = _MACRO_WORDS.get(m.group(1))
+    return (macro, float(m.group(2).replace(",", "."))) if macro else None
+
+
 @router.message(Command("goal"))
 async def on_goal(
     message: Message,
@@ -253,7 +270,12 @@ async def on_goal(
         nums = []
 
     current = await assistant.current_goal(app_user)
-    if len(nums) == 1:
+    named = parse_macro_arg(command.args or "")
+    if named:
+        # Режим 3: двигаем ОДИН макрос, калорийность держим — разницу съедает другой (FR-16.1).
+        macro, grams = named
+        goal = set_macro(current, macro, grams)  # type: ignore[arg-type]
+    elif len(nums) == 1:
         # Режим 1: задаём КАЛОРИИ → макросы раскладываются под цель (белок якорь, жир пол,
         # углеводы остаток). Нужен вес: белок якорится на массу тела, а не на долю калорий.
         trend = await assistant.weight_trend(app_user, limit=1)
@@ -271,7 +293,8 @@ async def on_goal(
         await message.answer(
             "Формат:\n"
             "<code>/goal 1800</code> — калории, макросы разложу под твою цель\n"
-            "<code>/goal 180 80 200</code> — Б Ж У, калории посчитаю сам"
+            "<code>/goal 180 80 200</code> — Б Ж У, калории посчитаю сам\n"
+            "<code>/goal белок 180</code> — один макрос, калории оставлю прежними"
         )
         return
     await users.set_goal(app_user.id, goal)
@@ -319,12 +342,16 @@ async def cmd_undo(message: Message, app_user: User, assistant: Assistant) -> No
 
 
 @router.message(Command("products"))
-async def cmd_products(message: Message, app_user: User, assistant: Assistant) -> None:
-    products = await assistant.fixable_products(limit=10)
+async def cmd_products(
+    message: Message, command: CommandObject, app_user: User, assistant: Assistant
+) -> None:
+    # `/products тофу` — поиск по каталогу (FR-15.1). Голый `/products` — 10 последних оценок.
+    query = (command.args or "").strip() or None
+    products = await assistant.fixable_products(limit=10, query=query)
     if not products:
-        await _rich(message, screens.products(products))  # пустой экран сам объяснит
+        await _rich(message, screens.products(products, query))  # пустой экран сам объяснит
         return
-    await _rich(message, screens.products(products), products_fix_keyboard(products))
+    await _rich(message, screens.products(products, query), products_fix_keyboard(products))
 
 
 @router.message(Command("profile"))
@@ -762,6 +789,8 @@ async def on_label_gram_btn(
     if draft is None or not isinstance(callback.message, Message):
         await callback.answer("Фото устарело — пришли заново.")
         return
+    await callback.answer()  # тот же класс, что #21: без этого спиннер крутится до таймаута
+
     item = draft.items[int(data.get("item_index", 0))]
     item.grams = float((callback.data or "label_g:0").split(":", 1)[1])
     item.unit = Unit.GRAM
@@ -824,6 +853,8 @@ async def on_portion(
         await callback.answer("Запись устарела — отправь приём пищи заново.")
         return
 
+    await callback.answer()  # тот же класс, что #21: иначе спиннер крутится до таймаута
+
     item_index = int(data.get("item_index", 0))
     raw = str(data.get("raw", ""))
     hint = (callback.data or "portion:medium").split(":", 1)[1]
@@ -856,12 +887,16 @@ async def on_variant(
         await callback.answer("Вариант не найден — отправь заново.")
         return
 
+    # Отвечаем Telegram СРАЗУ, до похода в LLM (баг-репорт #21). Иначе: спиннер на кнопке крутится
+    # все секунды запроса («кнопки подвисают»), а через ~15 с коллбэк протухает — и answer() в
+    # конце падает с «query is too old», выдавая «Что-то пошло не так» ПОСЛЕ успешной записи.
+    await callback.answer()
+
     result = await assistant.resolve_clarification(
         app_user, draft, item_index, options[idx], raw_input=raw
     )
     await session.commit()
     await _render_after_continue(callback.message, result, state, app_user, assistant, raw=raw)
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("meal_undo:"))

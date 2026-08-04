@@ -8,6 +8,7 @@ from app.domain.goals import (
     mifflin_st_jeor,
     rebalance,
     remaining,
+    set_macro,
 )
 from app.domain.value_objects import Macros
 
@@ -84,3 +85,58 @@ def test_fat_never_below_floor_on_low_kcal() -> None:
     """Пол жира: на низких калориях 30% дали бы меньше 0.8 г/кг — гормоны страдают."""
     g = rebalance(1200, 86, "cut")
     assert g.fat_g >= round(0.8 * 86)
+
+
+# --- FR-16.1: подвинуть один макрос, не трогая калорийность (баг-репорт #25) ---
+
+_BASE = goal_from_macros(150, 65, 250)  # 2185 ккал — считаются от макросов, INV-15
+
+
+def test_set_protein_keeps_kcal_and_carbs_pay() -> None:
+    """Просили ровно это: «выставить белок 180, калории оставить как есть»."""
+    g = set_macro(_BASE, "protein", 180)
+    assert g.protein_g == 180
+    assert g.fat_g == _BASE.fat_g  # жир не трогали
+    assert g.carb_g == 220  # +30 г белка = 120 ккал → −30 г углеводов
+    assert g.daily_kcal == _BASE.daily_kcal
+
+
+def test_set_carb_is_paid_by_fat_not_protein() -> None:
+    """Двигаем углеводы → платит жир: белок самый защищённый, его не трогаем.
+
+    Ккал держатся с точностью до округления граммов: жир 9 ккал/г, целыми граммами дельту
+    −200 ккал не поглотить (22 г = 198). Показываем ЧЕСТНУЮ сумму от реальных макросов,
+    а не заявленную — тот же принцип, что в `rebalance`.
+    """
+    g = set_macro(_BASE, "carb", 200)
+    assert g.carb_g == 200
+    assert g.protein_g == _BASE.protein_g  # белок неприкосновенен
+    assert g.fat_g == round(_BASE.fat_g + 200 / 9)  # −200 ккал углеводов ушли в жир
+    assert abs(g.daily_kcal - _BASE.daily_kcal) <= 9  # не больше одного грамма жира
+
+
+def test_impossible_target_does_not_push_carbs_negative() -> None:
+    """Белок больше, чем весь дневной бюджет: углеводы в 0, ккал честно вырастают."""
+    g = set_macro(_BASE, "protein", 600)
+    assert g.protein_g == 600
+    assert g.carb_g == 0  # не уходим в минус
+    assert g.daily_kcal > _BASE.daily_kcal  # и не врём, что уложились в прежние ккал
+
+
+def test_set_macro_never_breaks_atwater_invariant() -> None:
+    """INV-15: 4Б+9Ж+4У == daily_kcal — на любом входе, включая абсурдный."""
+    for macro in ("protein", "fat", "carb"):
+        for grams in (0, 1, 77, 250, 999):
+            g = set_macro(_BASE, macro, grams)  # type: ignore[arg-type]
+            assert abs(g.atwater_kcal - g.daily_kcal) < 1, (macro, grams)
+
+
+def test_set_macro_to_current_value_changes_nothing() -> None:
+    """Ставим то же значение — цель обязана остаться прежней (нет дрейфа от округлений)."""
+    g = set_macro(_BASE, "protein", _BASE.protein_g)
+    assert (g.protein_g, g.fat_g, g.carb_g, g.daily_kcal) == (
+        _BASE.protein_g,
+        _BASE.fat_g,
+        _BASE.carb_g,
+        _BASE.daily_kcal,
+    )

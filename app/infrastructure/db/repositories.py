@@ -193,6 +193,22 @@ class SqlProductRepo:
         )
         return [_product_to_domain(o) for o in res.scalars().all()]
 
+    async def search(self, query: str, limit: int) -> list[Product]:
+        # Ищем среди ВСЕХ продуктов, не только is_estimate: выверенный тоже правится, если в него
+        # внесли опечатку. Экранируем %/_ — иначе ввод «100%» стал бы маской «что угодно».
+        esc = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{esc}%"
+        res = await self._s.execute(
+            select(ProductORM)
+            .where(
+                ProductORM.display_name.ilike(pattern, escape="\\")
+                | ProductORM.canonical_key.ilike(pattern, escape="\\")
+            )
+            .order_by(ProductORM.is_estimate.desc(), ProductORM.created_at.desc())
+            .limit(limit)
+        )
+        return [_product_to_domain(o) for o in res.scalars().all()]
+
     async def update_density(self, product_id: int, density: Density) -> Product | None:
         orm = await self._s.get(ProductORM, product_id)
         if orm is None:
@@ -270,10 +286,13 @@ class SqlMealRepo:
         return [_meal_to_domain(o) for o in res.scalars().all()]
 
     async def delete_last(self, user_id: int) -> Meal | None:
+        # Последний по времени ЗАПИСИ, а не по времени еды. С появлением бэкдейта (FR-33) это
+        # разные приёмы: записал «вчера курица» → «отменить» обязано убрать её, а не сегодняшний
+        # обед с более поздним eaten_at. id в тай-брейке — на случай одинаковых created_at.
         res = await self._s.execute(
             select(MealORM)
             .where(MealORM.user_id == user_id)
-            .order_by(MealORM.eaten_at.desc())
+            .order_by(MealORM.created_at.desc(), MealORM.id.desc())
             .limit(1)
         )
         return await self._delete_orm(res.scalar_one_or_none())
