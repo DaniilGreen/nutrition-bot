@@ -297,6 +297,13 @@ class SqlMealRepo:
         )
         return await self._delete_orm(res.scalar_one_or_none())
 
+    async def get(self, user_id: int, meal_id: int) -> Meal | None:
+        res = await self._s.execute(
+            select(MealORM).where(MealORM.id == meal_id, MealORM.user_id == user_id)
+        )
+        orm = res.scalar_one_or_none()
+        return _meal_to_domain(orm) if orm is not None else None
+
     async def delete(self, user_id: int, meal_id: int) -> Meal | None:
         res = await self._s.execute(
             select(MealORM).where(MealORM.id == meal_id, MealORM.user_id == user_id)

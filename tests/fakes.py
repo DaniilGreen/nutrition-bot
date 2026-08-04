@@ -143,6 +143,9 @@ class InMemoryMealRepo:
         self._meals.remove(last)
         return last
 
+    async def get(self, user_id: int, meal_id: int) -> Meal | None:
+        return next((m for m in self._meals if m.id == meal_id and m.user_id == user_id), None)
+
     async def delete(self, user_id: int, meal_id: int) -> Meal | None:
         for m in self._meals:
             if m.id == meal_id and m.user_id == user_id:

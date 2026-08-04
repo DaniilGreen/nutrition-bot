@@ -18,6 +18,7 @@ GOAL_TARGET_PREFIX = "goal_tgt"  # сменить цель (cut/maintain/bulk) �
 MEAL_UNDO_PREFIX = "meal_undo"
 UNDO_ITEM_PREFIX = "undo_item"
 ITEM_DEL_PREFIX = "item_del"
+MEAL_REPEAT_PREFIX = "meal_repeat"
 PROD_FIX_PREFIX = "prod_fix"
 PROD_RENAME_PREFIX = "prod_rename"  # переименовать продукт в /products (FR-27 #6)
 ONBOARD_PREFIX = "onb"
@@ -150,6 +151,9 @@ def meal_actions_keyboard(meal: Meal) -> InlineKeyboardMarkup:
     Это контекстная отмена «без вопроса» — кнопки знают конкретную запись.
     """
     builder = InlineKeyboardBuilder()
+    # Первой — созидательная кнопка: выпил вторую бутылку, съел вторую порцию. Копирует вес и
+    # КБЖУ один-в-один, поэтому в ИИ не идёт и повтор не «переоценивается» заново.
+    builder.button(text="🔁 Повторить", callback_data=f"{MEAL_REPEAT_PREFIX}:{meal.id}")
     if len(meal.items) > 1:
         for item in meal.items:
             if item.id is not None:

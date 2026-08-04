@@ -899,6 +899,26 @@ async def on_variant(
     await _render_after_continue(callback.message, result, state, app_user, assistant, raw=raw)
 
 
+@router.callback_query(F.data.startswith("meal_repeat:"))
+async def on_meal_repeat(callback: CallbackQuery, app_user: User, assistant: Assistant) -> None:
+    """Кнопка «Повторить»: та же еда ещё раз (вторая бутылка, вторая порция).
+
+    Новая карточка ОТДЕЛЬНЫМ сообщением, а не правка старой: это вторая запись, и обе должны
+    остаться видимыми — иначе непонятно, добавилась она или подменила первую.
+    """
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    await callback.answer()  # отвечаем Telegram сразу, чтобы не крутился спиннер
+
+    meal_id = int((callback.data or "meal_repeat:0").split(":", 1)[1])
+    result = await assistant.repeat_meal(app_user, meal_id)
+    if result is None:
+        await callback.message.answer("Запись уже удалена — повторять нечего.")
+        return
+    await _send_meal_card(callback.message, result, app_user, assistant)
+
+
 @router.callback_query(F.data.startswith("meal_undo:"))
 async def on_meal_undo(callback: CallbackQuery, app_user: User, assistant: Assistant) -> None:
     if not isinstance(callback.message, Message):

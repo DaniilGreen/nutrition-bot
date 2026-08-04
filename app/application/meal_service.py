@@ -139,6 +139,39 @@ class MealService:
         names = [it.name_snapshot for m in meals for it in m.items]
         return order_options_by_history(options, names)
 
+    async def repeat(self, user: User, meal_id: int) -> Meal | None:
+        """Тот же приём ещё раз: тот же вес, тот же снапшот КБЖУ, текущее время. Без LLM.
+
+        Кейс владельца: снял бутылку пива с этикетки, потом выпил ещё. Копируем снапшот позиций
+        (INV-3), поэтому цифры совпадают с оригиналом до грамма — не пересчитываем и не ходим в
+        ИИ, где повтор дал бы другую оценку.
+        """
+        user_id = _require_id(user)
+        src = await self._meals.get(user_id, meal_id)
+        if src is None:
+            return None
+        return await self._meals.add(
+            Meal(
+                user_id=user_id,
+                eaten_at=self._clock(),
+                input_type=src.input_type,
+                raw_input=src.raw_input,
+                items=[
+                    MealItem(
+                        name_snapshot=it.name_snapshot,
+                        grams=it.grams,
+                        macros=it.macros,
+                        product_id=it.product_id,
+                        is_estimate=it.is_estimate,
+                    )
+                    for it in src.items
+                ],
+                source_confidence=src.source_confidence,
+                totals=src.totals,
+                estimated=src.estimated,
+            )
+        )
+
     async def delete_last(self, user: User) -> Meal | None:
         return await self._meals.delete_last(_require_id(user))
 
