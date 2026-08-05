@@ -384,3 +384,67 @@ async def test_water_with_syrup_not_zeroed() -> None:
 
     assert isinstance(result, MealLogged)
     assert result.meal.totals.kcal > 0  # «сироп» в калорийной основе → не зануляем
+
+
+# --- Находки eval-прогона 05.08.2026 ---
+
+
+def _cola_zero(*, flagged: bool) -> ParsedMessage:
+    """Напиток, у которого LLM вернула все нули. flagged — сказала ли она «это правда ноль»."""
+    return ParsedMessage(
+        intent=Intent.MEAL,
+        confidence=0.9,
+        items=[
+            ParsedItem(
+                name="кола зеро", canonical_key="cola_zero", unit=Unit.ML, grams=500,
+                kcal_per_100g=0, protein_per_100g=0, fat_per_100g=0, carb_per_100g=0,
+                zero_calorie=flagged, confidence=0.9,
+            )
+        ],
+    )
+
+
+async def test_flagged_zero_drink_stays_zero() -> None:
+    """Пол-литра колы зеро — это 0 ккал, а не 750.
+
+    Ноль трактовался как «LLM не смогла оценить» и подменялся фолбэком ~150/100 г, потому что
+    список нулевых знал только воду и чёрный кофе. Курировать его дальше бессмысленно —
+    зеро-напитков бесконечно много, поэтому сигнал теперь даёт сама модель.
+    """
+    assistant, users, _ = _build(StubNlu(_cola_zero(flagged=True)))
+    user = await _new_user(users)
+
+    result = await assistant.process(user, "кола зеро 500 мл")
+
+    assert isinstance(result, MealLogged)
+    assert result.meal.totals.kcal == 0.0
+    assert result.meal.items[0].grams == 500  # объём записан, обнулены только калории
+
+
+async def test_unflagged_zero_still_gets_fallback() -> None:
+    """Обратная сторона: НЕпомеченный ноль по-прежнему промах оценки, а не еда без калорий.
+
+    Без этого вернулся бы баг «пангасиус 0 ккал» — рыба молча записалась бы нулём.
+    """
+    assistant, users, _ = _build(StubNlu(_cola_zero(flagged=False)))
+    user = await _new_user(users)
+
+    result = await assistant.process(user, "кола зеро 500 мл")
+
+    assert isinstance(result, MealLogged)
+    assert result.meal.totals.kcal > 0  # консервативный фолбэк, а не тихий ноль
+
+
+async def test_non_food_is_not_logged() -> None:
+    """«Пизденка 230г» записывалась как 414 ккал — еды нет, писать нечего.
+
+    Опаснее, чем выглядит: по D-16 выдуманная оценка пиннится в каталог НАВСЕГДА и дальше
+    молча портит учёт. Вес рядом со словом не делает слово продуктом.
+    """
+    assistant, users, _ = _build(StubNlu(ParsedMessage(intent=Intent.UNKNOWN, confidence=0.2)))
+    user = await _new_user(users)
+
+    result = await assistant.process(user, "Пизденка 230г")
+
+    assert not isinstance(result, MealLogged)
+    assert (await assistant.today(user)).remaining.consumed.kcal == 0  # день не испачкан

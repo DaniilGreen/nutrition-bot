@@ -38,6 +38,9 @@ class ParsedItem:
     unit_weight_g: float | None = None
     clarify_options: list[str] | None = None  # D-19: варианты-кнопки от LLM (неточный запрос)
     kcal_per_100g: float = 0.0
+    # Честный ноль vs «не смог оценить» — по самому нулю их не различить, а решения разные:
+    # первый пишем как 0, второму подставляем фолбэк ~150 ккал/100 г (INV-11.3).
+    zero_calorie: bool = False
     protein_per_100g: float = 0.0
     fat_per_100g: float = 0.0
     carb_per_100g: float = 0.0

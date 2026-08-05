@@ -100,6 +100,7 @@ def _to_dto(result: NluResult) -> ParsedMessage:
                 portion_options=_portion_options(i),
                 unit_weight_g=i.unit_weight_g,
                 kcal_per_100g=i.kcal_per_100g,
+                zero_calorie=i.zero_calorie,
                 protein_per_100g=i.protein_per_100g,
                 fat_per_100g=i.fat_per_100g,
                 carb_per_100g=i.carb_per_100g,

@@ -38,6 +38,12 @@ class NluItem(BaseModel):
     kcal_per_100g: float = Field(
         description="Оценка КБЖУ на 100 г (нужна только для новых продуктов)"
     )
+    zero_calorie: bool = Field(
+        default=False,
+        description="true, если продукт ДЕЙСТВИТЕЛЬНО бескалорийный (вода, кола зеро, чёрный "
+        "кофе без сахара, чай без сахара, подсластитель). Отличает честный ноль от «не смог "
+        "оценить»: без флага ноль считается промахом и заменяется фолбэком ~150 ккал/100 г.",
+    )
     protein_per_100g: float
     fat_per_100g: float
     carb_per_100g: float

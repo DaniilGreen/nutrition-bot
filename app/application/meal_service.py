@@ -139,6 +139,39 @@ class MealService:
         names = [it.name_snapshot for m in meals for it in m.items]
         return order_options_by_history(options, names)
 
+    async def repeat(self, user: User, meal_id: int) -> Meal | None:
+        """Тот же приём ещё раз: тот же вес, тот же снапшот КБЖУ, текущее время. Без LLM.
+
+        Кейс владельца: снял бутылку пива с этикетки, потом выпил ещё. Копируем снапшот позиций
+        (INV-3), поэтому цифры совпадают с оригиналом до грамма — не пересчитываем и не ходим в
+        ИИ, где повтор дал бы другую оценку.
+        """
+        user_id = _require_id(user)
+        src = await self._meals.get(user_id, meal_id)
+        if src is None:
+            return None
+        return await self._meals.add(
+            Meal(
+                user_id=user_id,
+                eaten_at=self._clock(),
+                input_type=src.input_type,
+                raw_input=src.raw_input,
+                items=[
+                    MealItem(
+                        name_snapshot=it.name_snapshot,
+                        grams=it.grams,
+                        macros=it.macros,
+                        product_id=it.product_id,
+                        is_estimate=it.is_estimate,
+                    )
+                    for it in src.items
+                ],
+                source_confidence=src.source_confidence,
+                totals=src.totals,
+                estimated=src.estimated,
+            )
+        )
+
     async def delete_last(self, user: User) -> Meal | None:
         return await self._meals.delete_last(_require_id(user))
 
@@ -226,7 +259,11 @@ class MealService:
             # Пустая оценка (после ретрая INV-9) — НЕ пиним в каталог (иначе мусор навсегда:
             # баг «пангасиус 0 ккал»). Что писать в саму запись — решает INV-11.3: вода/чёрный
             # кофе → 0 как есть; реальная еда → консервативный фолбэк ≈150/100г, а не молчаливый 0.
-            fallback = density if _looks_zero_calorie(parsed_item.name) else FALLBACK_DENSITY
+            # Флаг от LLM — основной сигнал, список слов остался страховкой: он знал только воду
+            # и чёрный кофе, поэтому «кола зеро» получала фолбэк и превращалась в 750 ккал на
+            # пол-литра. Курировать список дальше бессмысленно — зеро-напитков бесконечно много.
+            zero = parsed_item.zero_calorie or _looks_zero_calorie(parsed_item.name)
+            fallback = density if zero else FALLBACK_DENSITY
             return Product(
                 canonical_key=unique_key,
                 display_name=parsed_item.name,

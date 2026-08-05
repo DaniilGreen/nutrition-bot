@@ -235,3 +235,51 @@ def test_no_advice_in_the_morning() -> None:
     assert not CTXS["утро"].advice_due
     assert blocks.advice(CTXS["утро"]) == ""
     assert CTXS["обычный день"].advice_due
+
+
+# --- подписи кнопок-вариантов: отличие должно быть ВИДНО, а не уехать в «…» ---
+
+
+def test_variant_labels_show_the_difference_not_the_common_prefix() -> None:
+    """Живой баг: «ржаные сухарики без в…» / «со вк…» / «с сыр…» — все кнопки на вид одинаковы.
+
+    Резали МЫ (22 символа), а не Telegram. Варианты от LLM — полные имена (D-19), поэтому
+    отличаются хвостом, и обрезка съедала ровно его. Продукт назван в вопросе над кнопками.
+    """
+    from app.bot.keyboards import _distinct
+
+    labels = _distinct(
+        [
+            "ржаные сухарики без вкусовых добавок",
+            "ржаные сухарики со вкусом бекона",
+            "ржаные сухарики с сыром",
+        ]
+    )
+    assert labels == ["без вкусовых добавок", "со вкусом бекона", "с сыром"]
+    assert len(set(labels)) == 3  # главное: кнопки различимы
+    assert all(len(x) <= 34 for x in labels)  # и влезают без «…»
+
+
+def test_variant_labels_keep_a_word_when_one_option_is_the_prefix() -> None:
+    """«кофе» / «кофе с молоком»: общее начало — весь первый вариант.
+
+    Срезать его целиком нельзя — кнопка станет пустой.
+    """
+    from app.bot.keyboards import _distinct
+
+    assert _distinct(["кофе", "кофе с молоком"]) == ["кофе", "кофе с молоком"]
+    assert _distinct(["борщ", "солянка"]) == ["борщ", "солянка"]  # нет общего — не трогаем
+    assert _distinct(["молоко 1.5%", "молоко 3.2%"]) == ["1.5%", "3.2%"]
+
+
+def test_variant_keyboard_preserves_index_order() -> None:
+    """Косметика не смеет сдвинуть индексы.
+
+    Callback несёт номер, а в БД уходит ПОЛНОЕ имя из черновика — не подпись кнопки.
+    """
+    from app.bot.keyboards import variant_keyboard
+
+    opts = ["тофу мягкий (силкен)", "тофу плотный (фирм, обычный)"]
+    rows = variant_keyboard(opts).inline_keyboard
+    assert [b.callback_data for r in rows for b in r][:2] == ["variant:0", "variant:1"]
+    assert [b.text for r in rows for b in r][:2] == ["мягкий (силкен)", "плотный (фирм, обычный)"]

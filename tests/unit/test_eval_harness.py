@@ -156,3 +156,30 @@ def test_quality_score_has_fixed_denominator() -> None:
     assert m["coverage"] == 0.5
     # 2 попадания + 2 лишних вопроса по FALSE_ABSTAIN_CREDIT
     assert m["quality_score"] == round((2 + 2 * FALSE_ABSTAIN_CREDIT) / 4, 3)
+
+
+def test_refusal_counts_as_abstention_not_as_a_wrong_answer() -> None:
+    """Отказ «это не еда» — воздержание наравне с вопросом (находка прогона 05.08.2026).
+
+    На мусорном вводе («Пизденка 230г») отказ ЛУЧШЕ вопроса: уточнять нечего. Пока `Unknown`
+    не считался воздержанием, фикс не-еды читался как падение abstention_recall — метрика
+    наказывала за правильное поведение.
+    """
+    junk = ItemEval("r029", "abstention", est_kcal=0.0, true_kcal=0.0,
+                    clarified=True, expected_clarify=True)
+    m = metrics([junk], {"r029": 0.2})
+
+    assert m["abstention_recall"] == 1.0  # ждали воздержания — получили
+    assert m["logged"] == 0 and m["coverage"] == 0.0  # отказ не «записан»
+    assert m["quality_score"] == 1.0  # и это ИДЕАЛЬНЫЙ ответ, а не полумера
+
+
+def test_refusal_on_real_food_is_penalised() -> None:
+    """Обратная сторона: отказ там, где еда настоящая, — потеря, а не победа."""
+    m = metrics(
+        [ItemEval("g1", "density", est_kcal=0.0, true_kcal=300.0,
+                  clarified=True, expected_clarify=False)],
+        {"g1": 0.2},
+    )
+    assert m["false_abstain_rate"] == 1.0
+    assert m["quality_score"] == FALSE_ABSTAIN_CREDIT  # полкредита: лучше вранья, хуже ответа

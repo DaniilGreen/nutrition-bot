@@ -103,7 +103,7 @@ def eaten(d: DayContext, *, open_: bool = False) -> str:
         mark = "≈ " if it.is_estimate else ""
         # Времени тут НЕТ намеренно: список отсортирован по калориям, а «12:30» впереди строки
         # обещает хронологию и путает. Хронология — в «Дне» и в ленте дизайна C.
-        lis.append(f"<li>{mark}{e(it.name_snapshot)} — <b>{n(kcal)}</b> ккал</li>")
+        lis.append(f"<li>{mark}{e(it.name_snapshot)} — {kit.g(it.grams)}<b>{n(kcal)}</b> ккал</li>")
     k, items = d.today.meals_count, len(rows)
     head = (
         f"🍽 Съедено · {k} {kit.plural(k, 'приём', 'приёма', 'приёмов')} · "

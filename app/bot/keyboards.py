@@ -18,6 +18,7 @@ GOAL_TARGET_PREFIX = "goal_tgt"  # сменить цель (cut/maintain/bulk) �
 MEAL_UNDO_PREFIX = "meal_undo"
 UNDO_ITEM_PREFIX = "undo_item"
 ITEM_DEL_PREFIX = "item_del"
+MEAL_REPEAT_PREFIX = "meal_repeat"
 PROD_FIX_PREFIX = "prod_fix"
 PROD_RENAME_PREFIX = "prod_rename"  # переименовать продукт в /products (FR-27 #6)
 ONBOARD_PREFIX = "onb"
@@ -77,8 +78,10 @@ def portion_keyboard(options: dict[str, float] | None = None) -> InlineKeyboardM
 def variant_keyboard(options: Sequence[str]) -> InlineKeyboardMarkup:
     """D-19: кнопки-варианты от LLM (callback = индекс в options). Свой вариант — впиши текстом."""
     builder = InlineKeyboardBuilder()
-    for i, opt in enumerate(options):
-        builder.button(text=_short(opt), callback_data=f"{VARIANT_CALLBACK_PREFIX}:{i}")
+    # Кнопка на всю ширину и одна в ряд — влезает заметно больше дефолтных 22 символов,
+    # которыми мы сами резали «ржаные сухарики без в…».
+    for i, opt in enumerate(_distinct(options)):
+        builder.button(text=_short(opt, 34), callback_data=f"{VARIANT_CALLBACK_PREFIX}:{i}")
     builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
     builder.adjust(1)
     return builder.as_markup()
@@ -148,6 +151,9 @@ def meal_actions_keyboard(meal: Meal) -> InlineKeyboardMarkup:
     Это контекстная отмена «без вопроса» — кнопки знают конкретную запись.
     """
     builder = InlineKeyboardBuilder()
+    # Первой — созидательная кнопка: выпил вторую бутылку, съел вторую порцию. Копирует вес и
+    # КБЖУ один-в-один, поэтому в ИИ не идёт и повтор не «переоценивается» заново.
+    builder.button(text="🔁 Повторить", callback_data=f"{MEAL_REPEAT_PREFIX}:{meal.id}")
     if len(meal.items) > 1:
         for item in meal.items:
             if item.id is not None:
@@ -244,3 +250,25 @@ def goal_type_keyboard() -> InlineKeyboardMarkup:
 
 def _short(text: str, limit: int = 22) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _distinct(options: Sequence[str]) -> list[str]:
+    """Срезать общее начало вариантов: «ржаные сухарики со вкусом бекона» → «со вкусом бекона».
+
+    По D-19 варианты приходят полными именами (кнопка целиком заменяет имя продукта), поэтому
+    отличаются они ХВОСТОМ — ровно тем, что и обрезается. Продукт уже назван в вопросе над
+    кнопками, второй раз в каждой кнопке он не нужен.
+
+    Режем по словам, а не по символам: «ржаные сухарики с сы…» читается хуже, чем «с сыром».
+    Хотя бы одно слово у варианта остаётся всегда — иначе кнопка станет пустой.
+    """
+    words = [o.split() for o in options]
+    if len(words) < 2:
+        return [" ".join(w) for w in words]
+    common = 0
+    while (
+        all(len(w) > common + 1 for w in words)
+        and len({w[common].casefold() for w in words}) == 1
+    ):
+        common += 1
+    return [" ".join(w[common:]) for w in words]

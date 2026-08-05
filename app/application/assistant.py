@@ -220,6 +220,14 @@ class Assistant:
     async def delete_meal(self, user: User, meal_id: int) -> MealDeleted:
         return MealDeleted(meal=await self._meals.delete(user, meal_id))
 
+    async def repeat_meal(self, user: User, meal_id: int) -> MealLogged | None:
+        """Повторить приём кнопкой. None — если запись уже удалили (кнопка живёт в чате вечно)."""
+        meal = await self._meals.repeat(user, meal_id)
+        if meal is None:
+            return None
+        stats = await self._stats.daily(user)
+        return MealLogged(meal=meal, remaining=stats.remaining)
+
     async def remove_item(self, user: User, meal_id: int, item_id: int) -> MealLogged | None:
         """Удалить одну позицию записи. None — если позиций не осталось (запись удалена)."""
         meal = await self._meals.remove_item(user, meal_id, item_id)
