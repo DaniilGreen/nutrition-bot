@@ -23,7 +23,10 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-5.1"
     openai_stt_model: str = "whisper-1"
     use_fake_nlu: bool = False
-    sample_k: int = 3  # сэмплов self-consistency (D-15); 5→3 ради ↓токенов и реже 429 (TPM 30k)
+    # Сэмплов self-consistency (D-15). Резали до 3 из-за лимита 30k TPM на gpt-4.1; на gpt-5.1
+    # потолок 500k, а сэмплы идут параллельно (asyncio.gather) — вернули 5. Медиана по пяти
+    # устойчивее к выбросу, а это прямой вклад в точность, главный приоритет проекта.
+    sample_k: int = 5
     openai_max_retries: int = 4  # ретраи SDK на 429/сеть — переждать окно TPM-лимита (баг #16)
 
     default_timezone: str = "Europe/Moscow"
