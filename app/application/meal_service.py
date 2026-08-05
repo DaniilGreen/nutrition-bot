@@ -259,7 +259,11 @@ class MealService:
             # Пустая оценка (после ретрая INV-9) — НЕ пиним в каталог (иначе мусор навсегда:
             # баг «пангасиус 0 ккал»). Что писать в саму запись — решает INV-11.3: вода/чёрный
             # кофе → 0 как есть; реальная еда → консервативный фолбэк ≈150/100г, а не молчаливый 0.
-            fallback = density if _looks_zero_calorie(parsed_item.name) else FALLBACK_DENSITY
+            # Флаг от LLM — основной сигнал, список слов остался страховкой: он знал только воду
+            # и чёрный кофе, поэтому «кола зеро» получала фолбэк и превращалась в 750 ккал на
+            # пол-литра. Курировать список дальше бессмысленно — зеро-напитков бесконечно много.
+            zero = parsed_item.zero_calorie or _looks_zero_calorie(parsed_item.name)
+            fallback = density if zero else FALLBACK_DENSITY
             return Product(
                 canonical_key=unique_key,
                 display_name=parsed_item.name,
