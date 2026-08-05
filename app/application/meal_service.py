@@ -35,8 +35,7 @@ from app.domain.value_objects import Density, Macros, sum_macros
 # Ключи, которые LLM возвращает «от неуверенности» — не идентичность продукта.
 _JUNK_KEYS = frozenset({"", "unknown", "none", "null", "na", "n_a", "item", "product", "food", "еда"})
 _MIN_KEY_LEN = 3
-_MATCH_THRESHOLD = 0.82  # порог имени для RAG-совпадения с каталогом
-_KEY_NAME_THRESHOLD = 0.72  # reuse пина по ключу только если имя совпадает (подстрока ИЛИ ≥0.72)
+_NAME_THRESHOLD = 0.72  # доля токенов имени, нашедших пару (INV-4.2)
 _CORRECTION_LOOKBACK = 10  # сколько недавних записей просматриваем для «удали X»
 _CORRECTION_NAME_THRESHOLD = 0.8  # порог нечёткого совпадения имени при удалении
 class MealService:
@@ -259,18 +258,21 @@ class MealService:
 
 
 def best_product_match(
-    name: str, products: Sequence[Product], threshold: float = _MATCH_THRESHOLD
+    name: str, products: Sequence[Product], threshold: float = _NAME_THRESHOLD
 ) -> Product | None:
     """Лучшее имя-совпадение из каталога (RAG: предпочесть реальную строку выдумке LLM).
 
-    ponytail: difflib-ratio, грубо для русского — если начнёт мазать, на pg_trgm/эмбеддинги.
-    Порог высокий: матчим только почти точные имена, чтобы не путать варианты.
+    INV-5.1: симметрично — тут ключ идентичность не подтверждает, сканируем ВЕСЬ каталог.
+    Асимметрия пустила бы «миндаль» (605) в «миндальное молоко» (30): короткое имя покрывается
+    длинным целиком. Требуем покрытие в обе стороны.
     """
-    q = _norm(name)
     best: Product | None = None
     best_score = 0.0
     for product in products:
-        score = difflib.SequenceMatcher(None, q, _norm(product.display_name)).ratio()
+        pinned = product.display_name
+        if _qualifiers(name) != _qualifiers(pinned):
+            continue  # INV-4.3: «творог 5%» ≠ «творог 9%»
+        score = min(_coverage(name, pinned), _coverage(pinned, name))
         if score > best_score:
             best, best_score = product, score
     return best if best_score >= threshold else None
@@ -356,17 +358,76 @@ def order_options_by_history(options: list[str], recent_names: list[str]) -> lis
 def _names_compatible(parsed_name: str, pinned_name: str) -> bool:
     """Имя из ввода и имя запиннутого продукта — одна еда? Защита от reuse ЧУЖОГО ключа: LLM
     иногда отдаёт ключ другого продукта (молоко миндальное → macadamia_milk «молоко макадамии»).
-    Подстрока («куриная грудка» ⊂ «куриная грудка отварная») = уточнение, та же еда. Иначе высокий
-    порог difflib: «молоко миндальное» vs «молоко макадамии» = 0.606 (общее «молоко» завышает) —
-    режем как разную еду (INV-4, багрепорты #3/#11)."""
-    a, b = _norm(parsed_name), _norm(pinned_name)
-    if a in b or b in a:
-        return True
-    return difflib.SequenceMatcher(None, a, b).ratio() >= _KEY_NAME_THRESHOLD
+
+    INV-5.1: асимметрично — ключ уже утверждает идентичность, имя ловит грубый промах, поэтому
+    уточнение засчитывается («куриная грудка» ⊂ «куриная грудка отварная»). INV-4.3 бьёт первой:
+    разошлись числа-квалификаторы («творог 5%»/«творог 9%») — разная еда при любом покрытии.
+    """
+    if _qualifiers(parsed_name) != _qualifiers(pinned_name):
+        return False
+    best = max(_coverage(parsed_name, pinned_name), _coverage(pinned_name, parsed_name))
+    return best >= _NAME_THRESHOLD
 
 
 def _norm(text: str) -> str:
     return text.strip().lower()
+
+
+# Порционные числа — шум имени («йогурт 200 г» и «йогурт» одна еда), в отличие от жирности.
+_PORTION_RE = re.compile(r"\b\d+[.,]?\d*\s*(?:г|гр|грамм\w*|мл|л|кг|g|ml|l|kg|шт|скуп\w*)\b")
+# Предлоги: еду не различают, но разбавляют счёт («арбузный сок БЕЗ сахара» vs «сок гуавы БЕЗ
+# сахара» — 3 общих токена из 4). «сахара» НЕ выбрасываем: «кола без сахара» ≠ «кола» по ккал.
+_STOP_WORDS = frozenset({"с", "со", "из", "и", "в", "на", "для", "без", "по"})
+
+
+def _name_tokens(name: str) -> list[str]:
+    """Слова имени: ё→е, без предлогов и без цифр. Цифры целиком на совести `_qualifiers` —
+    иначе общая «3.2» тянет совпадение вверх («кофе с молоком 3.2%» ≈ «молоко 3.2%»)."""
+    words = re.findall(r"[^\W\d_]+", _PORTION_RE.sub(" ", _norm(name).replace("ё", "е")))
+    return [w for w in words if w not in _STOP_WORDS] or words
+
+
+def _same_word(a: str, b: str) -> bool:
+    """Словоформы одного слова: общий префикс ≥3 символов И ≥60% ДЛИННОГО токена (INV-4.2).
+
+    По длинному, а не короткому: иначе «сыр» ⊂ «сырники», «суши» ⊂ «сушёный», «бур» ⊂ «бургер» —
+    разная еда с общим началом склеивается. ponytail: префикс вместо стеммера; русский флексирует
+    хвостом, этого хватает. Понадобится больше — pymorphy/pg_trgm.
+    """
+    if a == b:
+        return True
+    common = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        common += 1
+    return common >= 3 and common >= 0.6 * max(len(a), len(b))
+
+
+def _coverage(name: str, other: str) -> float:
+    """Доля токенов `name`, нашедших пару в `other`. НАПРАВЛЕННАЯ: _coverage(a,b) != _coverage(b,a).
+
+    Заменила difflib по склеенной строке (D-32): та зависела от порядка слов («пиво нефильтрованное
+    светлое» vs «светлое пиво нефильтрованное» = 0.714 при пороге 0.72), а в русском порядок
+    свободный; и наоборот, роднила разные слова с общими буквами («жареные»/«варёные» = 0.86).
+    """
+    tokens, pool = _name_tokens(name), _name_tokens(other)
+    if not tokens or not pool:
+        return 0.0
+    hit = 0
+    for token in tokens:
+        match = next((w for w in pool if _same_word(token, w)), None)
+        if match is not None:
+            pool.remove(match)
+            hit += 1
+    return hit / len(tokens)
+
+
+def _qualifiers(name: str) -> list[str]:
+    """Числа-квалификаторы имени (жирность «3.2%», «творог 5%») — часть идентичности (INV-4.3).
+    Порционные числа вырезаны: «200 г» продукт не различает."""
+    stripped = _PORTION_RE.sub(" ", _norm(name).replace(",", "."))
+    return sorted(re.findall(r"\d+[.,]?\d*", stripped))
 
 
 def _require_id(user: User) -> int:
