@@ -20,6 +20,7 @@ from pathlib import Path
 from app.application.results import (
     ClarificationNeeded,
     MealLogged,
+    Unknown,
     VariantClarificationNeeded,
 )
 from tests.eval.catalog import build_eval_assistant
@@ -61,7 +62,10 @@ async def _run_once() -> dict:
         expect_clarify = bool(row.get("expect_clarify") or row.get("expect_abstain"))
         res = await _process_with_retry(assistant, user, row)
         await asyncio.sleep(ROW_PACING_S)
-        clarified = isinstance(res, (ClarificationNeeded, VariantClarificationNeeded))
+        # Воздержание — это ЛЮБОЙ отказ записать число, а не только вопрос. Отказ «это не еда»
+        # (Unknown) на мусорном вводе — лучший ответ, чем вопрос: спрашивать про «Пизденку»
+        # нечего. Пока Unknown сюда не входил, фикс не-еды выглядел падением abstention_recall.
+        clarified = isinstance(res, (ClarificationNeeded, VariantClarificationNeeded, Unknown))
         est = res.meal.totals.kcal if isinstance(res, MealLogged) else 0.0
         evals.append(
             ItemEval(
