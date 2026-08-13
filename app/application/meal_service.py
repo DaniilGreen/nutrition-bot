@@ -33,7 +33,9 @@ from app.domain.portions import resolve_grams
 from app.domain.value_objects import Density, Macros, sum_macros
 
 # Ключи, которые LLM возвращает «от неуверенности» — не идентичность продукта.
-_JUNK_KEYS = frozenset({"", "unknown", "none", "null", "na", "n_a", "item", "product", "food", "еда"})
+_JUNK_KEYS = frozenset(
+    {"", "unknown", "none", "null", "na", "n_a", "item", "product", "food", "еда"}
+)
 _MIN_KEY_LEN = 3
 _NAME_THRESHOLD = 0.72  # доля токенов имени, нашедших пару (INV-4.2)
 _CORRECTION_LOOKBACK = 10  # сколько недавних записей просматриваем для «удали X»
@@ -434,7 +436,7 @@ def _same_word(a: str, b: str) -> bool:
     if a == b:
         return True
     common = 0
-    for x, y in zip(a, b):
+    for x, y in zip(a, b, strict=False):  # слова разной длины — обрезка по короткому тут и нужна
         if x != y:
             break
         common += 1
