@@ -127,8 +127,13 @@ def day_nav_keyboard(
 
 def label_grams_keyboard(
     package_g: float | None, serving_g: float | None = None
-) -> InlineKeyboardMarkup | None:
-    """FR-27: пресеты веса с этикетки — «1 порция» и/или «вся пачка». None, если пусто."""
+) -> InlineKeyboardMarkup:
+    """FR-27: пресеты веса с этикетки — «1 порция» и/или «вся пачка», плюс отмена.
+
+    Отмена тут обязательна (баг #31): это был единственный визард без неё, а без пресетов
+    клавиатура вообще не приходила — вопрос висел, выйти можно было только текстом, и новое
+    фото при этом не принималось (`_busy_with_flow` отбивает его, пока висит вопрос).
+    """
     builder = InlineKeyboardBuilder()
     shown: set[int] = set()
     if serving_g:
@@ -139,8 +144,7 @@ def label_grams_keyboard(
         g = round(package_g)
         builder.button(text=f"Вся пачка · {g} г", callback_data=f"{LABEL_G_PREFIX}:{g}")
         shown.add(g)
-    if not shown:
-        return None
+    builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
     builder.adjust(1)
     return builder.as_markup()
 

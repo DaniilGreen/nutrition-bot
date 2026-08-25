@@ -134,3 +134,56 @@ async def test_rag_prefers_catalog_over_llm_estimate() -> None:
     assert isinstance(result, MealLogged)
     assert result.meal.totals.kcal == 50.0  # из каталога, не выдуманные 999
     assert await products.all_keys() == ["borscht"]  # новый продукт не создан
+
+
+# --- Баг #30: каталожное имя затирало конкретное имя пользователя ---
+
+
+def _gs_product():
+    return Product(
+        canonical_key="gold_standard_whey",
+        display_name="Gold Standard Whey",
+        density=Density(395, 79, 3, 10),
+        source="curated",
+        is_estimate=False,
+    )
+
+
+async def test_specific_user_name_survives_curated_match() -> None:
+    """Пользователь назвал бренд и вкус — в историю должно попасть ЕГО имя, а не общее.
+
+    Цифры при этом по-прежнему из каталога (INV-2), спор только об имени: иначе по записи не
+    отличить верное совпадение от ошибочного, а именно это и не устроило владельца (баг #30).
+    """
+    assistant, users, products = _build(
+        StubNlu(_item("Optimum Nutrition Gold Standard Whey Double Rich Chocolate",
+                      "gold_standard_whey", 395, 79))
+    )
+    await products.create(_gs_product())
+    user = await _new_user(users)
+
+    result = await assistant.process(user, "Optimum Nutrition Whey Protein Double Rich Chocolate")
+
+    assert isinstance(result, MealLogged)
+    item = result.meal.items[0]
+    assert "Double Rich Chocolate" in item.name_snapshot  # вкус и линейка не потеряны
+    assert item.macros.kcal == 395.0  # 100 г x 395/100 — плотность всё ещё каталожная
+    assert await products.all_keys() == ["gold_standard_whey"]  # дубль не создан
+
+
+async def test_loose_user_name_replaced_by_clean_catalog_name() -> None:
+    """Обратная сторона: если ввод БЕДНЕЕ каталожного имени, показываем каталожное.
+
+    «Gold Standard» — часть названия, вкуса и линейки в нём нет, добавлять пользователю нечего.
+    Тут чистое имя каталога и должно победить, иначе история обеднеет.
+    """
+    assistant, users, products = _build(
+        StubNlu(_item("Gold Standard", "gold_standard_whey", 395, 79))
+    )
+    await products.create(_gs_product())
+    user = await _new_user(users)
+
+    result = await assistant.process(user, "Gold Standard 100 г")
+
+    assert isinstance(result, MealLogged)
+    assert result.meal.items[0].name_snapshot == "Gold Standard Whey"

@@ -125,3 +125,22 @@ async def test_label_not_recognized_returns_unknown() -> None:
     assistant, users, _ = _build(None)  # vision не нашёл таблицу
     user = await _user(users)
     assert isinstance(await assistant.read_label(user, b"x"), Unknown)
+
+
+# --- Баг #31: из вопроса про вес порции не было выхода ---
+
+
+def test_label_grams_keyboard_always_offers_cancel() -> None:
+    """Вопрос «сколько грамм?» обязан давать кнопку выхода.
+
+    Это был единственный визард без отмены, и при пустых пресетах клавиатура вообще не
+    приходила. Вопрос висел, а новое фото не принималось: `_busy_with_flow` отбивает фото и
+    голос, пока есть незавершённое состояние. Человек оказывался заперт.
+    """
+    from app.bot.keyboards import WIZ_CANCEL, label_grams_keyboard
+
+    for package_g, serving_g in ((250.0, 100.0), (None, None), (None, 30.0)):
+        kb = label_grams_keyboard(package_g, serving_g)
+        assert kb is not None, (package_g, serving_g)  # клавиатуры без кнопок больше нет
+        data = [b.callback_data for row in kb.inline_keyboard for b in row]
+        assert WIZ_CANCEL in data, (package_g, serving_g)

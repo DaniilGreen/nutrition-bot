@@ -100,10 +100,16 @@ class MealService:
                 if is_alcoholic(parsed_item.name)
                 else vet_macros(raw_macros)
             )
-            # для выверенного каталога показываем чистое имя продукта (не искажённый ввод/STT)
+            # Для выверенного каталога показываем чистое имя продукта, а не искажённый ввод/STT
+            # («суп фубуо большой» → «Фо бо»). НО не когда пользователь конкретнее каталога:
+            # если его имя содержит каталожное целиком, он добавил бренд/вкус/линейку, и стирать
+            # это нельзя — иначе «Optimum Nutrition … Double Rich Chocolate» превращается в
+            # «Gold Standard Whey», и по записи уже не отличить верное совпадение от ошибочного
+            # (баг #30). Мусор от STT каталожное имя не покрывает — его по-прежнему заменяем.
+            user_is_specific = _coverage(product.display_name, parsed_item.name) >= 0.99
             display_name = (
                 product.display_name
-                if product.source in ("curated", "manual")
+                if product.source in ("curated", "manual") and not user_is_specific
                 else parsed_item.name
             )
             items.append(
