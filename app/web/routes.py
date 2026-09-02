@@ -1,30 +1,32 @@
 """REST мини-аппа. Слой тонкий (MA-INV-5): разобрать запрос, позвать use-case,
 отдать JSON. Ни одного расчёта КБЖУ здесь быть не должно — это INV-1.
+
+Зависимость `current_user` висит на роутере целиком, а не на каждом обработчике:
+эндпоинтов будет полтора десятка, и «забыли повесить» — самый дешёвый способ
+открыть дыру (MA-INV-6).
 """
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Any
 
 from fastapi import APIRouter, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.container import Container
-from app.web.deps import CurrentUser, get_container, get_session
+from app.web.deps import CurrentAssistant, CurrentUser, current_user
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(current_user)])
 
 
 @router.get("/me")
-async def me(
-    user: CurrentUser,
-    container: Annotated[Container, Depends(get_container)],
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> dict:
-    """Профиль и цели. Первый экран аппки ждёт именно это (§7.2)."""
-    _, users = container.assistant_for(session)
-    goal = await users.get_goal(user.id) if user.id else None
-    fallback = container.settings.default_goal()
-    g = goal or fallback
+async def me(user: CurrentUser, assistant: CurrentAssistant) -> dict[str, Any]:
+    """Профиль, цель и съеденное за сегодня — всё, что нужно первому экрану (§7.2).
+
+    Цель берём через use-case, а не `goal or default` тут: подстановка дефолта
+    уже живёт в `StatsService.current_goal`, и второй экземпляр разъехался бы
+    с ботом.
+    """
+    goal = await assistant.current_goal(user)
+    stats = await assistant.today(user)
+    eaten = stats.remaining.consumed
     return {
         "user": {
             "id": user.id,
@@ -33,13 +35,19 @@ async def me(
             "onboarded": user.onboarded_at is not None,
         },
         "goal": {
-            "kcal": g.daily_kcal,
-            "protein_g": g.protein_g,
-            "fat_g": g.fat_g,
-            "carb_g": g.carb_g,
-            "target": g.target,
-            # Цель не задана — отдаём дефолт, но говорим об этом честно:
-            # интерфейс обязан отличать «моя цель» от «пока общая».
-            "is_default": goal is None,
+            "kcal": goal.daily_kcal,
+            "protein_g": goal.protein_g,
+            "fat_g": goal.fat_g,
+            "carb_g": goal.carb_g,
+            "target": goal.target,
+        },
+        "today": {
+            "kcal": eaten.kcal,
+            "protein_g": eaten.protein,
+            "fat_g": eaten.fat,
+            "carb_g": eaten.carb,
+            "kcal_left": stats.remaining.kcal_left,
+            "protein_left": stats.remaining.protein_left,
+            "meals_count": stats.meals_count,
         },
     }

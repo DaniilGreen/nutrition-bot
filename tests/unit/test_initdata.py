@@ -5,37 +5,13 @@
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import time
 
 import pytest
 
 from app.web.auth import MAX_AGE_SECONDS, InitDataError, verify_init_data
-
-TOKEN = "123456:AA-test-token"
-USER = {"id": 777, "first_name": "Даниил", "username": "dg", "language_code": "ru"}
-
-
-def sign(fields: dict[str, str], token: str = TOKEN) -> str:
-    """Собрать подлинную initData так же, как это делает Telegram."""
-    dcs = "\n".join(f"{k}={fields[k]}" for k in sorted(fields))
-    secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
-    h = hmac.new(secret, dcs.encode(), hashlib.sha256).hexdigest()
-    from urllib.parse import urlencode
-
-    return urlencode({**fields, "hash": h})
-
-
-def valid(**over) -> str:
-    fields = {
-        "auth_date": str(int(time.time())),
-        "query_id": "AAE",
-        "user": json.dumps(USER, ensure_ascii=False, separators=(",", ":")),
-    }
-    fields.update(over)
-    return sign(fields)
+from tests.initdata_fixtures import TOKEN, sign, valid  # noqa: F401
 
 
 def test_подлинная_строка_даёт_пользователя():

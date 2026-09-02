@@ -19,6 +19,10 @@ from urllib.parse import parse_qsl
 # столько, сколько её срок годности (§7.1).
 MAX_AGE_SECONDS = 24 * 60 * 60
 
+# Допуск на расхождение часов клиента и сервера. Минута, как в §7.1: больше —
+# и окно для повтора украденной строки растёт без всякой пользы.
+MAX_CLOCK_SKEW_SECONDS = 60
+
 
 class InitDataError(Exception):
     """Подпись не сошлась, строка испорчена или протухла. Наружу — только 401."""
@@ -28,8 +32,15 @@ class InitDataError(Exception):
 class TelegramUser:
     telegram_id: int
     first_name: str
+    last_name: str
     username: str | None
     language_code: str | None
+
+    @property
+    def full_name(self) -> str | None:
+        """Как у бота (`tg_user.full_name`), иначе имя в аппке и в чате разойдётся."""
+        name = " ".join(p for p in (self.first_name, self.last_name) if p).strip()
+        return name or self.username or None
 
 
 def verify_init_data(
@@ -62,6 +73,11 @@ def verify_init_data(
     received = fields.pop("hash", None)
     if not received:
         raise InitDataError("нет поля hash")
+    # hash подлинной строки — hex. compare_digest на str падает TypeError, если
+    # хоть один символ вне ASCII, а TypeError мимо InitDataError уходит в 500.
+    # Четырнадцать байт заголовка не должны давать трейсбек из интернета.
+    if not received.isascii():
+        raise InitDataError("hash не ascii")
 
     data_check_string = "\n".join(f"{k}={fields[k]}" for k in sorted(fields))
     secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
@@ -86,7 +102,7 @@ def verify_init_data(
     age = current - auth_date
     if age > MAX_AGE_SECONDS:
         raise InitDataError("initData просрочена")
-    if age < -300:
+    if age < -MAX_CLOCK_SKEW_SECONDS:
         # Из будущего дальше, чем на расхождение часов, — подделка либо сломанное
         # время. И то и другое повод отказать.
         raise InitDataError("auth_date из будущего")
@@ -104,6 +120,7 @@ def verify_init_data(
     return TelegramUser(
         telegram_id=user["id"],
         first_name=str(user.get("first_name") or ""),
+        last_name=str(user.get("last_name") or ""),
         username=user.get("username") or None,
         language_code=user.get("language_code") or None,
     )

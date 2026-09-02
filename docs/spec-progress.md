@@ -8,8 +8,8 @@
 | # | Раздел | Что входит | Статус | Чем проверено |
 |---|---|---|---|---|
 | 0.1 | §5.5 | Сеть `edge`, общая для finance-web и burnfat-api | DONE | `docker network ls` на сервере |
-| 0.2 | §5.8 | Site-блок домена в Caddyfile finance, коммит в их репозиторий | IN PROGRESS | `curl -I https://nutrition-calorie.greenjola.win` → 200 |
-| 0.3 | §5.8 | `burnfat-api` в сети `edge` с алиасом, compose-оверрей | IN PROGRESS | `docker exec finance_bot-web-1 wget -qO- burnfat-api:8000/health` |
+| 0.2 | §5.8 | Site-блок домена в Caddyfile finance | IN PROGRESS (коммит на сервере локально; пуш блокирован read-only ключом) | `curl -I https://nutrition-calorie.greenjola.win` → 200 |
+| 0.3 | §5.8 | `burnfat-api` в сети `edge` с алиасом, compose-оверрей | DONE (код) | `docker exec finance_bot-web-1 wget -qO- burnfat-api:8000/health` |
 | 0.4 | §5.7 | Статика: `web/index.html`, монтирование в api, `StaticFiles` | DONE | `curl https://.../` отдаёт HTML |
 
 ## Этап MA-M0 — вход (§8.1)
@@ -40,3 +40,24 @@
 | MA-M5 Аналитика (§8.6) | TODO |
 | MA-M6 ИИ, gpt-5.1, лимит $5 (§8.7) | TODO |
 | Настройки — по частям вместе со своими этапами (§6.5, MA-INV-31) | TODO |
+
+## Ревью MA-M0 — 02.09.2026
+
+Субагент-ревьюер нашёл 14 расхождений, починены все.
+
+| # | Находка | Что сделано |
+|---|---|---|
+| 1 | Сессия БД никогда не коммитится — пользователь не сохранялся | commit/rollback в `get_session`; проверено на живой БД |
+| 2 | Не-ASCII в `hash` → 500 вместо 401 (`compare_digest` бросает TypeError) | гард `isascii()`, тест в параметризации |
+| 3 | Спека требовала исключить `signature` из HMAC — неверно | спека исправлена, D-MA-2, тест |
+| 4 | MA-INV-6: зависимость висела на обработчике, а не на роутере | `APIRouter(dependencies=[...])` |
+| 5 | Расхождение журналов про сеть `edge` | §11.2 приведён к факту |
+| 6 | Конверт ошибок §7.4 не реализован, логирования нет | `app/web/errors.py`, коды, лог хвоста хэша |
+| 7 | AC-MA-1: нет ккал за сегодня | `today` в `/api/me` через `Assistant.today` |
+| 8 | `is_active=false` не проверялся | 403 `inactive` + тест |
+| 9 | Таймзона захардкожена, имя без фамилии | из `settings`, `full_name` как у бота |
+| 10 | Допуск часов 300 с против 60 с в спеке | код приведён к спеке |
+| 11 | `/docs` и `/openapi.json` открыты | выключены, тест |
+| 12 | `COPY web` до `pip install` | перенесён после |
+| 13 | Тонкий слой протёк: дефолт цели в двух местах | через `Assistant.current_goal` |
+| 14 | Фейк отдавал `None` вместо ассистента, сессия не считала commit | настоящий `Assistant`, счётчик транзакций |

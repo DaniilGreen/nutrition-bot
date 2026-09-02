@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -22,7 +23,7 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup_logging()
     settings = Settings()
     app.state.container = Container.create(settings)
@@ -30,7 +31,16 @@ async def lifespan(app: FastAPI):
     await app.state.container.db.dispose()
 
 
-app = FastAPI(title="burnfat API", version="0.2.0", lifespan=lifespan)
+app = FastAPI(
+    title="burnfat API",
+    version="0.2.0",
+    lifespan=lifespan,
+    # Схему наружу не публикуем: MA-INV-6 знает единственное исключение — /health,
+    # а /docs выкладывал бы карту всех эндпоинтов любому желающему.
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 app.include_router(api_router, prefix="/api")
 
 

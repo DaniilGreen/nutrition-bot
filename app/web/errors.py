@@ -1,0 +1,25 @@
+"""Единый конверт ошибок API (§7.4).
+
+Тексты для пользователя одинаковые — причину отказа наружу не объясняем, иначе
+подпись подбирается по подсказкам. Различается только `code`: он нужен фронту,
+чтобы отличить «переоткрой аппку» от «сервер лежит», и нам — в логах.
+"""
+from __future__ import annotations
+
+from fastapi import HTTPException
+
+
+class ApiError(HTTPException):
+    def __init__(self, status_code: int, code: str, message: str) -> None:
+        super().__init__(
+            status_code=status_code,
+            detail={"error": {"code": code, "message": message}},
+        )
+
+
+def unauthorized(code: str) -> ApiError:
+    return ApiError(401, code, "Не удалось подтвердить вход. Переоткрой аппку из бота.")
+
+
+def forbidden(code: str, message: str) -> ApiError:
+    return ApiError(403, code, message)

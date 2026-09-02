@@ -4,25 +4,49 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pytest
 
+from app.application.assistant import Assistant
+from app.application.meal_service import MealService
+from app.application.stats_service import StatsService
+from app.application.weight_service import WeightService
 from app.config import Settings
-from tests.fakes import InMemoryUserRepo
+from tests.fakes import (
+    InMemoryBugRepo,
+    InMemoryMealRepo,
+    InMemoryProductRepo,
+    InMemoryUserRepo,
+    InMemoryWeightRepo,
+    StubNlu,
+)
+from tests.initdata_fixtures import TOKEN
 
-from tests.unit.test_initdata import TOKEN
+
+class _FakeSession:
+    """Считает commit/rollback: без этого «забыли зафиксировать транзакцию»
+    проходит мимо любого числа зелёных тестов."""
+
+    def __init__(self) -> None:
+        self.commits = 0
+        self.rollbacks = 0
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+    async def rollback(self) -> None:
+        self.rollbacks += 1
 
 
 class _FakeDb:
-    """Заменяет Database: сессия никому в этих тестах не нужна, но зависимость
-    FastAPI её запрашивает — отдаём заглушку, чтобы граф собрался."""
+    def __init__(self) -> None:
+        self.session = _FakeSession()
 
-    @staticmethod
-    def session_factory():
+    def session_factory(self):
         @asynccontextmanager
         async def _cm():
-            yield None
+            yield self.session
 
         return _cm()
 
@@ -35,12 +59,24 @@ class FakeContainer:
     settings: Settings
     users: InMemoryUserRepo
     db: _FakeDb
+    products: InMemoryProductRepo = field(default_factory=InMemoryProductRepo)
+    meals: InMemoryMealRepo = field(default_factory=InMemoryMealRepo)
+    weights: InMemoryWeightRepo = field(default_factory=InMemoryWeightRepo)
+    bugs: InMemoryBugRepo = field(default_factory=InMemoryBugRepo)
 
     def assistant_for(self, session):
-        # Сигнатура как у настоящего Container: (assistant, users). Ассистент в
-        # тестах входа не участвует — там, где он понадобится, фикстура
-        # расширится, а не подменится.
-        return None, self.users
+        """Сигнатура та же, что у настоящего Container: (Assistant, UserRepo).
+        Настоящий ассистент, а не None — иначе первый же эндпоинт, который его
+        дёрнет, получит AttributeError вместо понятного отказа."""
+        meal = MealService(self.products, self.meals)
+        weight = WeightService(self.weights)
+        stats = StatsService(
+            self.meals, self.users, self.settings.default_goal()
+        )
+        assistant = Assistant(
+            StubNlu(), self.products, meal, weight, stats, None, self.bugs, None
+        )
+        return assistant, self.users
 
 
 @pytest.fixture

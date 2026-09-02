@@ -13,10 +13,12 @@ RUN apt-get update \
 
 COPY pyproject.toml ./
 COPY app ./app
-COPY web ./web
 COPY migrations ./migrations
 COPY alembic.ini ./
 
 RUN pip install --no-cache-dir -e ".[dev]"
+# Фронт — после установки зависимостей: правка HTML не должна
+# инвалидировать слой с пакетами (§5.7).
+COPY web ./web
 
 CMD ["python", "-m", "app.main_bot"]
