@@ -51,6 +51,7 @@ class InMemoryProductRepo:
     def __init__(self) -> None:
         self._by_key: dict[str, Product] = {}
         self._seq = 0
+        self._uses: dict[int, int] = {}
 
     async def get_by_key(self, canonical_key: str) -> Product | None:
         return self._by_key.get(canonical_key)
@@ -75,6 +76,33 @@ class InMemoryProductRepo:
 
     async def list_by_category(self, category: str) -> list[Product]:
         return [p for p in self._by_key.values() if p.category == category]
+
+    async def list_page(
+        self, *, offset: int, limit: int, query: str | None = None
+    ) -> tuple[list[Product], int]:
+        xs = list(self._by_key.values())
+        if query:
+            q = query.lower()
+            xs = [p for p in xs if q in p.display_name.lower() or q in p.canonical_key.lower()]
+        xs.sort(key=lambda p: p.display_name)
+        return xs[offset : offset + limit], len(xs)
+
+    async def usage_counts(self, product_ids: list[int]) -> dict[int, int]:
+        # Фейк каталога не знает про приёмы — счётчик подставляется тестом
+        # через `set_usage`, иначе он всегда нулевой.
+        return {i: self._uses.get(i, 0) for i in product_ids}
+
+    def set_usage(self, product_id: int, count: int) -> None:
+        self._uses[product_id] = count
+
+    async def merge(self, winner_id: int, loser_ids: list[int]) -> int:
+        losers = [i for i in loser_ids if i != winner_id]
+        moved = sum(self._uses.pop(i, 0) for i in losers)
+        self._uses[winner_id] = self._uses.get(winner_id, 0) + moved
+        for key, prod in list(self._by_key.items()):
+            if prod.id in losers:
+                del self._by_key[key]
+        return moved
 
     async def list_estimated(self, limit: int) -> list[Product]:
         # Новейшие первыми — как в SQL-репозитории (order_by created_at desc). Порядок вставки

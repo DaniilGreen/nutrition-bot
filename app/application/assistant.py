@@ -35,6 +35,7 @@ from app.application.results import (
 from app.application.stats_service import StatsService
 from app.application.weight_service import WeightService
 from app.domain.consensus import confidence_from_cv, median_cv
+from app.domain.duplicates import Candidate, group
 from app.domain.goals import Goal, Remaining, in_goal, remaining
 from app.domain.nutrition import atwater_suspect
 from app.domain.plausibility import clamp_density, is_alcoholic
@@ -253,8 +254,43 @@ class Assistant:
         clean = name.strip()[:255]
         return await self._products.rename(product_id, clean) if clean else None
 
+    async def catalog_page(
+        self, *, offset: int = 0, limit: int = 20, query: str | None = None
+    ) -> tuple[list[Product], int, dict[int, int]]:
+        """Страница каталога + сколько раз каждый продукт съеден (§7.2)."""
+        items, total = await self._products.list_page(offset=offset, limit=limit, query=query)
+        uses = await self._products.usage_counts([p.id for p in items if p.id])
+        return items, total, uses
+
+    async def usage_of(self, product_id: int) -> int:
+        """Сколько раз продукт съеден. Карточке нужно одно число, а не вся страница."""
+        counts = await self._products.usage_counts([product_id])
+        return counts.get(product_id, 0)
+
+    async def duplicate_groups(self) -> list[list[Product]]:
+        """Группы дублей каталога. Не сливает — только показывает: разброс плотности
+        внутри группы может быть таким, что слияние заметно двинет цифры (D-32)."""
+        items = await self._products.list_all()
+        uses = await self._products.usage_counts([p.id for p in items if p.id])
+        rows = [
+            Candidate(
+                id=p.id, canonical_key=p.canonical_key, display_name=p.display_name,
+                source=p.source, kcal_per_100g=p.density.kcal_per_100g,
+                uses=uses.get(p.id, 0),
+            )
+            for p in items
+            if p.id is not None
+        ]
+        by_id = {p.id: p for p in items}
+        return [[by_id[c.id] for c in g] for g in group(rows)]
+
+    async def merge_products(self, winner_id: int, loser_ids: list[int]) -> int:
+        """Слить дубли. История не движется: перепривязывается только связь (INV-3)."""
+        return await self._products.merge(winner_id, loser_ids)
+
     async def fix_product_density(self, product_id: int, density: Density) -> Product | None:
-        # INV-11.2: ручную правку каталога тоже отсекаем по границам (защита от опечатки «310 г белка»)
+        # INV-11.2: ручную правку каталога тоже отсекаем по границам
+        # (защита от опечатки «310 г белка»)
         return await self._products.update_density(product_id, clamp_density(density))
 
     async def _handle_meal(

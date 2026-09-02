@@ -19,6 +19,8 @@ from app.application.results import (
     VariantClarificationNeeded,
     WeightLogged,
 )
+from app.domain.duplicates import SAFE_SPREAD, Candidate, spread, winner
+from app.domain.value_objects import Density
 from app.web.deps import CurrentAssistant, CurrentUser, current_user
 from app.web.errors import bad_request, not_found, unavailable
 from app.web.schemas import (
@@ -26,6 +28,7 @@ from app.web.schemas import (
     goal_json,
     logged_json,
     meal_json,
+    product_json,
     remaining_json,
     user_json,
 )
@@ -181,3 +184,129 @@ def _result_json(
 
     reason = getattr(result, "reason", None) or "Не понял, что записать."
     return {"kind": "unknown", "message": reason}
+
+@router.get("/products")
+async def products(
+    user: CurrentUser, assistant: CurrentAssistant,
+    q: str | None = None, offset: int = 0, limit: int = 20,
+) -> dict[str, Any]:
+    """Каталог страницами: полный список нельзя — их больше двух сотен (§7.2)."""
+    if offset < 0 or limit < 1 or limit > 100:
+        raise bad_request("bad_paging", "Неверные параметры страницы.")
+    items, total, uses = await assistant.catalog_page(
+        offset=offset, limit=limit, query=(q or "").strip() or None
+    )
+    return {
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "items": [product_json(p, uses.get(p.id or 0, 0)) for p in items],
+    }
+
+
+@router.get("/products/{product_id}")
+async def product(
+    product_id: int, user: CurrentUser, assistant: CurrentAssistant
+) -> dict[str, Any]:
+    p = await assistant.get_product(product_id)
+    if p is None:
+        raise not_found("product_not_found", "Продукт не найден.")
+    counts = await assistant.usage_of(product_id)
+    return {"product": product_json(p, counts)}
+
+
+@router.patch("/products/{product_id}")
+async def edit_product(
+    product_id: int, body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant
+) -> dict[str, Any]:
+    """Правка каталога: имя и/или плотность.
+
+    Меняем плотность — меняем будущее, но не прошлое: снапшоты в meal_items
+    остаются как были (INV-3). Именно поэтому правка безопасна.
+    """
+    updated = None
+    if "name" in body:
+        name = str(body["name"] or "").strip()
+        if not 2 <= len(name) <= 120:
+            raise bad_request("bad_name", "Имя от 2 до 120 символов.")
+        updated = await assistant.rename_product(product_id, name)
+
+    macro_keys = ("kcal_per_100g", "protein_per_100g", "fat_per_100g", "carb_per_100g")
+    if any(k in body for k in macro_keys):
+        try:
+            density = Density(
+                kcal_per_100g=float(body["kcal_per_100g"]),
+                protein_per_100g=float(body["protein_per_100g"]),
+                fat_per_100g=float(body["fat_per_100g"]),
+                carb_per_100g=float(body["carb_per_100g"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise bad_request("bad_density", "Нужны все четыре числа КБЖУ.") from exc
+        if not _density_sane(density):
+            raise bad_request("density_out_of_range", "Числа вне разумных пределов.")
+        updated = await assistant.fix_product_density(product_id, density)
+
+    if updated is None:
+        raise not_found("product_not_found", "Продукт не найден или менять нечего.")
+    return {"product": product_json(updated, 0)}
+
+
+@router.get("/products/duplicates/groups")
+async def duplicates(user: CurrentUser, assistant: CurrentAssistant) -> dict[str, Any]:
+    """Группы дублей. Автоматически не сливаем: где плотности разошлись, слияние
+    заметно двинуло бы цифры — решает человек (D-32)."""
+    groups = await assistant.duplicate_groups()
+    out = []
+    for g in groups:
+        rows = [
+            Candidate(
+                id=p.id or 0, canonical_key=p.canonical_key, display_name=p.display_name,
+                source=p.source, kcal_per_100g=p.density.kcal_per_100g, uses=0,
+            )
+            for p in g
+        ]
+        out.append({
+            "spread": round(spread(rows), 3),
+            "safe": spread(rows) < SAFE_SPREAD,
+            "suggested_winner": winner(rows).id,
+            "items": [product_json(p, 0) for p in g],
+        })
+    return {"groups": out}
+
+
+@router.post("/products/merge")
+async def merge(
+    body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant
+) -> dict[str, Any]:
+    """Слить дубли в одного.
+
+    Необратимо: проигравшие строки каталога удаляются, вернуть их можно только
+    из бэкапа. Поэтому выжившего называет клиент явно — угадывать нельзя.
+    """
+    try:
+        winner_id = int(body["winner_id"])
+        loser_ids = [int(x) for x in body["loser_ids"]]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise bad_request("bad_merge", "Нужны winner_id и loser_ids.") from exc
+    if not loser_ids:
+        raise bad_request("bad_merge", "Некого сливать.")
+    if winner_id in loser_ids:
+        raise bad_request("bad_merge", "Выживший не может быть в списке на слияние.")
+    if await assistant.get_product(winner_id) is None:
+        raise not_found("product_not_found", "Продукт-выживший не найден.")
+    moved = await assistant.merge_products(winner_id, loser_ids)
+    return {"merged": len(loser_ids), "items_repointed": moved}
+
+
+def _density_sane(d: Density) -> bool:
+    """Границы физики, а не вкуса: 100 г не бывают отрицательными и не бывают
+    калорийнее чистого жира (900 ккал).
+
+    Домен и так зажимает значения (`clamp_density`, INV-11.2) — но зажать «310 г
+    белка» до 100 значит молча записать не то, что человек ввёл. На границе
+    доверия отказ понятнее тихой правки, поэтому проверка тут дублирует зажим
+    намеренно.
+    """
+    if not 0 <= d.kcal_per_100g <= 900:
+        return False
+    return all(0 <= v <= 100 for v in (d.protein_per_100g, d.fat_per_100g, d.carb_per_100g))

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.entities import Meal, MealItem, Product, User, WeightLog
@@ -229,6 +229,59 @@ class SqlProductRepo:
         orm.display_name = name
         await self._s.flush()
         return _product_to_domain(orm)
+
+    @staticmethod
+    def _like(query: str) -> str:
+        """Экранируем %/_ — иначе ввод «100%» стал бы маской «что угодно»."""
+        esc = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return f"%{esc}%"
+
+    async def list_page(
+        self, *, offset: int, limit: int, query: str | None = None
+    ) -> tuple[list[Product], int]:
+        stmt = select(ProductORM)
+        count_stmt = select(func.count()).select_from(ProductORM)
+        if query:
+            pattern = self._like(query)
+            cond = ProductORM.display_name.ilike(pattern, escape="\\") | (
+                ProductORM.canonical_key.ilike(pattern, escape="\\")
+            )
+            stmt = stmt.where(cond)
+            count_stmt = count_stmt.where(cond)
+        # Сортировка по имени, а не по id: каталог листают глазами, а не по времени пиннинга.
+        stmt = stmt.order_by(ProductORM.display_name).offset(offset).limit(limit)
+        rows = (await self._s.execute(stmt)).scalars().all()
+        total = (await self._s.execute(count_stmt)).scalar_one()
+        return [_product_to_domain(o) for o in rows], int(total)
+
+    async def usage_counts(self, product_ids: list[int]) -> dict[int, int]:
+        if not product_ids:
+            return {}
+        res = await self._s.execute(
+            select(MealItemORM.product_id, func.count())
+            .where(MealItemORM.product_id.in_(product_ids))
+            .group_by(MealItemORM.product_id)
+        )
+        return {int(pid): int(cnt) for pid, cnt in res.all() if pid is not None}
+
+    async def merge(self, winner_id: int, loser_ids: list[int]) -> int:
+        """Перепривязать историю на выжившего и удалить проигравших.
+
+        В UPDATE входит ТОЛЬКО product_id. Снапшот (kcal/protein/fat/carb/grams/
+        is_estimate) не трогается ни одной строкой — иначе поехала бы вся история
+        (INV-3), а слияние каталога не имеет права двигать съеденное вчера.
+        """
+        losers = [i for i in loser_ids if i != winner_id]
+        if not losers:
+            return 0
+        res = await self._s.execute(
+            update(MealItemORM)
+            .where(MealItemORM.product_id.in_(losers))
+            .values(product_id=winner_id)
+        )
+        await self._s.execute(delete(ProductORM).where(ProductORM.id.in_(losers)))
+        await self._s.flush()
+        return int(res.rowcount or 0)
 
 
 class SqlMealRepo:

@@ -9,7 +9,8 @@
   var tg = window.Telegram && window.Telegram.WebApp;
   var root = document.getElementById('screen');
   var nav = document.getElementById('tabs');
-  var state = { tab: 'day', daysAgo: 0, open: {} };
+  var state = { tab: 'day', daysAgo: 0, open: {},
+                cat: { q: '', offset: 0, view: 'list', product: null, dup: null } };
 
   // Проверка идёт ДО регистрации слушателей: иначе на экране «открой из
   // Telegram» остаются живые обработчики, которые падают с невнятной ошибкой.
@@ -206,8 +207,122 @@
       .catch(failure);
   }
 
+  /* ── Продукты ────────────────────────────────────────────────────────── */
+
+  var PAGE = 20;
+
+  function renderCatalog() {
+    var c = state.cat;
+    if (c.view === 'product') return renderProduct();
+    if (c.view === 'dups') return renderDups();
+    document.getElementById('title').textContent = 'Продукты';
+    loading();
+    api('/api/products?limit=' + PAGE + '&offset=' + c.offset +
+        (c.q ? '&q=' + encodeURIComponent(c.q) : ''))
+      .then(function (d) {
+        var rows = d.items.map(function (p) {
+          var est = p.source === 'llm'
+            ? '<span class="badge">оценка</span>'
+            : (p.source === 'label' ? '<span class="badge">с этикетки</span>' : '');
+          return '<button class="item" data-product="' + p.id + '">' +
+            '<span class="nm">' + esc(p.name) + est + '</span>' +
+            '<span class="num kk">' + n(p.kcal_per_100g) + ' ккал</span></button>';
+        }).join('') || '<div class="state">Ничего не нашлось.</div>';
+        var from = d.total ? c.offset + 1 : 0;
+        var to = Math.min(c.offset + PAGE, d.total);
+        show(
+          '<div class="search">' +
+            '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--text-faint)" ' +
+              'stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/>' +
+              '<path d="M20 20l-3.5-3.5" stroke-linecap="round"/></svg>' +
+            '<input id="q" type="search" placeholder="Найти продукт" value="' + esc(c.q) + '">' +
+          '</div>' +
+          '<section class="card"><div class="plist">' + rows + '</div></section>' +
+          '<div class="cap" style="text-align:center;margin-top:var(--s-3)">' +
+            (d.total ? from + '–' + to + ' из ' + d.total : 'пусто') + '</div>' +
+          '<div class="pager">' +
+            '<button id="prev"' + (c.offset ? '' : ' disabled') + '>Назад</button>' +
+            '<button id="dups">Найти дубли</button>' +
+            '<button id="next"' + (to < d.total ? '' : ' disabled') + '>Вперёд</button>' +
+          '</div>');
+        var q = document.getElementById('q');
+        if (state.keepFocus) { q.focus(); q.setSelectionRange(q.value.length, q.value.length);
+                               state.keepFocus = false; }
+      })
+      .catch(failure);
+  }
+
+  function renderProduct() {
+    loading();
+    api('/api/products/' + state.cat.product).then(function (d) {
+      var p = d.product;
+      document.getElementById('title').textContent = 'Продукт';
+      var why = { curated: 'выверено вручную', label: 'с этикетки',
+                  manual: 'исправлено тобой', llm: 'оценка модели' }[p.source] || p.source;
+      show('<section class="card">' +
+        '<input id="pname" value="' + esc(p.name) + '" ' +
+          'style="width:100%;background:var(--surface-2);border:1px solid var(--surface-3);' +
+          'border-radius:var(--r-sm);color:var(--text);font:inherit;font-size:var(--f-body);' +
+          'padding:11px;outline:none">' +
+        '<div class="mic" style="margin-top:var(--s-2)">' + esc(why) +
+          ' · съедено ' + n(p.uses) + ' раз</div>' +
+        '<div style="margin-top:var(--s-4)">' +
+          field('pk', 'Ккал / 100 г', p.kcal_per_100g) +
+          field('pp', 'Белок, г', p.protein_per_100g) +
+          field('pf', 'Жир, г', p.fat_per_100g) +
+          field('pc', 'Углеводы, г', p.carb_per_100g) +
+        '</div>' +
+        '<button class="primary" id="save">Сохранить</button>' +
+        '<div class="mic" style="margin-top:var(--s-3);line-height:1.5">' +
+          'Правка меняет будущие записи. Уже съеденное не двинется — в истории ' +
+          'хранится снимок на момент записи.</div>' +
+        '</section>' +
+        '<div class="pager"><button id="toList">К списку</button></div>');
+    }).catch(failure);
+  }
+
+  function field(id, label, value) {
+    return '<div class="field"><label for="' + id + '">' + esc(label) + '</label>' +
+      '<input id="' + id + '" class="num" type="number" step="0.1" inputmode="decimal" ' +
+      'value="' + esc(value) + '"></div>';
+  }
+
+  function renderDups() {
+    loading();
+    api('/api/products/duplicates/groups').then(function (d) {
+      document.getElementById('title').textContent = 'Дубли';
+      if (!d.groups.length) {
+        show('<section class="card"><div class="state">Дублей не нашлось.</div></section>' +
+             '<div class="pager"><button id="toList">К списку</button></div>');
+        return;
+      }
+      state.cat.dup = state.cat.dup || {};
+      var blocks = d.groups.map(function (g, gi) {
+        var chosen = state.cat.dup[gi] == null ? g.suggested_winner : state.cat.dup[gi];
+        var rows = g.items.map(function (p) {
+          return '<div class="pick' + (p.id === chosen ? ' on' : '') +
+            '" data-group="' + gi + '" data-pick="' + p.id + '">' +
+            '<span class="dot"></span>' +
+            '<span style="flex-grow:1;min-width:0"><span style="font-size:var(--f-body-s)">' +
+              esc(p.name) + '</span>' +
+              '<div class="mic">' + n(p.kcal_per_100g) + ' ккал · ' + esc(p.source) + '</div></span>' +
+            '</div>';
+        }).join('');
+        var warn = g.safe ? '' :
+          '<div class="mic" style="color:var(--warn);margin-top:var(--s-2);line-height:1.5">' +
+          'Плотности разошлись на ' + n(g.spread * 100) + '%. Слияние заметно двинет ' +
+          'будущие записи — проверь, точно ли это одна еда.</div>';
+        return '<section class="card" style="margin-top:var(--s-3)">' +
+          '<div class="cap" style="margin-bottom:var(--s-2)">Оставить одну запись</div>' +
+          rows + warn +
+          '<button class="primary" data-merge="' + gi + '">Слить в выбранную</button></section>';
+      }).join('');
+      show(blocks + '<div class="pager"><button id="toList">К списку</button></div>');
+      state.cat._groups = d.groups;
+    }).catch(failure);
+  }
+
   var SOON = {
-    cat: ['Продукты', 'Каталог с поиском и правкой — следующий этап.'],
     tot: ['Итоги', 'Графики и сводки за период — следующий этап.'],
     ai:  ['AI', 'Разбор своих данных — последний этап.']
   };
@@ -215,6 +330,7 @@
   function render() {
     document.getElementById('nav-day').classList.toggle('hidden', state.tab !== 'day');
     if (state.tab === 'day') return renderDay();
+    if (state.tab === 'cat') return renderCatalog();
     var s = SOON[state.tab];
     document.getElementById('title').textContent = s[0];
     show('<section class="card"><div class="state">' + esc(s[1]) + '</div></section>');
@@ -390,6 +506,22 @@
         .then(function () { state.justLogged = null; toast('Отменил.'); renderDay(); })
         .catch(function (err) { toast(err.message, true); renderDay(); });
     }
+    /* ── каталог ─────────────────────────────────────────────────────── */
+    if (b.dataset.product) {
+      state.cat.view = 'product'; state.cat.product = b.dataset.product;
+      return renderCatalog();
+    }
+    if (b.id === 'toList') {
+      state.cat.view = 'list'; state.cat.product = null; state.cat.dup = null;
+      return renderCatalog();
+    }
+    if (b.id === 'dups') { state.cat.view = 'dups'; state.cat.dup = null; return renderCatalog(); }
+    if (b.id === 'prev') { state.cat.offset = Math.max(0, state.cat.offset - PAGE);
+                           return renderCatalog(); }
+    if (b.id === 'next') { state.cat.offset += PAGE; return renderCatalog(); }
+    if (b.id === 'save') return saveProduct();
+    if (b.dataset.merge != null) return doMerge(Number(b.dataset.merge));
+
     if (b.hasAttribute('data-answer')) {
       if (b.dataset.cancel) { state.clarify = null; return renderDay(); }
       var c = state.clarify;
@@ -401,12 +533,72 @@
     }
   });
 
+  root.addEventListener('click', function (e) {
+    var pick = e.target.closest('.pick');
+    if (!pick) return;
+    state.cat.dup = state.cat.dup || {};
+    state.cat.dup[pick.dataset.group] = Number(pick.dataset.pick);
+    renderCatalog();
+  });
+
+  function saveProduct() {
+    var body = {
+      name: document.getElementById('pname').value.trim(),
+      kcal_per_100g: Number(document.getElementById('pk').value),
+      protein_per_100g: Number(document.getElementById('pp').value),
+      fat_per_100g: Number(document.getElementById('pf').value),
+      carb_per_100g: Number(document.getElementById('pc').value)
+    };
+    loading();
+    send('/api/products/' + state.cat.product, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function () {
+      toast('Сохранил. Прошлые записи не изменились.');
+      state.cat.view = 'list';
+      renderCatalog();
+    }).catch(function (e) { toast(e.message, true); renderCatalog(); });
+  }
+
+  function doMerge(gi) {
+    var g = state.cat._groups[gi];
+    var chosen = (state.cat.dup && state.cat.dup[gi]) || g.suggested_winner;
+    var losers = g.items.map(function (p) { return p.id; })
+                        .filter(function (id) { return id !== chosen; });
+    if (!losers.length) return;
+    /* Необратимо: проигравшие строки каталога исчезают. Спрашиваем один раз,
+       но спрашиваем — вернуть их можно только из бэкапа. */
+    if (!window.confirm('Слить ' + losers.length + ' запис' +
+        (losers.length === 1 ? 'ь' : 'и') + ' в выбранную? Отменить будет нельзя.')) return;
+    loading();
+    send('/api/products/merge', {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ winner_id: chosen, loser_ids: losers })
+    }).then(function (r) {
+      toast('Слил. Перепривязано записей: ' + r.items_repointed + '.');
+      state.cat.dup = null;
+      renderCatalog();
+    }).catch(function (e) { toast(e.message, true); renderCatalog(); });
+  }
+
+  var searchTimer = null;
+
   root.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && e.target.id === 'say') { e.preventDefault(); submitText(); }
   });
 
   root.addEventListener('input', function (e) {
     if (e.target.id === 'say') state.text = e.target.value;
+    if (e.target.id === 'q') {
+      /* Ждём паузу в наборе: запрос на каждый символ — это 15 запросов
+         на слово и мигающий список. */
+      state.cat.q = e.target.value;
+      state.cat.offset = 0;
+      state.keepFocus = true;
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(renderCatalog, 300);
+    }
   });
 
   document.getElementById('back').addEventListener('click', function () {

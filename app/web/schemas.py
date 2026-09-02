@@ -97,3 +97,22 @@ def clarify_json(result: Any, draft_id: str) -> dict[str, Any]:
         "item_name": result.item_name,
         "options": list(getattr(result, "options", []) or []),
     }
+
+
+def product_json(p: Any, uses: int) -> dict[str, Any]:
+    """Карточка продукта. `source` наружу нужен: он объясняет, почему цифре
+    можно верить — этикетка это не то же, что оценка модели."""
+    return {
+        "id": p.id,
+        "name": p.display_name,
+        "key": p.canonical_key,
+        "category": p.category,
+        "kcal_per_100g": p.density.kcal_per_100g,
+        "protein_per_100g": p.density.protein_per_100g,
+        "fat_per_100g": p.density.fat_per_100g,
+        "carb_per_100g": p.density.carb_per_100g,
+        "unit_weight_g": p.unit_weight_g,
+        "default_portion_g": p.default_portion_g,
+        "source": p.source,
+        "uses": uses,
+    }
