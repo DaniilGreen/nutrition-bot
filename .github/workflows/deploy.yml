@@ -19,6 +19,23 @@ jobs:
   # БД и LLM не нужны — всё на in-memory фейках, прогон ~3 сек.
   test:
     runs-on: ubuntu-latest
+    # Postgres нужен ради tests/sql: экранирование `%` в поиске, percentile_cont
+    # и перепривязка истории при слиянии — постгресовые по существу, и фейк
+    # воспроизводит их НЕ так. Без базы этот набор молча пропускается, то есть
+    # самый рискованный код остаётся непроверенным.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: burnfat
+          POSTGRES_PASSWORD: burnfat
+          POSTGRES_DB: burnfat_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U burnfat"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://burnfat:burnfat@localhost:5432/burnfat_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,8 +47,14 @@ jobs:
       # Сборки фронта нет и не будет (§5.7, MA-INV-14) — но файл должен существовать.
       # Без него StaticFiles не смонтируется, аппка отдаст 404 на корень, а бот при этом
       # будет жив: деплой прошёл бы «зелёным» с мёртвой аппкой.
-      - name: web присутствует
-        run: test -f web/index.html
+      - name: web присутствует и разбирается
+        run: |
+          test -f web/index.html
+          test -f web/app.js
+          test -f web/app.css
+          # Синтаксис фронта — в гейт: сломанный app.js кладёт аппку целиком,
+          # а бот при этом жив, и деплой выглядел бы зелёным.
+          node --check web/app.js
 
   deploy:
     needs: test
