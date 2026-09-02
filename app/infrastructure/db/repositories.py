@@ -31,6 +31,7 @@ def _user_to_domain(o: UserORM) -> User:
         role=o.role,
         is_active=o.is_active,
         onboarded_at=o.onboarded_at,
+        ui_prefs=dict(o.ui_prefs or {}),
     )
 
 
@@ -129,6 +130,14 @@ class SqlUserRepo:
         if orm is not None and orm.onboarded_at is None:
             orm.onboarded_at = datetime.now(UTC)  # реальный datetime, не SQL-выражение
             await self._s.flush()
+
+    async def set_prefs(self, user_id: int, prefs: dict) -> None:
+        orm = await self._s.get(UserORM, user_id)
+        if orm is None:
+            return
+        orm.ui_prefs = prefs
+        await self._s.flush()
+
 
     async def list_active(self) -> list[User]:
         res = await self._s.execute(select(UserORM).where(UserORM.is_active.is_(True)))

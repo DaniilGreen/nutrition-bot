@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -49,6 +50,19 @@ app = FastAPI(
     openapi_url=None,
 )
 app.include_router(api_router, prefix="/api")
+
+
+@app.exception_handler(RequestValidationError)
+async def malformed(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Кривое тело запроса отдаётся тем же конвертом, что и остальные ошибки (§7.4).
+
+    По умолчанию FastAPI шлёт 422 со своей схемой — фронту пришлось бы разбирать
+    два разных формата ошибок, и он разобрал бы неправильно.
+    """
+    return JSONResponse(
+        status_code=400,
+        content={"error": {"code": "malformed_body", "message": "Запрос не разобран."}},
+    )
 
 
 @app.exception_handler(Exception)

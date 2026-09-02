@@ -453,6 +453,87 @@
   }
 
 
+
+  /* ── Настройки: шестерёнка в шапке, не пятая вкладка (§6.5) ──────────── */
+
+  var HEROES = [
+    ['bars', 'Два «осталось»', 'Крупно то, что ещё можно.'],
+    ['rings', 'Кольца и список', 'Все четыре макроса разом.'],
+    ['kcal', 'Только калории', 'Минимум, белок в подписи.']
+  ];
+
+  function renderSettings() {
+    document.getElementById('title').textContent = 'Настройки';
+    loading();
+    api('/api/settings').then(function (d) {
+      state.settings = d;
+      var p = d.prefs, g = d.goal;
+      show(
+        group('Вид',
+          HEROES.map(function (h) {
+            return '<div class="pick' + (p.hero === h[0] ? ' on' : '') +
+              '" data-hero="' + h[0] + '"><span class="dot"></span>' +
+              '<span style="flex-grow:1"><span style="font-size:var(--f-body-s)">' +
+              esc(h[1]) + '</span><div class="mic">' + esc(h[2]) + '</div></span></div>';
+          }).join(''),
+          'Меняется только вид. Записи, цели и подсчёт не трогаются.') +
+
+        group('Цели',
+          field('gk', 'Калорий в день', g.kcal) +
+          field('gp', 'Белок, г', g.protein_g) +
+          field('gf', 'Жир, г', g.fat_g) +
+          field('gc', 'Углеводы, г', g.carb_g) +
+          '<button class="primary" id="saveGoal">Сохранить цели</button>',
+          'Белок можно задать на килограмм веса — тогда цель поедет вслед за весом, ' +
+          'а не устареет в тот момент, когда ты худеешь.') +
+
+        group('Белок на килограмм',
+          field('gpk', 'г на кг веса', 2) +
+          '<button class="primary" id="saveKg">Пересчитать белок</button>',
+          'Нужен хотя бы один замер веса — иначе умножать не на что.') +
+
+        group('День',
+          '<div class="field"><label for="tz">Часовой пояс</label>' +
+          '<input id="tz" style="width:150px;text-align:left" value="' + esc(d.timezone) + '"></div>' +
+          '<button class="primary" id="saveTz">Сохранить</button>',
+          'Часовой пояс режет сутки: сменив его, ты двигаешь границы всех дней задним числом.') +
+
+        group('Ассистент',
+          row('Модель', d.coach.model) +
+          row('Потрачено за месяц', '$' + n(d.coach.spent_usd, 2) + ' из $' + n(d.coach.limit_usd, 2)),
+          d.coach.available
+            ? 'Лимит жёсткий: при исчерпании ассистент отвечает отказом, а не молча хуже.'
+            : 'Ключ не настроен — вкладка AI недоступна.') +
+
+        '<div class="pager"><button id="toDay">Назад</button></div>');
+    }).catch(failure);
+  }
+
+  function group(title, body, note) {
+    return '<div style="margin-top:var(--s-4)">' +
+      '<div class="mic" style="margin:0 var(--s-2) var(--s-2);text-transform:uppercase;' +
+      'letter-spacing:.4px;color:var(--text-faint)">' + esc(title) + '</div>' +
+      '<section class="card">' + body + '</section>' +
+      (note ? '<div class="mic" style="margin-top:var(--s-2);padding:0 var(--s-2);' +
+              'line-height:1.5;color:var(--text-faint)">' + esc(note) + '</div>' : '') +
+      '</div>';
+  }
+
+  function row(label, value) {
+    return '<div class="field"><label>' + esc(label) + '</label>' +
+      '<span class="num" style="font-size:var(--f-body-s);color:var(--text-muted)">' +
+      esc(value) + '</span></div>';
+  }
+
+  function patch(path, body, ok) {
+    return send(path, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function () { toast(ok); renderSettings(); })
+      .catch(function (e) { toast(e.message, true); });
+  }
+
   /* ── AI: вопросы по своим данным (§8.7) ──────────────────────────────── */
 
   var SUGGESTS = [
@@ -514,6 +595,8 @@
 
   function render() {
     document.getElementById('nav-day').classList.toggle('hidden', state.tab !== 'day');
+    document.getElementById('gear').setAttribute('aria-pressed', state.tab === 'set');
+    if (state.tab === 'set') return renderSettings();
     if (state.tab === 'day') return renderDay();
     if (state.tab === 'cat') return renderCatalog();
     if (state.tab === 'tot') return renderTotals();
@@ -722,6 +805,17 @@
                            return renderCatalog(); }
     if (b.id === 'next') { state.cat.offset += PAGE; return renderCatalog(); }
     if (b.id === 'save') return saveProduct();
+    if (b.id === 'toDay') { state.tab = 'day'; return render(); }
+    if (b.id === 'saveGoal') return patch('/api/settings/goal', {
+      kcal: Number(document.getElementById('gk').value),
+      protein_g: Number(document.getElementById('gp').value),
+      fat_g: Number(document.getElementById('gf').value),
+      carb_g: Number(document.getElementById('gc').value)
+    }, 'Цели сохранены.');
+    if (b.id === 'saveKg') return patch('/api/settings/goal',
+      { protein_per_kg: Number(document.getElementById('gpk').value) }, 'Белок пересчитан.');
+    if (b.id === 'saveTz') return patch('/api/settings/timezone',
+      { timezone: document.getElementById('tz').value.trim() }, 'Часовой пояс сохранён.');
     if (b.dataset.period) { state.period = Number(b.dataset.period); return renderTotals(); }
     if (b.dataset.ask) return askCoach(b.dataset.ask);
     if (b.id === 'send') {
@@ -745,6 +839,9 @@
   root.addEventListener('click', function (e) {
     var pick = e.target.closest('.pick');
     if (!pick) return;
+    if (pick.dataset.hero) {
+      return patch('/api/settings/prefs', { hero: pick.dataset.hero }, 'Вид панели изменён.');
+    }
     state.cat.dup = state.cat.dup || {};
     state.cat.dup[pick.dataset.group] = Number(pick.dataset.pick);
     renderCatalog();
@@ -813,6 +910,11 @@
       clearTimeout(searchTimer);
       searchTimer = setTimeout(renderCatalog, 300);
     }
+  });
+
+  document.getElementById('gear').addEventListener('click', function () {
+    state.tab = state.tab === 'set' ? 'day' : 'set';
+    render();
   });
 
   document.getElementById('back').addEventListener('click', function () {

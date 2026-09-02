@@ -13,6 +13,7 @@ from sqlalchemy import (
     Integer,
     String,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -36,6 +37,9 @@ class UserORM(Base):
     onboarded_at: Mapped[datetime | None] = mapped_column(  # прошёл ли первый визард (FR-24)
         DateTime(timezone=True), nullable=True
     )
+    # Настройки оформления (§6.5). Одной колонкой, а не восемью: они не влияют
+    # на данные, только на то, как эти данные нарисованы.
+    ui_prefs: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"), default=dict)
 
     goal: Mapped[UserGoalORM | None] = relationship(
         back_populates="user", uselist=False, cascade="all, delete-orphan"

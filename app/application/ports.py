@@ -51,6 +51,11 @@ class UserRepo(Protocol):
 
     async def set_onboarded(self, user_id: int) -> None: ...
 
+    async def set_prefs(self, user_id: int, prefs: dict) -> None:
+        """Сохранить настройки оформления целиком (§6.5). Частичность решается
+        выше — домен собирает итоговый набор, репозиторий его просто кладёт."""
+        ...
+
     async def list_active(self) -> list[User]: ...
 
 

@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.domain.value_objects import Density, Macros
@@ -22,6 +22,7 @@ class User:
     is_active: bool = True
     id: int | None = None
     onboarded_at: datetime | None = None  # None → первый запуск, показать визард (FR-24)
+    ui_prefs: dict = field(default_factory=dict)  # оформление, §6.5
 
 
 @dataclass

@@ -76,6 +76,11 @@ class FakeContainer:
     coach_port: object = None
     spend: object = None
 
+    def spend_for(self, session):
+        if self.spend is None:
+            self.spend = InMemorySpendRepo()
+        return self.spend
+
     def coach_for(self, session):
         from app.application.coach import Coach
         from app.application.stats_service import StatsService

@@ -114,6 +114,11 @@ class Container:
             coach_port=build_coach_port(settings),
         )
 
+    def spend_for(self, session: AsyncSession) -> SqlSpendRepo:
+        """Учёт трат отдельным входом: экрану настроек нужен только счётчик,
+        собирать ради него весь Assistant незачем."""
+        return SqlSpendRepo(session)
+
     def coach_for(self, session: AsyncSession) -> Coach | None:
         """Ассистент вкладки AI. None — если ключа нет."""
         if self.coach_port is None:

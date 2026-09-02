@@ -43,6 +43,10 @@ class InMemoryUserRepo:
         if user_id in self._users and self._users[user_id].onboarded_at is None:
             self._users[user_id].onboarded_at = datetime(2026, 1, 1)  # сентинел «онбординнут»
 
+    async def set_prefs(self, user_id: int, prefs: dict) -> None:
+        if user_id in self._users:
+            self._users[user_id].ui_prefs = prefs
+
     async def list_active(self) -> list[User]:
         return list(self._users.values())
 

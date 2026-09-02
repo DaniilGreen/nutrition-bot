@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,8 +24,10 @@ from app.application.results import (
 )
 from app.container import Container
 from app.domain.duplicates import SAFE_SPREAD, Candidate, spread, winner
+from app.domain.goals import Goal
+from app.domain.prefs import merge as merge_prefs
+from app.domain.prefs import sanitize
 from app.domain.value_objects import Density
-from app.infrastructure.db.repositories import SqlSpendRepo
 from app.web.deps import CurrentAssistant, CurrentUser, current_user, get_session
 from app.web.errors import ApiError, bad_request, not_found, unavailable
 from app.web.schemas import (
@@ -438,9 +440,105 @@ async def coach_budget(
     """Сколько бюджета осталось. Нужен настройкам: без счётчика строка «Лимит»
     была бы декоративной, а таких мы не выкатываем (MA-INV-31)."""
     container: Container = request.app.state.container
-    spent = await SqlSpendRepo(session).spent_this_month(purpose="coach")
+    spent = await container.spend_for(session).spent_this_month(purpose="coach")
     return {
         "spent_usd": round(spent, 4),
         "limit_usd": container.settings.coach_month_limit_usd,
         "available": container.coach_port is not None,
     }
+
+
+@router.get("/settings")
+async def settings(
+    user: CurrentUser, assistant: CurrentAssistant, request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, Any]:
+    """Всё, что показывает экран настроек, одним запросом (§6.5)."""
+    container: Container = request.app.state.container
+    goal = await assistant.current_goal(user)
+    spent = await container.spend_for(session).spent_this_month(purpose="coach")
+    return {
+        "goal": goal_json(goal),
+        "timezone": user.timezone,
+        "prefs": sanitize(user.ui_prefs),
+        "coach": {
+            "model": container.settings.coach_model,
+            "limit_usd": container.settings.coach_month_limit_usd,
+            "spent_usd": round(spent, 4),
+            "available": container.coach_port is not None,
+        },
+    }
+
+
+@router.patch("/settings/prefs")
+async def edit_prefs(
+    body: dict[str, Any], user: CurrentUser, request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, Any]:
+    """Правка оформления. Неизвестные ключи молча отбрасываются: клиент может
+    быть новее сервера, и падать из-за этого незачем."""
+    container: Container = request.app.state.container
+    _, users = container.assistant_for(session)
+    merged = merge_prefs(user.ui_prefs, body)
+    await users.set_prefs(user.id, merged)
+    return {"prefs": merged}
+
+
+@router.patch("/settings/goal")
+async def edit_goal(
+    body: dict[str, Any], user: CurrentUser, request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, Any]:
+    """Цели. Белок можно задать в г/кг — тогда он поедет вслед за весом,
+    а не устареет молча в тот самый момент, когда человек худеет (§6.5)."""
+    container: Container = request.app.state.container
+    assistant, users = container.assistant_for(session)
+    current = await assistant.current_goal(user)
+
+    protein = body.get("protein_g")
+    if body.get("protein_per_kg") is not None:
+        trend = await assistant.weight_trend(user, 1)
+        if not trend.logs:
+            raise bad_request(
+                "no_weight", "Чтобы считать белок на килограмм, нужен хотя бы один замер веса."
+            )
+        protein = float(body["protein_per_kg"]) * trend.logs[0].weight_kg
+
+    try:
+        goal = Goal(
+            daily_kcal=float(body.get("kcal", current.daily_kcal)),
+            protein_g=float(protein if protein is not None else current.protein_g),
+            fat_g=float(body.get("fat_g", current.fat_g)),
+            carb_g=float(body.get("carb_g", current.carb_g)),
+            target=str(body.get("target", current.target)),
+        )
+    except (TypeError, ValueError) as exc:
+        raise bad_request("bad_goal", "Цели должны быть числами.") from exc
+
+    if not 800 <= goal.daily_kcal <= 6000:
+        raise bad_request("kcal_out_of_range", "Калорийность вне разумных пределов.")
+    if not all(0 <= v <= 600 for v in (goal.protein_g, goal.fat_g, goal.carb_g)):
+        raise bad_request("macros_out_of_range", "Макросы вне разумных пределов.")
+    if goal.target not in ("cut", "maintain", "bulk"):
+        raise bad_request("bad_target", "Неизвестный режим.")
+
+    await users.set_goal(user.id, goal)
+    return {"goal": goal_json(goal)}
+
+
+@router.patch("/settings/timezone")
+async def edit_timezone(
+    body: dict[str, Any], user: CurrentUser, request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, Any]:
+    """Часовой пояс режет сутки. Сменив его, человек двигает границы всех дней
+    задним числом — поэтому значение проверяется, а не принимается на веру."""
+    name = str(body.get("timezone") or "")
+    try:
+        ZoneInfo(name)
+    except (KeyError, ValueError, ZoneInfoNotFoundError) as exc:
+        raise bad_request("bad_timezone", "Не знаю такого часового пояса.") from exc
+    container: Container = request.app.state.container
+    _, users = container.assistant_for(session)
+    await users.set_timezone(user.id, name)
+    return {"timezone": name}
