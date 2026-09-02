@@ -154,3 +154,17 @@ nav button[aria-current="page"]{color:var(--accent)}
   flex-shrink:0;display:flex;align-items:center;justify-content:center}
 .pick.on .dot{border-color:var(--accent);background:var(--accent)}
 .pick.on .dot::after{content:"";width:8px;height:8px;border-radius:99px;background:#0E1013}
+
+/* ── графики ─────────────────────────────────────────────────────────── */
+.chart{margin-top:var(--s-3)}
+.chart svg{display:block;width:100%;height:auto;overflow:visible}
+.chart .note{margin-top:var(--s-3);line-height:1.5}
+.legend{display:flex;gap:var(--s-4);margin-top:var(--s-3)}
+.legend span{font-size:var(--f-micro);color:var(--text-muted);display:flex;align-items:center;gap:5px}
+.legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
+.heat{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px}
+.heat div{aspect-ratio:1;border-radius:4px}
+.periods{display:flex;gap:var(--s-2);margin-bottom:var(--s-3)}
+.periods button{background:var(--surface-2);border:0;color:var(--text-muted);font:inherit;
+  font-size:var(--f-caption);border-radius:99px;padding:8px 14px;cursor:pointer;min-height:36px}
+.periods button[aria-pressed="true"]{background:var(--tint);color:var(--accent)}

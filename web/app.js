@@ -325,15 +325,142 @@
     }).catch(failure);
   }
 
+
+  /* ── Итоги: графики инлайн-SVG, без библиотек (§5.7) ─────────────────── */
+
+  var PERIODS = [[7, 'Неделя'], [30, '30 дней'], [90, '3 месяца']];
+
+  function renderTotals() {
+    document.getElementById('title').textContent = 'Итоги';
+    loading();
+    var days = state.period || 30;
+    Promise.all([
+      api('/api/stats/series?days=' + days),
+      api('/api/stats/weight?limit=60').catch(function () { return { points: [] }; })
+    ]).then(function (res) {
+      var d = res[0], w = res[1];
+      show(periods() +
+           card('Белок по дням', barChart(d, 'protein_g', d.goal.protein_g, 'var(--prot)'),
+                'Среднее ' + n(avg(d, 'protein_g')) + ' г при цели ' + n(d.goal.protein_g) + '.') +
+           card('Ккал по дням', barChart(d, 'kcal', d.goal.kcal, 'var(--bar)'),
+                'Красным — величина перебора.') +
+           card('Полнота записей', heat(d),
+                'Дни ниже 60% цели — огрызки, из средних исключаются.') +
+           (w.points.length > 1
+             ? card('Вес', line(w.points), n(w.points.length) + ' замеров.')
+             : '') +
+           card('Куда уходят калории', split(d), 'Доля макросов за период.'));
+    }).catch(failure);
+  }
+
+  function periods() {
+    return '<div class="periods">' + PERIODS.map(function (p) {
+      return '<button data-period="' + p[0] + '" aria-pressed="' +
+        ((state.period || 30) === p[0]) + '">' + p[1] + '</button>';
+    }).join('') + '</div>';
+  }
+
+  function card(title, body, note) {
+    return '<section class="card" style="margin-top:var(--s-3)">' +
+      '<div class="cap">' + esc(title) + '</div>' +
+      '<div class="chart">' + body + '</div>' +
+      '<div class="mic note">' + esc(note) + '</div></section>';
+  }
+
+  function avg(d, key) {
+    var xs = d.days.filter(function (x) { return x.meals > 0; });
+    if (!xs.length) return 0;
+    return xs.reduce(function (a, x) { return a + x[key]; }, 0) / xs.length;
+  }
+
+  /* Столбики и линия цели считаются в ОДНОМ масштабе: разные масштабы уже
+     давали «зелёный» столбик выше линии цели — график врал глазу. */
+  function barChart(d, key, goal, color) {
+    var H = 96, W = 300, xs = d.days;
+    var max = Math.max(goal, ...xs.map(function (x) { return x[key]; })) || 1;
+    var bw = W / xs.length, gap = Math.min(3, bw * 0.25);
+    var y = function (v) { return H - (v / max) * H; };
+    var bars = xs.map(function (x, i) {
+      var v = x[key], over = v > goal;
+      var base = Math.min(v, goal), extra = over ? v - goal : 0;
+      var out = '<rect x="' + (i * bw + gap / 2) + '" y="' + y(base) + '" width="' + (bw - gap) +
+        '" height="' + (H - y(base)) + '" rx="2" fill="' + color + '"/>';
+      if (extra) {
+        out += '<rect x="' + (i * bw + gap / 2) + '" y="' + y(v) + '" width="' + (bw - gap) +
+          '" height="' + (y(goal) - y(v)) + '" rx="2" fill="var(--danger)"/>' +
+          '<rect x="' + (i * bw + gap / 2) + '" y="' + (y(goal) - 1) + '" width="' + (bw - gap) +
+          '" height="1" fill="var(--surface)"/>';
+      }
+      return out;
+    }).join('');
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" role="img" ' +
+      'aria-label="Столбчатый график, ' + xs.length + ' дней">' + bars +
+      '<line x1="0" y1="' + y(goal) + '" x2="' + W + '" y2="' + y(goal) +
+      '" stroke="var(--line)" stroke-width="1" stroke-dasharray="4 4"/></svg>' +
+      '<div class="legend"><span><i style="background:' + color + '"></i>съедено</span>' +
+      '<span><i style="background:var(--danger)"></i>перебор</span>' +
+      '<span><i style="background:var(--line)"></i>цель ' + n(goal) + '</span></div>';
+  }
+
+  function heat(d) {
+    var goal = d.goal.kcal;
+    var cells = d.days.map(function (x) {
+      var c = x.kcal >= goal * 0.9 ? '#EDF1F5'
+            : x.kcal >= goal * 0.6 ? '#7C8899'
+            : 'var(--surface-3)';
+      return '<div style="background:' + c + '" title="' + esc(x.date) + '"></div>';
+    }).join('');
+    return '<div class="heat">' + cells + '</div>' +
+      '<div class="legend"><span><i style="background:#EDF1F5"></i>полный</span>' +
+      '<span><i style="background:#7C8899"></i>неполный</span>' +
+      '<span><i style="background:var(--surface-3)"></i>огрызок</span></div>';
+  }
+
+  function line(points) {
+    var H = 96, W = 300;
+    var kg = points.map(function (p) { return p.kg; });
+    var lo = Math.min(...kg), hi = Math.max(...kg), span = (hi - lo) || 1;
+    var step = points.length > 1 ? W / (points.length - 1) : 0;
+    var path = points.map(function (p, i) {
+      return (i ? 'L' : 'M') + (i * step) + ' ' + (H - ((p.kg - lo) / span) * (H - 10) - 5);
+    }).join(' ');
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" role="img" ' +
+      'aria-label="Линия веса"><path d="' + path + '" fill="none" stroke="var(--data)" ' +
+      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
+      'vector-effect="non-scaling-stroke"/></svg>' +
+      '<div class="legend"><span>' + n(lo, 1) + ' → ' + n(kg[kg.length - 1], 1) + ' кг</span></div>';
+  }
+
+  function split(d) {
+    var p = 0, f = 0, c = 0;
+    d.days.forEach(function (x) { p += x.protein_g * 4; f += x.fat_g * 9; c += x.carb_g * 4; });
+    var total = p + f + c;
+    if (!total) return '<div class="state">Пока нечего делить.</div>';
+    var parts = [[p, 'var(--prot)', 'белок'], [f, 'var(--fat)', 'жир'], [c, 'var(--carb)', 'углеводы']];
+    var x = 0;
+    var bars = parts.map(function (q) {
+      var w = (q[0] / total) * 300, out =
+        '<rect x="' + x + '" y="0" width="' + w + '" height="26" fill="' + q[1] + '"/>';
+      x += w;
+      return out;
+    }).join('');
+    return '<svg viewBox="0 0 300 26" preserveAspectRatio="none" role="img" ' +
+      'aria-label="Доли макросов">' + bars + '</svg>' +
+      '<div class="legend">' + parts.map(function (q) {
+        return '<span><i style="background:' + q[1] + '"></i>' + esc(q[2]) + ' ' +
+          n((q[0] / total) * 100) + '%</span>';
+      }).join('') + '</div>';
+  }
+
   var SOON = {
-    tot: ['Итоги', 'Графики и сводки за период — следующий этап.'],
-    ai:  ['AI', 'Разбор своих данных — последний этап.']
+    ai: ['AI', 'Разбор своих данных — последний этап.']
   };
 
   function render() {
     document.getElementById('nav-day').classList.toggle('hidden', state.tab !== 'day');
     if (state.tab === 'day') return renderDay();
     if (state.tab === 'cat') return renderCatalog();
+    if (state.tab === 'tot') return renderTotals();
     var s = SOON[state.tab];
     document.getElementById('title').textContent = s[0];
     show('<section class="card"><div class="state">' + esc(s[1]) + '</div></section>');
@@ -541,6 +668,7 @@
                            return renderCatalog(); }
     if (b.id === 'next') { state.cat.offset += PAGE; return renderCatalog(); }
     if (b.id === 'save') return saveProduct();
+    if (b.dataset.period) { state.period = Number(b.dataset.period); return renderTotals(); }
     if (b.dataset.merge != null) return doMerge(Number(b.dataset.merge));
 
     if (b.hasAttribute('data-answer')) {

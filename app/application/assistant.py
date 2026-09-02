@@ -254,6 +254,10 @@ class Assistant:
         clean = name.strip()[:255]
         return await self._products.rename(product_id, clean) if clean else None
 
+    async def daily_series(self, user: User, days: int = 30):
+        """Ряд по дням для графиков: (дата, КБЖУ, число приёмов) + цель."""
+        return await self._stats.last_days_macros(user, days), await self._stats.current_goal(user)
+
     async def frequent(
         self, user: User, *, days: int = 30, limit: int = 10
     ) -> list[tuple[str, float, int]]:

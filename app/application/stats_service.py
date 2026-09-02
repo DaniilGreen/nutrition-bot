@@ -64,6 +64,33 @@ class StatsService:
             out.append((day, sum(m.totals.kcal for m in meals)))
         return out
 
+    async def last_days_macros(
+        self, user: User, n: int
+    ) -> list[tuple[date, Macros, int]]:
+        """(дата, КБЖУ, число приёмов) за n дней, старые→новые — для графиков.
+
+        Одним запросом на всё окно, в отличие от `last_days`, который ходит в БД
+        по разу на день: на месяце это тридцать round-trip'ов ради одного графика.
+        Группировка по ЛОКАЛЬНОЙ дате — иначе ужин в 23:30 уехал бы во вчера.
+        """
+        user_id = _require_id(user)
+        tz = ZoneInfo(user.timezone)
+        now = self._clock()
+        start, _ = day_bounds_utc(now - timedelta(days=n - 1), user.timezone)
+        _, end = day_bounds_utc(now, user.timezone)
+        meals = await self._meals.list_between(user_id, start, end)
+
+        by_day: dict[date, list[Meal]] = {}
+        for meal in meals:
+            by_day.setdefault(meal.eaten_at.astimezone(tz).date(), []).append(meal)
+
+        out: list[tuple[date, Macros, int]] = []
+        for days_ago in range(n - 1, -1, -1):
+            day = (now - timedelta(days=days_ago)).astimezone(tz).date()
+            todays = by_day.get(day, [])
+            out.append((day, sum_macros(m.totals for m in todays), len(todays)))
+        return out
+
     async def day_view(self, user: User, days_ago: int = 0) -> tuple[list[Meal], date]:
         """Приёмы за день ХРОНОЛОГИЧЕСКИ + дата дня (в TZ юзера) — для day-view с навигацией."""
         meals = list(reversed(await self.day_meals(user, days_ago)))

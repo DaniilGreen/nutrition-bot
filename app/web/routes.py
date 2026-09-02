@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Request
 
@@ -184,6 +185,55 @@ def _result_json(
 
     reason = getattr(result, "reason", None) or "Не понял, что записать."
     return {"kind": "unknown", "message": reason}
+
+@router.get("/stats/series")
+async def series(
+    user: CurrentUser, assistant: CurrentAssistant, days: int = 30
+) -> dict[str, Any]:
+    """Ряд по дням для всех графиков сразу (§6.9).
+
+    Один эндпоинт на четыре графика, а не четыре: данные одни и те же, а
+    лишние round-trip'ы на мобильной сети заметнее, чем размер ответа.
+    """
+    if not 1 <= days <= 365:
+        raise bad_request("bad_range", "Период от 1 до 365 дней.")
+    rows, goal = await assistant.daily_series(user, days)
+    return {
+        "goal": goal_json(goal),
+        "days": [
+            {
+                "date": day.isoformat(),
+                "kcal": round(macros.kcal, 1),
+                "protein_g": round(macros.protein, 1),
+                "fat_g": round(macros.fat, 1),
+                "carb_g": round(macros.carb, 1),
+                "meals": meals,
+            }
+            for day, macros, meals in rows
+        ],
+    }
+
+
+@router.get("/stats/weight")
+async def weight(
+    user: CurrentUser, assistant: CurrentAssistant, limit: int = 30
+) -> dict[str, Any]:
+    """Замеры веса, старые→новые. Мусорные значения отсекает use-case."""
+    if not 1 <= limit <= 365:
+        raise bad_request("bad_range", "От 1 до 365 замеров.")
+    trend = await assistant.weight_trend(user, limit)
+    tz = ZoneInfo(user.timezone)
+    logs = sorted(trend.logs, key=lambda log: log.measured_at)
+    return {
+        "points": [
+            {
+                "date": log.measured_at.astimezone(tz).date().isoformat(),
+                "kg": log.weight_kg,
+            }
+            for log in logs
+        ]
+    }
+
 
 @router.get("/frequent")
 async def frequent(
