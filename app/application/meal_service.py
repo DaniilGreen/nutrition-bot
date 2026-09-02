@@ -191,6 +191,16 @@ class MealService:
             )
         )
 
+    async def contributions(
+        self, user_id: int, *, days: int, limit: int
+    ) -> list[tuple[int | None, str, float, int]]:
+        """Куда уходят калории за окно."""
+        return await self._meals.contributions(user_id, days=days, limit=limit)
+
+    async def estimate_share(self, user_id: int, *, days: int) -> tuple[float, float]:
+        """Сколько калорий пришло из оценок, а сколько из выверенного."""
+        return await self._meals.estimate_share(user_id, days=days)
+
     async def log_known(
         self, user: User, product: Product, grams: float, *, raw_input: str
     ) -> Meal:

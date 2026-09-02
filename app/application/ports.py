@@ -140,6 +140,25 @@ class MealRepo(Protocol):
 
     async def list_recent(self, user_id: int, limit: int) -> list[Meal]: ...
 
+    async def contributions(
+        self, user_id: int, *, days: int, limit: int
+    ) -> list[tuple[int | None, str, float, int]]:
+        """Куда уходят калории: (product_id, имя, сумма ккал, сколько раз) за окно.
+
+        Именно сумма ккал, а не доля макросов: доли нормируются на съеденное,
+        поэтому чем меньше ешь, тем лучше выглядит картина — метрика маскирует
+        главную проблему (§4.1). Абсолютный вклад так не обманывает.
+        """
+        ...
+
+    async def estimate_share(self, user_id: int, *, days: int) -> tuple[float, float]:
+        """(ккал из оценок, ккал всего) за окно — для «точности учёта» (§3.5).
+
+        Считаем по калориям, а не по числу позиций: одна оценённая тарелка борща
+        весит больше десяти точных специй.
+        """
+        ...
+
     async def get(self, user_id: int, meal_id: int) -> Meal | None: ...
 
     async def delete_last(self, user_id: int) -> Meal | None: ...

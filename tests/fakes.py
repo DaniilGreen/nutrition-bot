@@ -168,6 +168,44 @@ class InMemoryMealRepo:
     async def list_between(self, user_id: int, start: datetime, end: datetime) -> list[Meal]:
         return [m for m in self._meals if m.user_id == user_id and start <= m.eaten_at < end]
 
+    async def contributions(
+        self, user_id: int, *, days: int, limit: int
+    ) -> list[tuple[int | None, str, float, int]]:
+        from collections import defaultdict
+        from datetime import timedelta
+
+        since = datetime.now(UTC) - timedelta(days=days)
+        kcal: dict[object, float] = defaultdict(float)
+        times: dict[object, int] = defaultdict(int)
+        names: dict[object, str] = {}
+        for m in self._meals:
+            if m.user_id != user_id or m.eaten_at < since:
+                continue
+            for it in m.items:
+                key = it.product_id if it.product_id is not None else it.name_snapshot
+                kcal[key] += it.macros.kcal
+                times[key] += 1
+                names[key] = it.name_snapshot
+        rows = [
+            (k if isinstance(k, int) else None, names[k], kcal[k], times[k]) for k in kcal
+        ]
+        rows.sort(key=lambda r: -r[2])
+        return rows[:limit]
+
+    async def estimate_share(self, user_id: int, *, days: int) -> tuple[float, float]:
+        from datetime import timedelta
+
+        since = datetime.now(UTC) - timedelta(days=days)
+        est = total = 0.0
+        for m in self._meals:
+            if m.user_id != user_id or m.eaten_at < since:
+                continue
+            for it in m.items:
+                total += it.macros.kcal
+                if it.is_estimate:
+                    est += it.macros.kcal
+        return est, total
+
     async def frequent_items(
         self, user_id: int, *, days: int, limit: int
     ) -> list[tuple[int | None, str, float, int]]:

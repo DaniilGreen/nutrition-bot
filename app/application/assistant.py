@@ -40,6 +40,7 @@ from app.domain.goals import Goal, Remaining, in_goal, remaining
 from app.domain.nutrition import atwater_suspect
 from app.domain.plausibility import clamp_density, is_alcoholic
 from app.domain.portion_answer import parse as parse_portion
+from app.domain.reconcile import Reconciliation, reconcile
 from app.domain.value_objects import Density, Macros, sum_macros
 
 
@@ -303,6 +304,39 @@ class Assistant:
         """Сколько раз ЭТОТ человек ел продукт. Карточке нужно одно число."""
         counts = await self._products.usage_counts([product_id], user_id=_require_id(user))
         return counts.get(product_id, 0)
+
+    async def contributions(
+        self, user: User, *, days: int = 30, limit: int = 8
+    ) -> list[tuple[int | None, str, float, int]]:
+        """Куда уходят калории (§3.3). Абсолютный вклад, не доля."""
+        return await self._meals.contributions(_require_id(user), days=days, limit=limit)
+
+    async def accuracy(self, user: User, *, days: int = 30) -> tuple[float, float]:
+        """Доверие к цифре: сколько калорий из оценок, сколько всего (§3.5)."""
+        return await self._meals.estimate_share(_require_id(user), days=days)
+
+    async def reconcile_weight(self, user: User, *, days: int = 30) -> Reconciliation:
+        """Сходится ли дневник с весами (§4.0). Флагманская панель.
+
+        Ничего не обвиняет: кладёт рядом два факта и говорит, сходятся ли они.
+        """
+        rows = await self._stats.last_days_macros(user, days)
+        goal = await self._stats.current_goal(user)
+        trend = await self._weights.history(user, 100)
+        window = [
+            log
+            for log in trend
+            if log.measured_at.date() >= rows[0][0] and 20 <= log.weight_kg <= 400
+        ] if rows else []
+        window.sort(key=lambda log: log.measured_at)
+        return reconcile(
+            days=days,
+            logged_kcal_total=sum(m.kcal for _, m, _ in rows),
+            days_with_records=sum(1 for _, _, k in rows if k > 0),
+            weight_start_kg=window[0].weight_kg if len(window) >= 2 else None,
+            weight_end_kg=window[-1].weight_kg if len(window) >= 2 else None,
+            maintenance_kcal=goal.daily_kcal,
+        )
 
     async def log_quick(self, user: User, product_id: int, grams: float) -> Result:
         """Запись тапом по чипу: продукт известен, вес известен, модель не нужна."""

@@ -401,12 +401,17 @@
     document.getElementById('title').textContent = 'Итоги';
     loading();
     var days = state.period || (state.prefs && state.prefs.period) || 30;
+    var nothing = function () { return null; };
     Promise.all([
       api('/api/stats/series?days=' + days),
-      api('/api/stats/weight?limit=60').catch(function () { return { points: [] }; })
+      api('/api/stats/weight?limit=60').catch(function () { return { points: [] }; }),
+      api('/api/stats/reconcile?days=' + Math.max(days, 14)).catch(nothing),
+      api('/api/stats/contributions?days=' + days).catch(nothing),
+      api('/api/stats/accuracy?days=' + days).catch(nothing)
     ]).then(function (res) {
-      var d = res[0], w = res[1];
+      var d = res[0], w = res[1], rec = res[2], con = res[3], acc = res[4];
       show(periods() +
+           reconcileCard(rec) +
            card('Белок по дням', barChart(d, 'protein_g', d.goal.protein_g, 'var(--prot)'),
                 'Среднее ' + n(avg(d, 'protein_g')) + ' г при цели ' + n(d.goal.protein_g) + '.') +
            card('Ккал по дням', barChart(d, 'kcal', d.goal.kcal, 'var(--bar)'),
@@ -417,8 +422,90 @@
            (w.points.length > 1
              ? card('Вес', line(w.points), n(w.points.length) + ' замеров.')
              : '') +
-           card('Куда уходят калории', split(d), 'Доля макросов за период.'));
+           contribCard(con) +
+           accuracyCard(acc));
     }).catch(failure);
+  }
+
+  /* Флагманская панель §4.0: сходится ли дневник с весами.
+     Не обвиняет и не считает «сколько недозаписал» — кладёт рядом два факта. */
+  function reconcileCard(r) {
+    if (!r) return '';
+    if (r.verdict === 'no_weight') {
+      return card('Дневник и весы',
+        '<div class="state">Нужны хотя бы два замера веса за период.</div>',
+        'Без веса сверить записанное не с чем.');
+    }
+    if (r.verdict === 'not_enough_data') {
+      return card('Дневник и весы',
+        '<div class="state">Данных пока мало.</div>',
+        'На коротком окне вес говорит больше про воду, чем про питание. ' +
+        'Вернись к этой панели через пару недель.');
+    }
+    var agree = r.agrees;
+    var head = agree ? 'Сходится' : 'Расходится';
+    var color = agree ? 'var(--ok)' : 'var(--warn)';
+    var delta = r.weight_delta_kg;
+    var sign = delta > 0 ? '+' : '';
+    var body =
+      '<div style="display:flex;align-items:baseline;gap:var(--s-2)">' +
+        '<span style="font-size:var(--f-t3);font-weight:600;color:' + color + '">' +
+        esc(head) + '</span></div>' +
+      '<div class="field"><label>Записано в среднем</label>' +
+        '<span class="num" style="font-size:var(--f-body-s)">' +
+        n(r.logged_kcal_per_day) + ' ккал/день</span></div>' +
+      '<div class="field"><label>Вес за период</label>' +
+        '<span class="num" style="font-size:var(--f-body-s)">' + sign + n(delta, 1) +
+        ' кг</span></div>' +
+      (agree ? '' :
+        '<div class="field"><label>Не объясняется записями</label>' +
+        '<span class="num" style="font-size:var(--f-body-s);color:var(--warn)">' +
+        '≈' + n(Math.abs(r.gap_kcal_per_day)) + ' ккал/день</span></div>');
+    var note = agree
+      ? 'Записанное и вес говорят одно и то же. Цифрам можно верить.'
+      : 'Вес изменился сильнее, чем объясняет дневник. Обычно это значит, ' +
+        'что часть съеденного не попала в записи. Оценка грубая: килограмм ' +
+        'ткани считаем за 7700 ккал, а вода и гликоген гуляют сами по себе.';
+    return card('Дневник и весы', body, note);
+  }
+
+  /* §3.3: абсолютный вклад в калории, а НЕ доля макросов. Доли нормируются
+     на съеденное — чем меньше ешь, тем лучше картина, и метрика прячет
+     ровно ту проблему, ради которой экран нужен (§4.1). */
+  function contribCard(c) {
+    if (!c || !c.items.length) return '';
+    var max = c.items[0].kcal || 1;
+    var rows = c.items.map(function (i) {
+      return '<div style="padding:7px 0">' +
+        '<div style="display:flex;align-items:baseline;gap:var(--s-2)">' +
+          '<span style="flex-grow:1;min-width:0;overflow:hidden;text-overflow:ellipsis;' +
+          'white-space:nowrap;font-size:var(--f-body-s)">' + esc(i.name) + '</span>' +
+          '<span class="num" style="font-size:var(--f-caption)">' + n(i.kcal) + ' ккал</span>' +
+          '<span class="mic" style="width:44px;text-align:right">' + n(i.times) + '×</span>' +
+        '</div>' +
+        '<div class="track" style="margin-top:5px"><i style="width:' +
+          (i.kcal / max * 100) + '%"></i></div></div>';
+    }).join('');
+    return card('Куда уходят калории', rows,
+      'Столько калорий пришло с каждым продуктом за период. Не доля, а сумма: ' +
+      'долю легко улучшить, просто съев меньше.');
+  }
+
+  /* §3.5: доверие к цифре — какая часть калорий оценена, а не выверена. */
+  function accuracyCard(a) {
+    if (!a || !a.total_kcal) return '';
+    var share = Math.round(a.estimated_share * 100);
+    var body =
+      '<div class="num" style="font-size:var(--f-t1);font-weight:700;letter-spacing:-0.8px">' +
+        n(100 - share) + '%</div>' +
+      '<div class="cap" style="margin-top:2px">калорий из выверенных цифр</div>' +
+      '<div class="track" style="margin-top:var(--s-3)"><i style="width:' +
+        (100 - share) + '%"></i></div>';
+    return card('Доверие к цифре', body,
+      share > 50
+        ? 'Больше половины калорий — оценка модели. Поправь плотности у самых ' +
+          'частых продуктов во вкладке «Продукты», и цифра станет твёрже.'
+        : 'Оценок ' + n(share) + '%. Позиции со знаком ≈ можно уточнить в каталоге.');
   }
 
   function periods() {
@@ -499,37 +586,6 @@
       '<div class="legend"><span>' + n(kg[0], 1) + ' → ' + n(kg[kg.length - 1], 1) + ' кг</span>' +
       '<span>мин ' + n(lo, 1) + ' · макс ' + n(hi, 1) + '</span></div>';
   }
-
-  function split(d) {
-    var p = 0, f = 0, c = 0;
-    d.days.forEach(function (x) { p += x.protein_g * 4; f += x.fat_g * 9; c += x.carb_g * 4; });
-    var total = p + f + c;
-    if (!total) return '<div class="state">Пока нечего делить.</div>';
-    var parts = [[p, 'var(--prot)', 'белок'], [f, 'var(--fat)', 'жир'], [c, 'var(--carb)', 'углеводы']];
-    var x = 0;
-    var bars = parts.map(function (q) {
-      var w = (q[0] / total) * 300, out =
-        '<rect x="' + x + '" y="0" width="' + w + '" height="26" fill="' + q[1] + '"/>';
-      x += w;
-      return out;
-    }).join('');
-    return '<svg viewBox="0 0 300 26" preserveAspectRatio="none" role="img" ' +
-      'aria-label="Доли макросов">' + bars + '</svg>' +
-      '<div class="legend">' + parts.map(function (q) {
-        return '<span><i style="background:' + q[1] + '"></i>' + esc(q[2]) + ' ' +
-          n((q[0] / total) * 100) + '%</span>';
-      }).join('') + '</div>';
-  }
-
-
-
-  /* ── Настройки: шестерёнка в шапке, не пятая вкладка (§6.5) ──────────── */
-
-  var HEROES = [
-    ['bars', 'Два «осталось»', 'Крупно то, что ещё можно.'],
-    ['rings', 'Кольца и список', 'Все четыре макроса разом.'],
-    ['kcal', 'Только калории', 'Минимум, белок в подписи.']
-  ];
 
   function renderSettings() {
     document.getElementById('title').textContent = 'Настройки';

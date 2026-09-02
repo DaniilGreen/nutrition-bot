@@ -318,6 +318,69 @@ async def weight(
     }
 
 
+@router.get("/stats/reconcile")
+async def reconcile_weight(
+    user: CurrentUser, assistant: CurrentAssistant, days: int = 30
+) -> dict[str, Any]:
+    """Сходится ли дневник с весами (§4.0) — флагманская панель.
+
+    Ничего не обвиняет и не считает «сколько недозаписал»: кладёт рядом два
+    факта и говорит, сходятся ли они. Вывод делает человек (MA-INV-28).
+    """
+    if not 7 <= days <= 180:
+        raise bad_request("bad_range", "От 7 до 180 дней.")
+    r = await assistant.reconcile_weight(user, days=days)
+    return {
+        "days": r.days,
+        "logged_kcal_per_day": r.logged_kcal_per_day,
+        "weight_delta_kg": r.weight_delta_kg,
+        "gap_kcal_per_day": r.gap_kcal_per_day,
+        "verdict": r.verdict,
+        "agrees": r.agrees,
+    }
+
+
+@router.get("/stats/contributions")
+async def contributions(
+    user: CurrentUser, assistant: CurrentAssistant, days: int = 30, limit: int = 8
+) -> dict[str, Any]:
+    """Куда уходят калории (§3.3): абсолютный вклад продуктов, не доли.
+
+    Доли нормируются на съеденное — чем меньше ешь, тем лучше картина; такая
+    метрика прячет ровно ту проблему, ради которой экран нужен (§4.1).
+    """
+    if not 1 <= days <= 365 or not 1 <= limit <= 30:
+        raise bad_request("bad_range", "Неверные параметры.")
+    rows = await assistant.contributions(user, days=days, limit=limit)
+    total = sum(k for _, _, k, _ in rows)
+    return {
+        "total_kcal": round(total, 1),
+        "items": [
+            {"product_id": pid, "name": name, "kcal": round(k, 1), "times": t}
+            for pid, name, k, t in rows
+        ],
+    }
+
+
+@router.get("/stats/accuracy")
+async def accuracy(
+    user: CurrentUser, assistant: CurrentAssistant, days: int = 30
+) -> dict[str, Any]:
+    """Доверие к цифре (§3.5): какая доля калорий пришла из оценок.
+
+    По калориям, а не по числу позиций: одна оценённая тарелка борща весит
+    больше десяти точно взвешенных специй.
+    """
+    if not 1 <= days <= 365:
+        raise bad_request("bad_range", "Период от 1 до 365 дней.")
+    estimated, total = await assistant.accuracy(user, days=days)
+    return {
+        "estimated_kcal": round(estimated, 1),
+        "total_kcal": round(total, 1),
+        "estimated_share": round(estimated / total, 3) if total else 0.0,
+    }
+
+
 @router.get("/frequent")
 async def frequent(
     user: CurrentUser, assistant: CurrentAssistant, days: int = 30, limit: int = 10

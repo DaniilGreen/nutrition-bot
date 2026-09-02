@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.entities import Meal, MealItem, Product, User, WeightLog
@@ -304,6 +304,45 @@ class SqlProductRepo:
 class SqlMealRepo:
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
+
+    async def contributions(
+        self, user_id: int, *, days: int, limit: int
+    ) -> list[tuple[int | None, str, float, int]]:
+        since = datetime.now(UTC) - timedelta(days=days)
+        res = await self._s.execute(
+            select(
+                MealItemORM.product_id,
+                func.max(MealItemORM.name_snapshot).label("name"),
+                func.sum(MealItemORM.kcal).label("kcal"),
+                func.count().label("times"),
+            )
+            .join(MealORM, MealORM.id == MealItemORM.meal_id)
+            .where(MealORM.user_id == user_id, MealORM.eaten_at >= since)
+            .group_by(MealItemORM.product_id, func.coalesce(MealItemORM.product_id, -1))
+            .order_by(func.sum(MealItemORM.kcal).desc())
+            .limit(limit)
+        )
+        return [
+            (pid, name, float(kcal or 0), int(times)) for pid, name, kcal, times in res.all()
+        ]
+
+    async def estimate_share(self, user_id: int, *, days: int) -> tuple[float, float]:
+        since = datetime.now(UTC) - timedelta(days=days)
+        res = await self._s.execute(
+            select(
+                func.coalesce(
+                    func.sum(
+                        case((MealItemORM.is_estimate.is_(True), MealItemORM.kcal), else_=0.0)
+                    ),
+                    0.0,
+                ),
+                func.coalesce(func.sum(MealItemORM.kcal), 0.0),
+            )
+            .join(MealORM, MealORM.id == MealItemORM.meal_id)
+            .where(MealORM.user_id == user_id, MealORM.eaten_at >= since)
+        )
+        estimated, total = res.one()
+        return float(estimated), float(total)
 
     async def frequent_items(
         self, user_id: int, *, days: int, limit: int
