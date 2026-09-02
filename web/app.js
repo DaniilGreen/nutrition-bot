@@ -11,6 +11,15 @@
   var nav = document.getElementById('tabs');
   var state = { tab: 'day', daysAgo: 0, open: {} };
 
+  // Проверка идёт ДО регистрации слушателей: иначе на экране «открой из
+  // Telegram» остаются живые обработчики, которые падают с невнятной ошибкой.
+  if (!tg || !tg.initData) {
+    root.innerHTML = '<div class="card state err"><b>Открой из Telegram</b>' +
+      '<div class="mic" style="margin-top:6px">Аппка работает только внутри бота — ' +
+      'снаружи подпись не выдать.</div></div>';
+    return;
+  }
+
   /* ── утилиты ─────────────────────────────────────────────────────────── */
 
   function esc(s) {
@@ -43,6 +52,33 @@
           throw e;
         });
       });
+  }
+
+  function send(path, opts) {
+    if (!tg || !tg.initData) return Promise.reject(new Error('no-tg'));
+    var o = opts || {};
+    o.method = o.method || 'POST';
+    o.headers = o.headers || {};
+    o.headers['X-Telegram-Init-Data'] = tg.initData;
+    return fetch(path, o).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (body) {
+        if (r.ok) return body;
+        var err = (body.detail && body.detail.error) || {};
+        var e = new Error(err.message || 'Сервер ответил ' + r.status);
+        e.code = err.code;
+        throw e;
+      });
+    });
+  }
+
+  var toastTimer = null;
+  function toast(text, bad) {
+    var el = document.getElementById('toast');
+    el.textContent = text;
+    el.className = 'toast' + (bad ? ' bad' : '');
+    el.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.hidden = true; }, 3500);
   }
 
   function show(html) { root.innerHTML = html; }
@@ -160,7 +196,12 @@
         document.getElementById('title').textContent = title(d);
         document.getElementById('nav-day').classList.toggle('hidden', false);
         document.getElementById('fwd').disabled = state.daysAgo === 0;
-        show(hero(d) + feed(d));
+        var extra = '';
+        if (state.justLogged) extra = justCard(state.justLogged);
+        else if (state.clarify) extra = clarifyCard(state.clarify);
+        show(hero(d) + composer() + chips(d) + extra + feed(d));
+        var inp = document.getElementById('say');
+        if (inp && state.keepFocus) { inp.focus(); state.keepFocus = false; }
       })
       .catch(failure);
   }
@@ -179,6 +220,139 @@
     show('<section class="card"><div class="state">' + esc(s[1]) + '</div></section>');
   }
 
+  /* ── ввод ────────────────────────────────────────────────────────────── */
+
+  function composer() {
+    var rec = state.recording;
+    return '<div class="composer">' +
+      '<input id="say" type="text" inputmode="text" autocomplete="off" ' +
+        'placeholder="Что съел? Или скажи голосом" value="' + esc(state.text || '') + '">' +
+      '<button id="mic" class="' + (rec ? 'rec' : '') + '" ' +
+        'aria-label="' + (rec ? 'Остановить запись' : 'Записать голосом') + '">' +
+        (rec
+          ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+            '<rect x="6" y="6" width="12" height="12" rx="2"/></svg>'
+          : '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+            'stroke-width="2" stroke-linecap="round" aria-hidden="true">' +
+            '<rect x="9" y="3" width="6" height="11" rx="3"/>' +
+            '<path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>') +
+      '</button></div>';
+  }
+
+  /* Частое — одна прокручиваемая строка, без «Ещё» (§6.3). Список приходит
+     с сервера; пока эндпоинта нет, берём то, что уже съедено за день. */
+  function chips(d) {
+    var seen = {}, out = [];
+    (d.meals || []).forEach(function (m) {
+      m.items.forEach(function (i) {
+        if (seen[i.name] || out.length >= 10) return;
+        seen[i.name] = 1;
+        out.push('<button class="chip" data-say="' + esc(i.name + ' ' + n(i.grams) + ' г') + '">' +
+                 esc(i.name) + ' <span class="g">· ' + n(i.grams) + ' г</span></button>');
+      });
+    });
+    return out.length ? '<div class="chips">' + out.join('') + '</div>' : '';
+  }
+
+  /* Пишем сразу, превью не показываем (решение владельца): записанное можно
+     тут же поправить, а лишний клик стоит дороже ошибки. */
+  function justCard(m) {
+    var items = m.items.map(function (i) {
+      return '<div class="row"><span style="flex-grow:1">' + esc(i.name) +
+        (i.is_estimate ? ' <span style="color:var(--text-faint)">≈</span>' : '') + '</span>' +
+        '<span class="num g">' + n(i.grams) + ' г</span>' +
+        '<span class="num" style="width:52px;text-align:right">' + n(i.kcal) + '</span></div>';
+    }).join('');
+    return '<section class="card just" style="margin-top:var(--s-3)">' +
+      '<div style="display:flex;align-items:baseline;gap:var(--s-2)">' +
+        '<span class="ttl" style="flex-grow:1">Записал</span>' +
+        '<span class="num" style="font-weight:600">' + n(m.kcal) + ' ккал</span></div>' +
+      '<div class="items" style="padding-left:0;padding-bottom:0">' + items + '</div>' +
+      '<div class="actions">' +
+        '<button data-undo="' + m.id + '" class="danger">Отменить</button></div>' +
+      '</section>';
+  }
+
+  function clarifyCard(c) {
+    var opts = (c.options || []).map(function (o) {
+      return '<button data-answer="' + esc(o) + '">' + esc(o) + '</button>';
+    }).join('');
+    return '<section class="card just" style="margin-top:var(--s-3)">' +
+      '<div class="ttl">Уточни: ' + esc(c.item_name) + '</div>' +
+      '<div class="opts">' + opts +
+        '<button data-answer="" data-cancel="1" style="border-color:var(--surface-3);' +
+        'background:var(--surface-2)">Отмена</button></div></section>';
+  }
+
+  function handle(res) {
+    state.clarify = null;
+    state.justLogged = null;
+    if (res.kind === 'logged') {
+      state.justLogged = res.meal;
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+    } else if (res.kind === 'clarify') {
+      state.clarify = res;
+    } else if (res.kind === 'weight') {
+      var d = res.delta_kg;
+      toast('Вес ' + n(res.weight_kg, 1) + ' кг' +
+            (d ? ' · ' + (d > 0 ? '+' : '') + n(d, 1) + ' кг' : ''));
+    } else if (res.kind === 'stats') {
+      toast('Это вопрос, а не запись — цифры сверху обновлены.');
+    } else {
+      toast(res.message || 'Не понял, что записать.', true);
+    }
+    state.daysAgo = 0;
+    renderDay();
+  }
+
+  function submitText() {
+    var inp = document.getElementById('say');
+    var text = (inp && inp.value || '').trim();
+    if (!text) return;
+    state.text = '';
+    inp.value = '';
+    inp.blur();
+    loading();
+    send('/api/meals', {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text })
+    }).then(handle).catch(function (e) { toast(e.message, true); renderDay(); });
+  }
+
+  /* ── голос ───────────────────────────────────────────────────────────── */
+
+  var recorder = null, chunks = [];
+
+  function startRec() {
+    if (!navigator.mediaDevices || !window.MediaRecorder) {
+      toast('Этот клиент не умеет записывать голос — набери текстом.', true);
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      chunks = [];
+      recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = function (e) { if (e.data.size) chunks.push(e.data); };
+      recorder.onstop = function () {
+        stream.getTracks().forEach(function (t) { t.stop(); });
+        state.recording = false;
+        var blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+        if (!blob.size) { renderDay(); return; }
+        loading();
+        send('/api/meals/voice', {
+          headers: { 'Content-Type': blob.type },
+          body: blob
+        }).then(handle).catch(function (e) { toast(e.message, true); renderDay(); });
+      };
+      recorder.start();
+      state.recording = true;
+      renderDay();
+    }).catch(function () {
+      toast('Не дали доступ к микрофону — набери текстом.', true);
+    });
+  }
+
+  function stopRec() { if (recorder && recorder.state !== 'inactive') recorder.stop(); }
+
   /* ── события ─────────────────────────────────────────────────────────── */
 
   nav.addEventListener('click', function (e) {
@@ -195,11 +369,44 @@
   });
 
   root.addEventListener('click', function (e) {
-    var b = e.target.closest('button[data-meal]');
+    var b = e.target.closest('button');
     if (!b) return;
-    var id = b.dataset.meal;
-    state.open[id] = !state.open[id];
-    render();
+
+    if (b.dataset.meal) {
+      state.open[b.dataset.meal] = !state.open[b.dataset.meal];
+      return render();
+    }
+    if (b.id === 'mic') return state.recording ? stopRec() : startRec();
+    if (b.dataset.say) {
+      var inp = document.getElementById('say');
+      inp.value = b.dataset.say;
+      state.keepFocus = true;
+      return submitText();
+    }
+    if (b.dataset.undo) {
+      var id = b.dataset.undo;
+      loading();
+      return send('/api/meals/' + id, { method: 'DELETE' })
+        .then(function () { state.justLogged = null; toast('Отменил.'); renderDay(); })
+        .catch(function (err) { toast(err.message, true); renderDay(); });
+    }
+    if (b.hasAttribute('data-answer')) {
+      if (b.dataset.cancel) { state.clarify = null; return renderDay(); }
+      var c = state.clarify;
+      loading();
+      return send('/api/meals/clarify', {
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ draft_id: c.draft_id, answer: b.dataset.answer })
+      }).then(handle).catch(function (err) { toast(err.message, true); renderDay(); });
+    }
+  });
+
+  root.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && e.target.id === 'say') { e.preventDefault(); submitText(); }
+  });
+
+  root.addEventListener('input', function (e) {
+    if (e.target.id === 'say') state.text = e.target.value;
   });
 
   document.getElementById('back').addEventListener('click', function () {
@@ -212,12 +419,6 @@
 
   /* ── старт ───────────────────────────────────────────────────────────── */
 
-  if (!tg || !tg.initData) {
-    show('<div class="card state err"><b>Открой из Telegram</b>' +
-         '<div class="mic" style="margin-top:6px">Аппка работает только внутри бота — ' +
-         'снаружи подпись не выдать.</div></div>');
-    return;
-  }
   tg.ready();
   tg.expand();
   if (tg.setHeaderColor) { try { tg.setHeaderColor('#000000'); } catch (e) { /* старый клиент */ } }

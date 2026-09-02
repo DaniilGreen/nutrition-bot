@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from app.application.assistant import Assistant
+from app.application.dto import Intent, ParsedMessage
 from app.application.meal_service import MealService
 from app.application.stats_service import StatsService
 from app.application.weight_service import WeightService
@@ -22,6 +23,10 @@ from tests.fakes import (
     StubNlu,
 )
 from tests.initdata_fixtures import TOKEN
+
+# Ответ по умолчанию: «не понял». Пустой StubNlu падал бы IndexError,
+# и тест про неудачный разбор выглядел бы как поломка фикстуры.
+_NOTHING = ParsedMessage(intent=Intent.UNKNOWN, confidence=0.0)
 
 
 class _FakeSession:
@@ -63,6 +68,9 @@ class FakeContainer:
     meals: InMemoryMealRepo = field(default_factory=InMemoryMealRepo)
     weights: InMemoryWeightRepo = field(default_factory=InMemoryWeightRepo)
     bugs: InMemoryBugRepo = field(default_factory=InMemoryBugRepo)
+    # Подменяется в тестах записи: разные сценарии требуют разных ответов NLU.
+    nlu: object = None
+    stt: object = None
 
     def assistant_for(self, session):
         """Сигнатура та же, что у настоящего Container: (Assistant, UserRepo).
@@ -74,7 +82,8 @@ class FakeContainer:
             self.meals, self.users, self.settings.default_goal()
         )
         assistant = Assistant(
-            StubNlu(), self.products, meal, weight, stats, None, self.bugs, None
+            self.nlu or StubNlu(_NOTHING),
+            self.products, meal, weight, stats, self.stt, self.bugs, None,
         )
         return assistant, self.users
 

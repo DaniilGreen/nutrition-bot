@@ -31,3 +31,7 @@ def bad_request(code: str, message: str) -> ApiError:
 
 def not_found(code: str, message: str) -> ApiError:
     return ApiError(404, code, message)
+
+
+def unavailable(code: str, message: str) -> ApiError:
+    return ApiError(503, code, message)

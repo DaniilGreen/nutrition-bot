@@ -77,3 +77,23 @@ def remaining_json(rem: Remaining) -> dict[str, Any]:
         "fat_left": rem.fat_left,
         "carb_left": rem.carb_left,
     }
+
+
+def logged_json(result: Any, tz: str) -> dict[str, Any]:
+    """Ответ на успешную запись: сам приём + остаток дня, чтобы фронт не ходил
+    за днём второй раз (§7.2)."""
+    return {
+        "kind": "logged",
+        "meal": meal_json(result.meal, tz),
+        "totals": remaining_json(result.remaining),
+    }
+
+
+def clarify_json(result: Any, draft_id: str) -> dict[str, Any]:
+    """Уточнение. Черновик наружу не отдаётся — только его идентификатор (§7.1)."""
+    return {
+        "kind": "clarify",
+        "draft_id": draft_id,
+        "item_name": result.item_name,
+        "options": list(getattr(result, "options", []) or []),
+    }
