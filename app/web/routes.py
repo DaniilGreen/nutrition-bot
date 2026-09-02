@@ -480,7 +480,7 @@ async def edit_prefs(
     container: Container = request.app.state.container
     _, users = container.assistant_for(session)
     merged = merge_prefs(user.ui_prefs, body)
-    await users.set_prefs(user.id, merged)
+    await users.set_prefs(_uid(user), merged)
     return {"prefs": merged}
 
 
@@ -522,7 +522,7 @@ async def edit_goal(
     if goal.target not in ("cut", "maintain", "bulk"):
         raise bad_request("bad_target", "Неизвестный режим.")
 
-    await users.set_goal(user.id, goal)
+    await users.set_goal(_uid(user), goal)
     return {"goal": goal_json(goal)}
 
 
@@ -540,5 +540,12 @@ async def edit_timezone(
         raise bad_request("bad_timezone", "Не знаю такого часового пояса.") from exc
     container: Container = request.app.state.container
     _, users = container.assistant_for(session)
-    await users.set_timezone(user.id, name)
+    await users.set_timezone(_uid(user), name)
     return {"timezone": name}
+
+
+def _uid(user: User) -> int:
+    """Идентификатор пользователя. `current_user` уже отверг запрос, если его нет,
+    — здесь остаётся только сузить тип для проверяльщика."""
+    assert user.id is not None
+    return user.id

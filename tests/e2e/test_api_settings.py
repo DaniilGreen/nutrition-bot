@@ -139,7 +139,9 @@ async def test_негодные_цели_400(client, body):
 async def test_смена_часового_пояса(client):
     async with client as c:
         await _login(c)
-        r = await c.patch("/api/settings/timezone", json={"timezone": "Asia/Tbilisi"}, headers=_hdr())
+        r = await c.patch(
+            "/api/settings/timezone", json={"timezone": "Asia/Tbilisi"}, headers=_hdr()
+        )
     assert r.status_code == 200
     assert r.json()["timezone"] == "Asia/Tbilisi"
 

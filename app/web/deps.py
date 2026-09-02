@@ -17,7 +17,7 @@ from app.application.assistant import Assistant
 from app.application.entities import User
 from app.container import Container
 from app.web.auth import InitDataError, verify_init_data
-from app.web.errors import forbidden, unauthorized
+from app.web.errors import ApiError, forbidden, unauthorized
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +82,11 @@ async def current_user(
     )
     if not user.is_active:
         raise forbidden("inactive", "Доступ отключён.")
+    if user.id is None:
+        # get_or_create всегда возвращает сохранённого, но тип этого не обещает.
+        # Проверяем здесь один раз, чтобы обработчики не приводили тип каждый.
+        log.error("пользователь без id после get_or_create: tg=%s", tg.telegram_id)
+        raise ApiError(500, "internal", "Что-то сломалось. Попробуй ещё раз.")
     return user
 
 
