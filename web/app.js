@@ -452,18 +452,72 @@
       }).join('') + '</div>';
   }
 
-  var SOON = {
-    ai: ['AI', 'Разбор своих данных — последний этап.']
-  };
+
+  /* ── AI: вопросы по своим данным (§8.7) ──────────────────────────────── */
+
+  var SUGGESTS = [
+    'Почему вес растёт, если по дневнику дефицит?',
+    'Чем добрать белок к вечеру?',
+    'Что изменилось за последний месяц?'
+  ];
+
+  function renderAi() {
+    document.getElementById('title').textContent = 'AI';
+    var chat = (state.chat || []).map(function (m) {
+      return '<div class="bubble ' + (m.me ? 'me' : 'ai') + '">' + esc(m.text) + '</div>';
+    }).join('');
+    var sug = state.chat && state.chat.length ? '' :
+      '<div class="chips">' + SUGGESTS.map(function (q) {
+        return '<button class="chip" data-ask="' + esc(q) + '">' + esc(q) + '</button>';
+      }).join('') + '</div>';
+    var b = state.budget;
+    var budget = !b ? '' :
+      '<section class="card" style="margin-top:var(--s-3)">' +
+        '<div class="mic">Бюджет ассистента на месяц</div>' +
+        '<div class="budget"><i style="width:' + pct(b.spent_usd, b.limit_usd) + '%"></i></div>' +
+        '<div class="mic" style="margin-top:6px">$' + n(b.spent_usd, 2) + ' из $' +
+          n(b.limit_usd, 2) + (b.available ? '' : ' · не настроен ключ') + '</div></section>';
+    show('<section class="card">' +
+           '<div class="cap">Спроси про свои данные</div>' +
+           '<div class="mic" style="margin-top:6px;line-height:1.5">' +
+             'Ассистент видит только твои цифры за 30 дней. Он не врач и не ставит диагнозов.' +
+           '</div>' + sug + '</section>' +
+         chat +
+         '<div class="composer"><input id="ask" type="text" placeholder="Вопрос">' +
+           '<button id="send" aria-label="Отправить">' +
+           '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+           'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+           '<path d="M5 12h13M13 6l6 6-6 6"/></svg></button></div>' +
+         budget);
+    if (!state.budget) {
+      api('/api/coach/budget').then(function (d) { state.budget = d; renderAi(); })
+        .catch(function () {});
+    }
+  }
+
+  function askCoach(text) {
+    if (!text) return;
+    state.chat = (state.chat || []).concat([{ me: true, text: text }]);
+    renderAi();
+    send('/api/coach', {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: text })
+    }).then(function (d) {
+      state.chat.push({ me: false, text: d.text });
+      state.budget = { spent_usd: d.spent_usd, limit_usd: d.limit_usd, available: true };
+      renderAi();
+    }).catch(function (e) {
+      state.chat.push({ me: false, text: e.message });
+      renderAi();
+    });
+  }
 
   function render() {
     document.getElementById('nav-day').classList.toggle('hidden', state.tab !== 'day');
     if (state.tab === 'day') return renderDay();
     if (state.tab === 'cat') return renderCatalog();
     if (state.tab === 'tot') return renderTotals();
-    var s = SOON[state.tab];
-    document.getElementById('title').textContent = s[0];
-    show('<section class="card"><div class="state">' + esc(s[1]) + '</div></section>');
+    return renderAi();
   }
 
   /* ── ввод ────────────────────────────────────────────────────────────── */
@@ -669,6 +723,12 @@
     if (b.id === 'next') { state.cat.offset += PAGE; return renderCatalog(); }
     if (b.id === 'save') return saveProduct();
     if (b.dataset.period) { state.period = Number(b.dataset.period); return renderTotals(); }
+    if (b.dataset.ask) return askCoach(b.dataset.ask);
+    if (b.id === 'send') {
+      var el = document.getElementById('ask');
+      var t = (el.value || '').trim(); el.value = '';
+      return askCoach(t);
+    }
     if (b.dataset.merge != null) return doMerge(Number(b.dataset.merge));
 
     if (b.hasAttribute('data-answer')) {
@@ -735,6 +795,11 @@
 
   root.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && e.target.id === 'say') { e.preventDefault(); submitText(); }
+    if (e.key === 'Enter' && e.target.id === 'ask') {
+      e.preventDefault();
+      var t = (e.target.value || '').trim(); e.target.value = '';
+      askCoach(t);
+    }
   });
 
   root.addEventListener('input', function (e) {

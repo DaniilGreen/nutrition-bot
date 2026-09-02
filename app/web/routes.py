@@ -7,11 +7,13 @@
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.coach import LimitReached
 from app.application.entities import User
 from app.application.results import (
     ClarificationNeeded,
@@ -20,10 +22,12 @@ from app.application.results import (
     VariantClarificationNeeded,
     WeightLogged,
 )
+from app.container import Container
 from app.domain.duplicates import SAFE_SPREAD, Candidate, spread, winner
 from app.domain.value_objects import Density
-from app.web.deps import CurrentAssistant, CurrentUser, current_user
-from app.web.errors import bad_request, not_found, unavailable
+from app.infrastructure.db.repositories import SqlSpendRepo
+from app.web.deps import CurrentAssistant, CurrentUser, current_user, get_session
+from app.web.errors import ApiError, bad_request, not_found, unavailable
 from app.web.schemas import (
     clarify_json,
     goal_json,
@@ -394,3 +398,49 @@ def _density_sane(d: Density) -> bool:
     if not 0 <= d.kcal_per_100g <= 900:
         return False
     return all(0 <= v <= 100 for v in (d.protein_per_100g, d.fat_per_100g, d.carb_per_100g))
+
+
+@router.post("/coach")
+async def coach(
+    body: dict[str, Any], user: CurrentUser, request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, Any]:
+    """Вопрос по своим данным (§8.7). Лимит трат проверяется ДО запроса."""
+    question = str(body.get("question") or "").strip()
+    if not question:
+        raise bad_request("empty_question", "Пустой вопрос.")
+    if len(question) > 500:
+        raise bad_request("question_too_long", "Слишком длинный вопрос.")
+
+    container: Container = request.app.state.container
+    service = container.coach_for(session)
+    if service is None:
+        raise unavailable("coach_off", "Ассистент недоступен: не настроен ключ.")
+    try:
+        answer = await service.ask(user, question)
+    except LimitReached as exc:
+        raise ApiError(
+            429, "coach_limit",
+            "Бюджет ассистента на этот месяц исчерпан. Он вернётся первого числа.",
+        ) from exc
+    return {
+        "text": answer.text,
+        "spent_usd": round(answer.spent_usd, 4),
+        "limit_usd": answer.limit_usd,
+    }
+
+
+@router.get("/coach/budget")
+async def coach_budget(
+    user: CurrentUser, request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, Any]:
+    """Сколько бюджета осталось. Нужен настройкам: без счётчика строка «Лимит»
+    была бы декоративной, а таких мы не выкатываем (MA-INV-31)."""
+    container: Container = request.app.state.container
+    spent = await SqlSpendRepo(session).spent_this_month(purpose="coach")
+    return {
+        "spent_usd": round(spent, 4),
+        "limit_usd": container.settings.coach_month_limit_usd,
+        "available": container.coach_port is not None,
+    }

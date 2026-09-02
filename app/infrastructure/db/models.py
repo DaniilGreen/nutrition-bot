@@ -10,6 +10,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
+    Integer,
     String,
     func,
 )
@@ -152,4 +153,23 @@ class BugReportORM(Base):
     )
     resolved_at: Mapped[datetime | None] = mapped_column(  # NULL = новый/открытый репорт
         DateTime(timezone=True), nullable=True
+    )
+
+
+class LlmSpendORM(Base):
+    """Один вызов LLM — одна строка. Агрегат не дал бы разобраться, что съело бюджет."""
+
+    __tablename__ = "llm_spend"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    model: Mapped[str] = mapped_column(String(64))
+    purpose: Mapped[str] = mapped_column(String(32), server_default="nlu")
+    input_tokens: Mapped[int] = mapped_column(Integer, server_default="0")
+    output_tokens: Mapped[int] = mapped_column(Integer, server_default="0")
+    cost_usd: Mapped[float] = mapped_column(Float, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
     )

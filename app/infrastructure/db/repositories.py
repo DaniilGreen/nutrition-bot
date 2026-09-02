@@ -11,6 +11,7 @@ from app.domain.goals import Goal
 from app.domain.value_objects import Density, Macros
 from app.infrastructure.db.models import (
     BugReportORM,
+    LlmSpendORM,
     MealItemORM,
     MealORM,
     ProductORM,
@@ -490,3 +491,40 @@ class SqlWeightRepo:
         return WeightLog(
             id=orm.id, user_id=orm.user_id, measured_at=orm.measured_at, weight_kg=orm.weight_kg
         )
+
+
+class SqlSpendRepo:
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def add(
+        self,
+        *,
+        user_id: int | None,
+        model: str,
+        purpose: str,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float,
+    ) -> None:
+        self._s.add(
+            LlmSpendORM(
+                user_id=user_id,
+                model=model,
+                purpose=purpose,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
+            )
+        )
+        await self._s.flush()
+
+    async def spent_this_month(self, *, purpose: str | None = None) -> float:
+        now = datetime.now(UTC)
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        stmt = select(func.coalesce(func.sum(LlmSpendORM.cost_usd), 0.0)).where(
+            LlmSpendORM.created_at >= start
+        )
+        if purpose:
+            stmt = stmt.where(LlmSpendORM.purpose == purpose)
+        return float((await self._s.execute(stmt)).scalar_one())

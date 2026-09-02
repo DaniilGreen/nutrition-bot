@@ -155,3 +155,27 @@ class WeightRepo(Protocol):
     async def latest(self, user_id: int, before: datetime | None = None) -> WeightLog | None: ...
 
     async def history(self, user_id: int, limit: int) -> list[WeightLog]: ...
+
+
+class SpendRepo(Protocol):
+    """Учёт расходов на LLM (OQ-M3). Отдельный порт, а не поле в UserRepo:
+    траты бывают и не привязанными к пользователю."""
+
+    async def add(
+        self,
+        *,
+        user_id: int | None,
+        model: str,
+        purpose: str,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float,
+    ) -> None: ...
+
+    async def spent_this_month(self, *, purpose: str | None = None) -> float:
+        """Потрачено с первого числа текущего месяца, в долларах.
+
+        Лимит месячный и общий на инсталляцию, а не на пользователя: платит
+        владелец, и его интересует счёт целиком.
+        """
+        ...

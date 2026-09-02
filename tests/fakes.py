@@ -316,3 +316,20 @@ class StubStt:
 
     async def transcribe(self, audio: bytes, *, filename: str = "voice.ogg") -> str:
         return self._transcript
+
+
+class InMemorySpendRepo:
+    """Учёт расходов на LLM в памяти. Считает по месяцу так же, как SQL-версия."""
+
+    def __init__(self, preloaded_usd: float = 0.0) -> None:
+        self._rows: list[tuple[str, float]] = []
+        if preloaded_usd:
+            self._rows.append(("coach", preloaded_usd))
+
+    async def add(
+        self, *, user_id, model, purpose, input_tokens, output_tokens, cost_usd
+    ) -> None:
+        self._rows.append((purpose, cost_usd))
+
+    async def spent_this_month(self, *, purpose: str | None = None) -> float:
+        return sum(c for p, c in self._rows if purpose is None or p == purpose)

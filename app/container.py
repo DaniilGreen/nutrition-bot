@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.assistant import Assistant
+from app.application.coach import Coach, CoachPort
 from app.application.meal_service import MealService
 from app.application.ports import NluPort, SttPort, VisionPort
 from app.application.stats_service import StatsService
@@ -21,6 +22,7 @@ from app.infrastructure.db.repositories import (
     SqlBugRepo,
     SqlMealRepo,
     SqlProductRepo,
+    SqlSpendRepo,
     SqlUserRepo,
     SqlWeightRepo,
 )
@@ -76,6 +78,21 @@ def build_vision(settings: Settings) -> VisionPort | None:
     )
 
 
+def build_coach_port(settings: Settings) -> CoachPort | None:
+    """Ассистент вкладки AI доступен только при наличии ключа; иначе None —
+    молча притворяться работающим хуже, чем честно сказать «недоступен»."""
+    if not settings.openai_api_key:
+        return None
+    from openai import AsyncOpenAI
+
+    from app.infrastructure.nlu.openai_coach import OpenAiCoach
+
+    return OpenAiCoach(
+        AsyncOpenAI(api_key=settings.openai_api_key, max_retries=settings.openai_max_retries),
+        settings.coach_model,
+    )
+
+
 @dataclass
 class Container:
     settings: Settings
@@ -83,6 +100,7 @@ class Container:
     nlu: NluPort
     stt: SttPort | None = None
     vision: VisionPort | None = None
+    coach_port: CoachPort | None = None
     clock: Clock = utcnow
 
     @classmethod
@@ -93,6 +111,21 @@ class Container:
             nlu=build_nlu(settings),
             stt=build_stt(settings),
             vision=build_vision(settings),
+            coach_port=build_coach_port(settings),
+        )
+
+    def coach_for(self, session: AsyncSession) -> Coach | None:
+        """Ассистент вкладки AI. None — если ключа нет."""
+        if self.coach_port is None:
+            return None
+        users = SqlUserRepo(session)
+        meals = SqlMealRepo(session)
+        stats = StatsService(meals, users, self.settings.default_goal(), self.clock)
+        return Coach(
+            self.coach_port,
+            SqlSpendRepo(session),
+            stats,
+            self.settings.coach_month_limit_usd,
         )
 
     def assistant_for(self, session: AsyncSession) -> tuple[Assistant, SqlUserRepo]:

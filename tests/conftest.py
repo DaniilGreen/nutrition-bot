@@ -18,6 +18,7 @@ from tests.fakes import (
     InMemoryBugRepo,
     InMemoryMealRepo,
     InMemoryProductRepo,
+    InMemorySpendRepo,
     InMemoryUserRepo,
     InMemoryWeightRepo,
     StubNlu,
@@ -71,6 +72,21 @@ class FakeContainer:
     # Подменяется в тестах записи: разные сценарии требуют разных ответов NLU.
     nlu: object = None
     stt: object = None
+    # Порт ассистента: None означает «ключа нет», ровно как в проде.
+    coach_port: object = None
+    spend: object = None
+
+    def coach_for(self, session):
+        from app.application.coach import Coach
+        from app.application.stats_service import StatsService
+
+        if self.coach_port is None:
+            return None
+        stats = StatsService(self.meals, self.users, self.settings.default_goal())
+        return Coach(
+            self.coach_port, self.spend or InMemorySpendRepo(),
+            stats, self.settings.coach_month_limit_usd,
+        )
 
     def assistant_for(self, session):
         """Сигнатура та же, что у настоящего Container: (Assistant, UserRepo).

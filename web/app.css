@@ -168,3 +168,12 @@ nav button[aria-current="page"]{color:var(--accent)}
 .periods button{background:var(--surface-2);border:0;color:var(--text-muted);font:inherit;
   font-size:var(--f-caption);border-radius:99px;padding:8px 14px;cursor:pointer;min-height:36px}
 .periods button[aria-pressed="true"]{background:var(--tint);color:var(--accent)}
+
+/* ── ассистент ───────────────────────────────────────────────────────── */
+.bubble{border-radius:var(--r-lg);padding:var(--s-3) var(--s-4);margin-top:var(--s-3);
+  font-size:var(--f-body-s);line-height:1.5;white-space:pre-wrap}
+.bubble.me{background:var(--tint);margin-left:var(--s-5)}
+.bubble.ai{background:var(--surface);margin-right:var(--s-5)}
+.budget{height:5px;border-radius:3px;background:var(--surface-3);overflow:hidden;
+  margin-top:var(--s-2)}
+.budget > i{display:block;height:100%;background:var(--accent);border-radius:3px}
