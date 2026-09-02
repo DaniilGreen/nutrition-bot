@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.application.assistant import Assistant
 from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
@@ -27,7 +27,7 @@ from tests.fakes import (
     StubNlu,
 )
 
-FIXED_NOW = datetime(2026, 6, 18, 12, 0, tzinfo=timezone.utc)
+FIXED_NOW = datetime(2026, 6, 18, 12, 0, tzinfo=UTC)
 
 
 def _build(nlu: StubNlu) -> tuple[Assistant, InMemoryUserRepo, InMemoryProductRepo]:

@@ -12,6 +12,8 @@ from typing import Any
 from fastapi import APIRouter, Depends
 
 from app.web.deps import CurrentAssistant, CurrentUser, current_user
+from app.web.errors import bad_request
+from app.web.schemas import goal_json, meal_json, remaining_json, user_json
 
 router = APIRouter(dependencies=[Depends(current_user)])
 
@@ -26,28 +28,30 @@ async def me(user: CurrentUser, assistant: CurrentAssistant) -> dict[str, Any]:
     """
     goal = await assistant.current_goal(user)
     stats = await assistant.today(user)
-    eaten = stats.remaining.consumed
     return {
-        "user": {
-            "id": user.id,
-            "name": user.name,
-            "timezone": user.timezone,
-            "onboarded": user.onboarded_at is not None,
-        },
-        "goal": {
-            "kcal": goal.daily_kcal,
-            "protein_g": goal.protein_g,
-            "fat_g": goal.fat_g,
-            "carb_g": goal.carb_g,
-            "target": goal.target,
-        },
-        "today": {
-            "kcal": eaten.kcal,
-            "protein_g": eaten.protein,
-            "fat_g": eaten.fat,
-            "carb_g": eaten.carb,
-            "kcal_left": stats.remaining.kcal_left,
-            "protein_left": stats.remaining.protein_left,
-            "meals_count": stats.meals_count,
-        },
+        "user": user_json(user),
+        "goal": goal_json(goal),
+        "today": {**remaining_json(stats.remaining), "meals_count": stats.meals_count},
+    }
+
+
+@router.get("/day")
+async def day(
+    user: CurrentUser, assistant: CurrentAssistant, days_ago: int = 0
+) -> dict[str, Any]:
+    """Экран «День»: панель остатка сверху и лента приёмов (§6.2, §7.2).
+
+    `days_ago` — навигация назад по дням. Вперёд не пускаем: будущего дня нет,
+    а отрицательное значение молча показало бы завтра пустым.
+    """
+    if days_ago < 0 or days_ago > 365:
+        raise bad_request("bad_days_ago", "День вне диапазона.")
+    remaining, view = await assistant.day_card(user, days_ago)
+    goal = await assistant.current_goal(user)
+    return {
+        "day": view.day.isoformat(),
+        "days_ago": days_ago,
+        "goal": goal_json(goal),
+        "totals": remaining_json(remaining),
+        "meals": [meal_json(m, user.timezone) for m in view.meals],
     }

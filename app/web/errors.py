@@ -23,3 +23,11 @@ def unauthorized(code: str) -> ApiError:
 
 def forbidden(code: str, message: str) -> ApiError:
     return ApiError(403, code, message)
+
+
+def bad_request(code: str, message: str) -> ApiError:
+    return ApiError(400, code, message)
+
+
+def not_found(code: str, message: str) -> ApiError:
+    return ApiError(404, code, message)

@@ -1,0 +1,73 @@
+/* Токены из макетов (§6.16). Контрасты доведены до порога 02.09.2026. */
+:root{
+  --bg:#000; --surface:#1A1C20; --surface-2:#26292F; --surface-3:#32363D;
+  --separator:#24272C; --text:#FFF; --text-muted:#A7ABB2; --text-faint:#8C9095;
+  --accent:#5E9AC1; --ok:#34C759; --warn:#FFD426; --danger:#FF453A;
+  --prot:#3AC8E0; --fat:#FF9F45; --carb:#9A87F4;
+  --bar:#7C8899; --bar-2:#A7B2C0; --line:#A7ABB2; --data:#C3CBD5;
+  --border:#5A606B; --tint:#182E3F;
+  --r-lg:16px; --r-sm:10px; --r-field:12px;
+  --s-1:4px; --s-2:8px; --s-3:12px; --s-4:16px; --s-5:20px;
+  --f-micro:11px; --f-caption:13px; --f-body-s:14px; --f-body:16px;
+  --f-t3:18px; --f-t2:22px; --f-t1:28px; --f-hero:38px;
+  --tabbar:64px;
+}
+*{box-sizing:border-box}
+html,body{overscroll-behavior-y:contain}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font:400 15px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  padding:var(--s-4) var(--s-4) calc(var(--tabbar) + var(--s-5) + env(safe-area-inset-bottom));
+}
+.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+.mic{font-size:var(--f-micro);color:var(--text-muted)}
+.cap{font-size:var(--f-caption);color:var(--text-muted)}
+.card{background:var(--surface);border-radius:var(--r-lg);padding:var(--s-4) var(--s-5)}
+.sep{height:1px;background:var(--separator)}
+.hidden{display:none!important}
+
+/* ── шапка ───────────────────────────────────────────────────────────── */
+header{display:flex;align-items:center;gap:var(--s-2);padding:var(--s-1) var(--s-1) var(--s-4)}
+header h1{flex-grow:1;font-size:var(--f-t2);font-weight:700;letter-spacing:-.4px;margin:0}
+.iconbtn{background:none;border:0;padding:8px;margin:-8px;color:var(--text-muted);cursor:pointer;
+  min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:center}
+
+/* ── верхняя панель Е: два «осталось» с барами ───────────────────────── */
+.hero{display:grid;grid-template-columns:1fr 1fr;gap:var(--s-5)}
+.hero .lbl{font-size:var(--f-body-s);color:var(--text-muted)}
+.hero .big{font-size:var(--f-hero);font-weight:700;letter-spacing:-1.5px;line-height:1}
+.hero .unit{font-size:var(--f-caption);color:var(--text-muted)}
+.track{height:6px;border-radius:3px;background:var(--surface-3);margin-top:var(--s-3);overflow:hidden}
+.track > i{display:block;height:100%;border-radius:3px;background:var(--bar);transition:width .35s}
+.foot{display:grid;grid-template-columns:1fr 1fr 1fr;margin-top:var(--s-3)}
+.foot .den{font-size:var(--f-body);color:var(--text-faint)}
+
+/* ── лента приёмов ───────────────────────────────────────────────────── */
+.meal{width:100%;text-align:left;background:none;border:0;color:inherit;font:inherit;
+  padding:11px 0;display:flex;align-items:baseline;gap:var(--s-3);cursor:pointer}
+.meal + .meal{border-top:1px solid var(--separator)}
+.meal .t{width:44px;color:var(--text-faint);font-size:var(--f-caption)}
+.meal .n{flex-grow:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:var(--f-body-s)}
+.meal .k{font-weight:600;font-size:var(--f-body-s)}
+.items{padding:0 0 var(--s-3) 44px}
+.items .row{display:flex;gap:var(--s-3);padding:5px 0;font-size:var(--f-caption);
+  color:var(--text-muted)}
+.items .row .g{color:var(--text-faint)}
+
+/* ── нижние вкладки ──────────────────────────────────────────────────── */
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:rgba(20,22,26,.92);
+  backdrop-filter:blur(18px);border-top:1px solid var(--separator);
+  padding-bottom:env(safe-area-inset-bottom);z-index:10}
+nav button{flex:1;background:none;border:0;color:var(--text-faint);cursor:pointer;
+  min-height:var(--tabbar);display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:3px;font-size:var(--f-micro);font-family:inherit}
+nav button[aria-current="page"]{color:var(--accent)}
+
+/* ── состояния ───────────────────────────────────────────────────────── */
+.state{padding:var(--s-5);text-align:center;color:var(--text-muted);font-size:var(--f-body-s)}
+.state.err{border-left:3px solid var(--danger);text-align:left}
+.skel{background:var(--surface-3);border-radius:6px;animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.45}50%{opacity:.8}}
+@media (prefers-reduced-motion:reduce){.skel{animation:none}.track>i{transition:none}}

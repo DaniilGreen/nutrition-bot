@@ -27,6 +27,11 @@ jobs:
           cache: pip
       - run: pip install -e ".[dev]"
       - run: pytest -q
+      # Сборки фронта нет и не будет (§5.7, MA-INV-14) — но файл должен существовать.
+      # Без него StaticFiles не смонтируется, аппка отдаст 404 на корень, а бот при этом
+      # будет жив: деплой прошёл бы «зелёным» с мёртвой аппкой.
+      - name: web присутствует
+        run: test -f web/index.html
 
   deploy:
     needs: test
@@ -63,3 +68,21 @@ jobs:
             docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
             docker compose logs --since 90s bot | grep -q "Run polling"
           '
+
+      - name: verify miniapp
+        env:
+          MINIAPP_URL: https://nutrition-calorie.greenjola.win
+        run: |
+          set -euo pipefail
+          # Запрос снаружи, с раннера, а не с сервера: одним вызовом накрывает всю
+          # цепочку DNS → TLS → Caddy соседа → сеть edge → uvicorn. Сертификат
+          # проверяется по умолчанию, поэтому протухший или невыпущенный валит шаг.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$MINIAPP_URL/health")
+          test "$code" = "200" || { echo "health вернул $code"; exit 1; }
+          # Корень обязан отдать HTML, а не 404: значит статика смонтирована.
+          type=$(curl -sS -o /dev/null -w '%{content_type}' --max-time 20 "$MINIAPP_URL/")
+          case "$type" in text/html*) ;; *) echo "корень отдал $type"; exit 1 ;; esac
+          # Без подписи — только 401. Открытый /api/me означал бы дыру в MA-INV-6.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$MINIAPP_URL/api/me")
+          test "$code" = "401" || { echo "api/me без подписи вернул $code"; exit 1; }
+          echo "аппка отвечает: health 200, корень HTML, api под замком"
