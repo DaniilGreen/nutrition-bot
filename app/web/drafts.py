@@ -26,6 +26,11 @@ class Draft:
     payload: Any  # ParsedMessage — web про его устройство не знает и не должен
     item_index: int
     raw_input: str
+    # "variant" — LLM предложил замены имени (D-19), ответ переименовывает позицию.
+    # "portion" — не хватает веса, ответ дописывается к вводу и разбирается заново.
+    # Разные пути: перепутать их значит потерять запись (ответ «300 г» стал бы
+    # именем продукта).
+    kind: str = "variant"
     created_at: float = field(default_factory=time.monotonic)
 
 
@@ -33,7 +38,10 @@ class DraftStore:
     def __init__(self) -> None:
         self._items: dict[str, Draft] = {}
 
-    def put(self, user_id: int, payload: Any, item_index: int, raw_input: str) -> str:
+    def put(
+        self, user_id: int, payload: Any, item_index: int, raw_input: str,
+        kind: str = "variant",
+    ) -> str:
         self._sweep()
         if len(self._items) >= MAX_DRAFTS:
             # Выкидываем самый старый, а не отказываем: отказ на ровном месте
@@ -41,7 +49,7 @@ class DraftStore:
             oldest = min(self._items, key=lambda k: self._items[k].created_at)
             del self._items[oldest]
         token = secrets.token_urlsafe(16)
-        self._items[token] = Draft(user_id, payload, item_index, raw_input)
+        self._items[token] = Draft(user_id, payload, item_index, raw_input, kind)
         return token
 
     def take(self, token: str, user_id: int) -> Draft | None:

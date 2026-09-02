@@ -76,12 +76,23 @@ async def test_процент_в_запросе_не_становится_мас
 
 
 async def test_карточка_со_счётчиком(client, fake_container):
+    """«Ел 9 раз» — про ЭТОГО человека, не про обоих."""
     (p,) = await _seed(fake_container.products, ("chicken", "грудка", 165, "curated"))
-    fake_container.products.set_usage(p.id, 9)
     async with client as c:
+        uid = int((await c.get("/api/me", headers=_hdr())).json()["user"]["id"])
+        fake_container.products.set_usage(p.id, 9, user_id=uid)
         r = (await c.get(f"/api/products/{p.id}", headers=_hdr())).json()
     assert r["product"]["uses"] == 9
     assert r["product"]["source"] == "curated"
+
+
+async def test_чужой_счётчик_не_виден(client, fake_container):
+    """Сколько раз это ел другой человек — его дело. Данные о здоровье."""
+    (p,) = await _seed(fake_container.products, ("chicken", "грудка", 165, "curated"))
+    fake_container.products.set_usage(p.id, 42, user_id=999)
+    async with client as c:
+        r = (await c.get(f"/api/products/{p.id}", headers=_hdr())).json()
+    assert r["product"]["uses"] == 0
 
 
 async def test_несуществующий_продукт_404(client):

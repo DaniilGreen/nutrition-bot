@@ -264,14 +264,21 @@ class SqlProductRepo:
         total = (await self._s.execute(count_stmt)).scalar_one()
         return [_product_to_domain(o) for o in rows], int(total)
 
-    async def usage_counts(self, product_ids: list[int]) -> dict[int, int]:
+    async def usage_counts(
+        self, product_ids: list[int], *, user_id: int | None = None
+    ) -> dict[int, int]:
         if not product_ids:
             return {}
-        res = await self._s.execute(
-            select(MealItemORM.product_id, func.count())
-            .where(MealItemORM.product_id.in_(product_ids))
-            .group_by(MealItemORM.product_id)
+        stmt = select(MealItemORM.product_id, func.count()).where(
+            MealItemORM.product_id.in_(product_ids)
         )
+        if user_id is not None:
+            # Без джойна счётчик смешал бы обоих пользователей: «ел 9 раз»
+            # рассказало бы, сколько раз это ел другой человек.
+            stmt = stmt.join(MealORM, MealORM.id == MealItemORM.meal_id).where(
+                MealORM.user_id == user_id
+            )
+        res = await self._s.execute(stmt.group_by(MealItemORM.product_id))
         return {int(pid): int(cnt) for pid, cnt in res.all() if pid is not None}
 
     async def merge(self, winner_id: int, loser_ids: list[int]) -> int:

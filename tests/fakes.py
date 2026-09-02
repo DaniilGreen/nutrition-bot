@@ -56,6 +56,7 @@ class InMemoryProductRepo:
         self._by_key: dict[str, Product] = {}
         self._seq = 0
         self._uses: dict[int, int] = {}
+        self._uses_by_user: dict[int, dict[int, int]] = {}
 
     async def get_by_key(self, canonical_key: str) -> Product | None:
         return self._by_key.get(canonical_key)
@@ -91,13 +92,20 @@ class InMemoryProductRepo:
         xs.sort(key=lambda p: p.display_name)
         return xs[offset : offset + limit], len(xs)
 
-    async def usage_counts(self, product_ids: list[int]) -> dict[int, int]:
+    async def usage_counts(
+        self, product_ids: list[int], *, user_id: int | None = None
+    ) -> dict[int, int]:
         # Фейк каталога не знает про приёмы — счётчик подставляется тестом
-        # через `set_usage`, иначе он всегда нулевой.
-        return {i: self._uses.get(i, 0) for i in product_ids}
+        # через `set_usage`. Фильтр по пользователю моделируется вторым словарём:
+        # без этого утечка между юзерами прошла бы мимо тестов.
+        src = self._uses_by_user.get(user_id, {}) if user_id is not None else self._uses
+        return {i: src.get(i, 0) for i in product_ids}
 
-    def set_usage(self, product_id: int, count: int) -> None:
-        self._uses[product_id] = count
+    def set_usage(self, product_id: int, count: int, *, user_id: int | None = None) -> None:
+        if user_id is None:
+            self._uses[product_id] = count
+        else:
+            self._uses_by_user.setdefault(user_id, {})[product_id] = count
 
     async def merge(self, winner_id: int, loser_ids: list[int]) -> int:
         losers = [i for i in loser_ids if i != winner_id]

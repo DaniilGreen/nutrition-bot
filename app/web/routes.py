@@ -17,7 +17,10 @@ from app.application.coach import LimitReached
 from app.application.entities import User
 from app.application.results import (
     ClarificationNeeded,
+    CorrectionFailed,
     DailyStats,
+    ItemAdjusted,
+    ItemRemoved,
     MealLogged,
     VariantClarificationNeeded,
     WeightLogged,
@@ -102,15 +105,26 @@ async def clarify(
     """Ответ на уточнение: клиент присылает только draft_id и свой выбор."""
     token = str(body.get("draft_id") or "")
     answer = str(body.get("answer") or "").strip()
-    draft = request.app.state.drafts.take(token, user.id)
+    # Валидация ДО изъятия: черновик одноразовый, и съесть его на пустом ответе
+    # значит потерять разобранный приём.
+    if not answer:
+        raise bad_request("empty_answer", "Пустой ответ.")
+    draft = request.app.state.drafts.take(token, _uid(user))
     if draft is None:
         # Один код на «нет такого» и «чужой»: различать их — подсказывать перебор.
         raise bad_request("draft_gone", "Уточнение устарело. Запиши приём заново.")
-    if not answer:
-        raise bad_request("empty_answer", "Пустой ответ.")
-    result = await assistant.resolve_clarification(
-        user, draft.payload, draft.item_index, answer, raw_input=draft.raw_input
-    )
+
+    if draft.kind == "portion":
+        # Не хватало веса. Ответ — это вес, а не имя: дописываем его к позиции
+        # и продолжаем запись. Пропустить это через resolve_clarification
+        # значило бы записать «300 г» как название продукта.
+        result = await assistant.answer_portion(
+            user, draft.payload, draft.item_index, answer, raw_input=draft.raw_input
+        )
+    else:
+        result = await assistant.resolve_clarification(
+            user, draft.payload, draft.item_index, answer, raw_input=draft.raw_input
+        )
     return _result_json(result, user, request, raw_input=draft.raw_input)
 
 
@@ -173,10 +187,36 @@ def _result_json(
         return logged_json(result, user.timezone)
 
     if isinstance(result, (ClarificationNeeded, VariantClarificationNeeded)):
+        kind = "variant" if isinstance(result, VariantClarificationNeeded) else "portion"
         token = request.app.state.drafts.put(
-            user.id, result.draft, result.item_index, raw_input
+            _uid(user), result.draft, result.item_index, raw_input, kind
         )
-        return clarify_json(result, token)
+        return clarify_json(result, token, kind)
+
+    if isinstance(result, ItemRemoved):
+        return {
+            "kind": "item_removed",
+            "names": [i.name_snapshot for i in result.items],
+            "totals": remaining_json(result.remaining),
+        }
+
+    if isinstance(result, ItemAdjusted):
+        return {
+            "kind": "item_adjusted",
+            "name": result.item.name_snapshot,
+            "grams": round(result.item.grams, 1),
+            "old_grams": round(result.old_grams, 1),
+            "totals": remaining_json(result.remaining),
+        }
+
+    if isinstance(result, CorrectionFailed):
+        # Машинный токен наружу не отдаём: человек прочтёт «not_found» и решит,
+        # что сломалось приложение.
+        text = {
+            "not_found": "Не нашёл такой позиции в сегодняшних записях.",
+            "unsupported": "Так править пока не умею — удали и запиши заново.",
+        }.get(result.reason, "Не получилось поправить.")
+        return {"kind": "correction_failed", "message": text}
 
     if isinstance(result, WeightLogged):
         return {
@@ -284,7 +324,7 @@ async def products(
     if offset < 0 or limit < 1 or limit > 100:
         raise bad_request("bad_paging", "Неверные параметры страницы.")
     items, total, uses = await assistant.catalog_page(
-        offset=offset, limit=limit, query=(q or "").strip() or None
+        user, offset=offset, limit=limit, query=(q or "").strip() or None
     )
     return {
         "total": total,
@@ -301,7 +341,7 @@ async def product(
     p = await assistant.get_product(product_id)
     if p is None:
         raise not_found("product_not_found", "Продукт не найден.")
-    counts = await assistant.usage_of(product_id)
+    counts = await assistant.usage_of(user, product_id)
     return {"product": product_json(p, counts)}
 
 

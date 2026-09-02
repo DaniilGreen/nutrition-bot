@@ -16,6 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import Settings
 from app.container import Container
@@ -24,6 +25,10 @@ from app.web.drafts import DraftStore
 from app.web.routes import router as api_router
 
 log = logging.getLogger(__name__)
+
+# Коды для ошибок, которые бросает сам фреймворк: без них фронт получил бы
+# «error» и не смог бы отличить «не туда постучался» от «нет такого».
+_CODES = {404: "not_found", 405: "method_not_allowed", 413: "too_large"}
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 
@@ -50,6 +55,24 @@ app = FastAPI(
     openapi_url=None,
 )
 app.include_router(api_router, prefix="/api")
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    """Единый конверт §7.4 для ВСЕХ ошибок с кодом.
+
+    Раньше их было три формы: `{"detail": {"error": …}}` от ApiError,
+    `{"detail": "Method Not Allowed"}` от самого FastAPI и `{"error": …}` от
+    обработчиков ниже. Фронт читал одну из трёх, поэтому тексты 500 и 503
+    до пользователя не доходили вовсе.
+    """
+    code = getattr(exc, "code", None) or _CODES.get(exc.status_code, "error")
+    message = exc.detail if isinstance(exc.detail, str) else "Что-то пошло не так."
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": {"code": code, "message": message}},
+        headers=getattr(exc, "headers", None),
+    )
 
 
 @app.exception_handler(RequestValidationError)

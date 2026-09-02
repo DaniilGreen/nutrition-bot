@@ -121,7 +121,7 @@ async def test_без_веса_граммы_на_килограмм_невозм
         await _login(c)
         r = await c.patch("/api/settings/goal", json={"protein_per_kg": 2.0}, headers=_hdr())
     assert r.status_code == 400
-    assert r.json()["detail"]["error"]["code"] == "no_weight"
+    assert r.json()["error"]["code"] == "no_weight"
 
 
 @pytest.mark.parametrize(

@@ -89,10 +89,13 @@ def logged_json(result: Any, tz: str) -> dict[str, Any]:
     }
 
 
-def clarify_json(result: Any, draft_id: str) -> dict[str, Any]:
+def clarify_json(result: Any, draft_id: str, kind: str) -> dict[str, Any]:
     """Уточнение. Черновик наружу не отдаётся — только его идентификатор (§7.1)."""
     return {
         "kind": "clarify",
+        # "portion" — ждём вес, вариантов нет и быть не может.
+        # "variant" — ждём выбор из предложенных замен имени.
+        "ask": kind,
         "draft_id": draft_id,
         "item_name": result.item_name,
         "options": list(getattr(result, "options", []) or []),

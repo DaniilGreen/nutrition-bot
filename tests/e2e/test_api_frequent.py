@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -23,6 +24,19 @@ def client(fake_container):
     )
 
 
+def _at_local_noon(days_ago: int = 0) -> datetime:
+    """Полдень нужного дня в зоне пользователя, в UTC.
+
+    Не «N часов назад»: прогон после полуночи сдвигал бы приём во вчера, и тесты
+    краснели раз в сутки по причине, не связанной с кодом.
+    """
+    tz = ZoneInfo("Europe/Moscow")
+    day = (datetime.now(tz) - timedelta(days=days_ago)).replace(
+        hour=12, minute=0, second=0, microsecond=0
+    )
+    return day.astimezone(UTC)
+
+
 def _hdr():
     return {"X-Telegram-Init-Data": valid()}
 
@@ -41,7 +55,7 @@ def _meal(uid: int, days_ago: float, *items) -> Meal:
     )
     return Meal(
         user_id=uid,
-        eaten_at=datetime.now(UTC) - timedelta(days=days_ago),
+        eaten_at=_at_local_noon(int(days_ago)),
         input_type="text", raw_input=", ".join(i.name_snapshot for i in ms),
         items=ms, source_confidence=0.9, totals=total,
     )

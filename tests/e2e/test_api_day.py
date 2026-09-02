@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -21,12 +22,25 @@ def client(fake_container):
     )
 
 
+def _at_local_noon(days_ago: int = 0) -> datetime:
+    """Полдень нужного дня в зоне пользователя, в UTC.
+
+    Не «N часов назад»: прогон после полуночи сдвигал бы приём во вчера, и тесты
+    краснели раз в сутки по причине, не связанной с кодом.
+    """
+    tz = ZoneInfo("Europe/Moscow")
+    day = (datetime.now(tz) - timedelta(days=days_ago)).replace(
+        hour=12, minute=0, second=0, microsecond=0
+    )
+    return day.astimezone(UTC)
+
+
 def _meal(user_id: int, *, hours_ago: float, name: str, grams: float,
           kcal: float, estimate: bool = False) -> Meal:
     m = Macros(kcal=kcal, protein=kcal / 20, fat=kcal / 40, carb=kcal / 10)
     return Meal(
         user_id=user_id,
-        eaten_at=datetime.now(UTC) - timedelta(hours=hours_ago),
+        eaten_at=_at_local_noon() + timedelta(minutes=int(hours_ago)),
         input_type="text",
         raw_input=name,
         items=[MealItem(name_snapshot=name, grams=grams, macros=m, is_estimate=estimate)],
@@ -105,7 +119,7 @@ async def test_день_вне_диапазона_400(client, bad):
         await _login(c)
         r = await c.get(f"/api/day?days_ago={bad}", headers={"X-Telegram-Init-Data": valid()})
     assert r.status_code == 400
-    assert r.json()["detail"]["error"]["code"] == "bad_days_ago"
+    assert r.json()["error"]["code"] == "bad_days_ago"
 
 
 async def test_день_требует_подписи(client):

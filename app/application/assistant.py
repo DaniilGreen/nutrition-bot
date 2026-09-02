@@ -39,6 +39,7 @@ from app.domain.duplicates import Candidate, group
 from app.domain.goals import Goal, Remaining, in_goal, remaining
 from app.domain.nutrition import atwater_suspect
 from app.domain.plausibility import clamp_density, is_alcoholic
+from app.domain.portion_answer import parse as parse_portion
 from app.domain.value_objects import Density, Macros, sum_macros
 
 
@@ -127,6 +128,30 @@ class Assistant:
         )
         draft = ParsedMessage(intent=Intent.MEAL, items=[item], confidence=1.0)
         return LabelRead(draft=draft, item_index=0, atwater_warning=warn)
+
+    async def answer_portion(
+        self, user: User, draft: ParsedMessage, item_index: int, answer: str, *, raw_input: str
+    ) -> Result:
+        """Ответ на «какая порция?»: размер словом или вес числом.
+
+        Отдельно от `resolve_clarification` (D-19): там ответ ЗАМЕНЯЕТ имя и
+        плотность переоценивается, здесь ответ задаёт только вес. Перепутать
+        значит записать «300 г» как название продукта и потерять приём.
+        """
+        parsed = parse_portion(answer)
+        if not parsed.understood:
+            return Unknown(
+                reason="Ответь размером (маленькая / средняя / большая) или граммами, напр. «250»."
+            )
+        item = draft.items[item_index]
+        if parsed.size is not None:
+            item.unit = Unit.PORTION
+            item.portion_hint = parsed.size
+        else:
+            item.unit = Unit.GRAM
+            item.grams = parsed.grams
+            item.portion_hint = None
+        return await self._handle_meal(user, draft, raw_input=raw_input, input_type="text")
 
     async def continue_meal(
         self, user: User, draft: ParsedMessage, *, raw_input: str, input_type: str = "text"
@@ -265,22 +290,26 @@ class Assistant:
         return await self._meals.frequent_items(_require_id(user), days=days, limit=limit)
 
     async def catalog_page(
-        self, *, offset: int = 0, limit: int = 20, query: str | None = None
+        self, user: User, *, offset: int = 0, limit: int = 20, query: str | None = None
     ) -> tuple[list[Product], int, dict[int, int]]:
-        """Страница каталога + сколько раз каждый продукт съеден (§7.2)."""
+        """Страница каталога + сколько раз ЭТОТ человек ел каждый продукт (§7.2)."""
         items, total = await self._products.list_page(offset=offset, limit=limit, query=query)
-        uses = await self._products.usage_counts([p.id for p in items if p.id])
+        uses = await self._products.usage_counts(
+            [p.id for p in items if p.id], user_id=_require_id(user)
+        )
         return items, total, uses
 
-    async def usage_of(self, product_id: int) -> int:
-        """Сколько раз продукт съеден. Карточке нужно одно число, а не вся страница."""
-        counts = await self._products.usage_counts([product_id])
+    async def usage_of(self, user: User, product_id: int) -> int:
+        """Сколько раз ЭТОТ человек ел продукт. Карточке нужно одно число."""
+        counts = await self._products.usage_counts([product_id], user_id=_require_id(user))
         return counts.get(product_id, 0)
 
     async def duplicate_groups(self) -> list[list[Product]]:
         """Группы дублей каталога. Не сливает — только показывает: разброс плотности
         внутри группы может быть таким, что слияние заметно двинет цифры (D-32)."""
         items = await self._products.list_all()
+        # Здесь без user_id намеренно: выжившего выбирает общий вес записи
+        # в каталоге, а не частота у одного из двоих.
         uses = await self._products.usage_counts([p.id for p in items if p.id])
         rows = [
             Candidate(

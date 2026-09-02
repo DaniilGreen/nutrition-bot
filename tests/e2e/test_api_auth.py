@@ -31,6 +31,16 @@ async def test_health_открыт_без_подписи(client):
     assert r.json() == {"status": "ok"}
 
 
+async def test_все_ошибки_в_одном_конверте(client):
+    """Включая те, что бросает сам фреймворк: иначе фронту два формата."""
+    async with client as c:
+        no_route = await c.get("/api/нет-такого", headers={"X-Telegram-Init-Data": valid()})
+        wrong_method = await c.post("/api/me", headers={"X-Telegram-Init-Data": valid()})
+    for r in (no_route, wrong_method):
+        assert "error" in r.json(), r.text
+        assert "detail" not in r.json()
+
+
 async def test_схема_api_наружу_не_публикуется(client):
     """MA-INV-6 знает одно исключение, /docs в него не входит."""
     async with client as c:
@@ -62,10 +72,14 @@ async def test_из_этого_эндпоинта_не_выходит_ничег
 
 
 async def test_конверт_ошибки_по_форме(client):
-    """§7.4: {"error": {"code", "message"}}; текст одинаковый, различается code."""
+    """§7.4: ровно один формат — {"error": {"code", "message"}} на верхнем уровне.
+
+    Раньше форм было три: своя у ApiError, своя у FastAPI и своя у обработчиков.
+    Фронт читал одну, поэтому тексты 500 и 503 до человека не доходили.
+    """
     async with client as c:
         r = await c.get("/api/me", headers={"X-Telegram-Init-Data": "hash=deadbeef"})
-    err = r.json()["detail"]["error"]
+    err = r.json()["error"]
     assert err["code"] == "bad_signature"
     assert "подпис" not in err["message"].lower()  # причина наружу не уходит
 
@@ -80,7 +94,7 @@ async def test_протухшая_даёт_свой_код(client):
     async with client as c:
         r = await c.get("/api/me", headers={"X-Telegram-Init-Data": old})
     assert r.status_code == 401
-    assert r.json()["detail"]["error"]["code"] == "init_data_expired"
+    assert r.json()["error"]["code"] == "init_data_expired"
 
 
 async def test_me_с_подлинной_подписью(client):
@@ -134,7 +148,7 @@ async def test_отключённый_пользователь_403(client, fake_
         (await fake_container.users.list_active())[0].is_active = False
         r = await c.get("/api/me", headers={"X-Telegram-Init-Data": valid()})
     assert r.status_code == 403
-    assert r.json()["detail"]["error"]["code"] == "inactive"
+    assert r.json()["error"]["code"] == "inactive"
 
 
 async def test_поле_signature_не_ломает_проверку(client):

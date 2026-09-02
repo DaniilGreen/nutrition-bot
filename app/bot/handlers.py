@@ -84,6 +84,7 @@ from app.bot.keyboards import (
 from app.bot.states import MealStates, ProfileStates
 from app.bot.ui import gather, screens
 from app.domain.goals import Goal, goal_from_macros, goal_from_profile, rebalance, set_macro
+from app.domain.portion_answer import parse as parse_portion
 from app.domain.timeframe import tz_from_longitude, tz_from_utc_offset
 from app.domain.value_objects import Density
 
@@ -1229,14 +1230,9 @@ def _parse_floats(text: str) -> list[float]:
 
 
 def _portion_word(text: str) -> str | None:
-    low = text.lower()
-    if "мал" in low:
-        return "small"
-    if "средн" in low:
-        return "medium"
-    if "больш" in low:
-        return "large"
-    return None
+    """Размер порции словом. Обёртка над доменом: раньше здесь была своя копия,
+    и «небольшая» понималась как БОЛЬШАЯ — подстрока «больш» перевешивала."""
+    return parse_portion(text).size
 
 
 def _first_number(text: str) -> float | None:

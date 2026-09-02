@@ -42,7 +42,7 @@ async def test_без_ключа_ассистент_честно_недосту�
     async with client as c:
         r = await c.post("/api/coach", json={"question": "почему не худею"}, headers=_hdr())
     assert r.status_code == 503
-    assert r.json()["detail"]["error"]["code"] == "coach_off"
+    assert r.json()["error"]["code"] == "coach_off"
 
 
 async def test_ответ_и_расход(client, fake_container):
@@ -68,7 +68,7 @@ async def test_лимит_проверяется_до_запроса(client, fak
     async with client as c:
         r = await c.post("/api/coach", json={"question": "х"}, headers=_hdr())
     assert r.status_code == 429
-    assert r.json()["detail"]["error"]["code"] == "coach_limit"
+    assert r.json()["error"]["code"] == "coach_limit"
     assert port.seen_facts is None      # модель не вызывалась вовсе
 
 

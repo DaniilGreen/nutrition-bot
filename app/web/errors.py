@@ -10,11 +10,12 @@ from fastapi import HTTPException
 
 
 class ApiError(HTTPException):
+    """Ошибка API. Наружу уходит через обработчик в `main_api`, который кладёт
+    её в единый конверт §7.4 — здесь только код и текст."""
+
     def __init__(self, status_code: int, code: str, message: str) -> None:
-        super().__init__(
-            status_code=status_code,
-            detail={"error": {"code": code, "message": message}},
-        )
+        super().__init__(status_code=status_code, detail=message)
+        self.code = code
 
 
 def unauthorized(code: str) -> ApiError:

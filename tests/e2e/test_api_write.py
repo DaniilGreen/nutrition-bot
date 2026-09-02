@@ -66,7 +66,7 @@ async def test_пустой_текст_400(client, payload):
     async with client as c:
         r = await c.post("/api/meals", json=payload, headers=_hdr())
     assert r.status_code == 400
-    assert r.json()["detail"]["error"]["code"] == "empty_text"
+    assert r.json()["error"]["code"] == "empty_text"
 
 
 async def test_слишком_длинный_текст_400(client):
@@ -116,7 +116,7 @@ async def test_черновик_одноразовый(client, fake_container):
         assert (await c.post("/api/meals/clarify", json=body, headers=_hdr())).status_code == 200
         again = await c.post("/api/meals/clarify", json=body, headers=_hdr())
     assert again.status_code == 400
-    assert again.json()["detail"]["error"]["code"] == "draft_gone"
+    assert again.json()["error"]["code"] == "draft_gone"
 
 
 async def test_несуществующий_черновик_400(client):
@@ -167,7 +167,7 @@ async def test_голос_без_stt_отдаёт_503(client):
     async with client as c:
         r = await c.post("/api/meals/voice", content=b"\x00\x01\x02", headers=_hdr())
     assert r.status_code == 503
-    assert r.json()["detail"]["error"]["code"] == "stt_off"
+    assert r.json()["error"]["code"] == "stt_off"
 
 
 async def test_пустое_аудио_400(client):
@@ -180,7 +180,7 @@ async def test_слишком_большое_аудио_400(client):
     async with client as c:
         r = await c.post("/api/meals/voice", content=b"x" * 1_600_000, headers=_hdr())
     assert r.status_code == 400
-    assert r.json()["detail"]["error"]["code"] == "audio_too_big"
+    assert r.json()["error"]["code"] == "audio_too_big"
 
 
 async def test_запись_требует_подписи(client):
