@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime
 
 from app.application.dto import ParsedItem, ParsedMessage
 from app.application.entities import Meal, Product, User, WeightLog
@@ -155,6 +155,29 @@ class InMemoryMealRepo:
 
     async def list_between(self, user_id: int, start: datetime, end: datetime) -> list[Meal]:
         return [m for m in self._meals if m.user_id == user_id and start <= m.eaten_at < end]
+
+    async def frequent_items(
+        self, user_id: int, *, days: int, limit: int
+    ) -> list[tuple[str, float, int]]:
+        from collections import defaultdict
+        from datetime import timedelta
+
+        since = datetime.now(UTC) - timedelta(days=days)
+        buckets: dict[str, list[float]] = defaultdict(list)
+        for m in self._meals:
+            if m.user_id != user_id or m.eaten_at < since:
+                continue
+            for it in m.items:
+                buckets[it.name_snapshot].append(it.grams)
+        rows = []
+        for name, grams in buckets.items():
+            grams.sort()
+            median = grams[len(grams) // 2] if len(grams) % 2 else (
+                (grams[len(grams) // 2 - 1] + grams[len(grams) // 2]) / 2
+            )
+            rows.append((name, float(median), len(grams)))
+        rows.sort(key=lambda r: (-r[2], r[0]))
+        return rows[:limit]
 
     async def list_recent(self, user_id: int, limit: int) -> list[Meal]:
         xs = [m for m in self._meals if m.user_id == user_id]

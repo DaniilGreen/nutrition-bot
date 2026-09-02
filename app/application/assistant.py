@@ -32,7 +32,7 @@ from app.application.results import (
     WeightLogged,
     WeightTrend,
 )
-from app.application.stats_service import StatsService
+from app.application.stats_service import StatsService, _require_id
 from app.application.weight_service import WeightService
 from app.domain.consensus import confidence_from_cv, median_cv
 from app.domain.duplicates import Candidate, group
@@ -253,6 +253,12 @@ class Assistant:
         """FR-27 #6: переименовать продукт (обобщённое имя с этикетки → конкретное)."""
         clean = name.strip()[:255]
         return await self._products.rename(product_id, clean) if clean else None
+
+    async def frequent(
+        self, user: User, *, days: int = 30, limit: int = 10
+    ) -> list[tuple[str, float, int]]:
+        """Чаще всего съеденное — для чипов быстрой записи (§6.3)."""
+        return await self._meals.frequent_items(_require_id(user), days=days, limit=limit)
 
     async def catalog_page(
         self, *, offset: int = 0, limit: int = 20, query: str | None = None

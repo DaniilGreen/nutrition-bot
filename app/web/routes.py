@@ -185,6 +185,40 @@ def _result_json(
     reason = getattr(result, "reason", None) or "Не понял, что записать."
     return {"kind": "unknown", "message": reason}
 
+@router.get("/frequent")
+async def frequent(
+    user: CurrentUser, assistant: CurrentAssistant, days: int = 30, limit: int = 10
+) -> dict[str, Any]:
+    """Чипы быстрой записи: что человек ест чаще всего и в какой граммовке (§6.3).
+
+    Граммовка — медиана, а не среднее: одна ошибка «2000 г» сдвинула бы среднее
+    так, что подсказка перестала бы попадать в реальность.
+    """
+    if not 1 <= days <= 365 or not 1 <= limit <= 30:
+        raise bad_request("bad_range", "Неверные параметры.")
+    rows = await assistant.frequent(user, days=days, limit=limit)
+    return {
+        "items": [
+            {"name": name, "grams": round(grams, 1), "times": times}
+            for name, grams, times in rows
+        ]
+    }
+
+
+@router.post("/meals/{meal_id}/repeat")
+async def repeat(meal_id: int, user: CurrentUser, assistant: CurrentAssistant) -> dict[str, Any]:
+    """Повторить приём одним тапом: тот же состав, тот же вес, текущее время.
+
+    Копируется снапшот КБЖУ, а не пересчитывается из каталога (INV-3): повтор
+    обязан совпасть с оригиналом до грамма. Если каталог с тех пор поправили,
+    повтор всё равно повторяет то, что было съедено, а не то, что стало в базе.
+    """
+    result = await assistant.repeat_meal(user, meal_id)
+    if result is None:
+        raise not_found("meal_not_found", "Приём не найден — возможно, его удалили.")
+    return logged_json(result, user.timezone)
+
+
 @router.get("/products")
 async def products(
     user: CurrentUser, assistant: CurrentAssistant,

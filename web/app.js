@@ -174,7 +174,10 @@
       }).join('');
       var macros = '<div class="row" style="border-top:1px solid var(--separator);margin-top:4px;padding-top:8px">' +
         '<span style="flex-grow:1">Б ' + n(m.protein_g) + ' · Ж ' + n(m.fat_g) + ' · У ' + n(m.carb_g) + '</span></div>';
-      return head + '<div class="items">' + items + macros + '</div>';
+      var acts = '<div class="actions" style="margin-top:var(--s-2)">' +
+        '<button data-repeat="' + m.id + '">Повторить</button>' +
+        '<button data-drop="' + m.id + '" class="danger">Удалить</button></div>';
+      return head + '<div class="items">' + items + macros + acts + '</div>';
     }).join('');
     return '<section class="card" style="margin-top:var(--s-3)">' +
            '<div class="cap" style="margin-bottom:var(--s-2)">Съедено</div>' + rows + '</section>';
@@ -200,7 +203,7 @@
         var extra = '';
         if (state.justLogged) extra = justCard(state.justLogged);
         else if (state.clarify) extra = clarifyCard(state.clarify);
-        show(hero(d) + composer() + chips(d) + extra + feed(d));
+        show(hero(d) + composer() + chips() + extra + feed(d));
         var inp = document.getElementById('say');
         if (inp && state.keepFocus) { inp.focus(); state.keepFocus = false; }
       })
@@ -355,19 +358,24 @@
       '</button></div>';
   }
 
-  /* Частое — одна прокручиваемая строка, без «Ещё» (§6.3). Список приходит
-     с сервера; пока эндпоинта нет, берём то, что уже съедено за день. */
-  function chips(d) {
-    var seen = {}, out = [];
-    (d.meals || []).forEach(function (m) {
-      m.items.forEach(function (i) {
-        if (seen[i.name] || out.length >= 10) return;
-        seen[i.name] = 1;
-        out.push('<button class="chip" data-say="' + esc(i.name + ' ' + n(i.grams) + ' г') + '">' +
-                 esc(i.name) + ' <span class="g">· ' + n(i.grams) + ' г</span></button>');
-      });
-    });
-    return out.length ? '<div class="chips">' + out.join('') + '</div>' : '';
+  /* Частое — одна прокручиваемая строка, без «Ещё» (§6.3). Список считает
+     сервер по медиане граммовки за 30 дней. */
+  function chips() {
+    var xs = state.frequent || [];
+    if (!xs.length) return '';
+    return '<div class="chips">' + xs.map(function (i) {
+      return '<button class="chip" data-say="' + esc(i.name + ' ' + n(i.grams) + ' г') + '">' +
+        esc(i.name) + ' <span class="g">· ' + n(i.grams) + ' г</span></button>';
+    }).join('') + '</div>';
+  }
+
+  function loadFrequent() {
+    /* Тихо: пустые чипы — не ошибка, ради них не стоит ломать экран. */
+    api('/api/frequent?limit=10').then(function (d) {
+      var before = (state.frequent || []).length;
+      state.frequent = d.items;
+      if (!before && d.items.length && state.tab === 'day') renderDay();
+    }).catch(function () {});
   }
 
   /* Пишем сразу, превью не показываем (решение владельца): записанное можно
@@ -493,6 +501,19 @@
       return render();
     }
     if (b.id === 'mic') return state.recording ? stopRec() : startRec();
+    if (b.dataset.repeat) {
+      loading();
+      return send('/api/meals/' + b.dataset.repeat + '/repeat')
+        .then(handle).catch(function (err) { toast(err.message, true); renderDay(); });
+    }
+    if (b.dataset.drop) {
+      if (!window.confirm('Удалить этот приём?')) return;
+      var did = b.dataset.drop;
+      loading();
+      return send('/api/meals/' + did, { method: 'DELETE' })
+        .then(function () { delete state.open[did]; toast('Удалил.'); renderDay(); })
+        .catch(function (err) { toast(err.message, true); renderDay(); });
+    }
     if (b.dataset.say) {
       var inp = document.getElementById('say');
       inp.value = b.dataset.say;
@@ -613,6 +634,7 @@
 
   tg.ready();
   tg.expand();
+  loadFrequent();
   if (tg.setHeaderColor) { try { tg.setHeaderColor('#000000'); } catch (e) { /* старый клиент */ } }
   render();
 })();

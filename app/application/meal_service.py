@@ -146,6 +146,12 @@ class MealService:
         names = [it.name_snapshot for m in meals for it in m.items]
         return order_options_by_history(options, names)
 
+    async def frequent_items(
+        self, user_id: int, *, days: int, limit: int
+    ) -> list[tuple[str, float, int]]:
+        """Что человек ест чаще всего — для чипов быстрой записи. Без LLM."""
+        return await self._meals.frequent_items(user_id, days=days, limit=limit)
+
     async def repeat(self, user: User, meal_id: int) -> Meal | None:
         """Тот же приём ещё раз: тот же вес, тот же снапшот КБЖУ, текущее время. Без LLM.
 

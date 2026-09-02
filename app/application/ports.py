@@ -109,6 +109,17 @@ class ProductRepo(Protocol):
 class MealRepo(Protocol):
     async def add(self, meal: Meal) -> Meal: ...
 
+    async def frequent_items(
+        self, user_id: int, *, days: int, limit: int
+    ) -> list[tuple[str, float, int]]:
+        """Что человек ест чаще всего: (имя, типичная граммовка, сколько раз).
+
+        Граммовка — медиана по последним записям, а не среднее: одна ошибка
+        «2000 г» сдвинула бы среднее так, что чип перестал бы попадать в реальность.
+        Окно в днях, а не «за всё время»: рацион меняется, прошлогоднее не подсказка.
+        """
+        ...
+
     async def list_between(
         self, user_id: int, start: datetime, end: datetime
     ) -> list[Meal]: ...

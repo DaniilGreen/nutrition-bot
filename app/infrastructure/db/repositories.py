@@ -1,7 +1,7 @@
 """Реализация портов на SQLAlchemy. Маппинг ORM <-> доменные dataclass'ы."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -126,7 +126,7 @@ class SqlUserRepo:
     async def set_onboarded(self, user_id: int) -> None:
         orm = await self._s.get(UserORM, user_id)
         if orm is not None and orm.onboarded_at is None:
-            orm.onboarded_at = datetime.now(timezone.utc)  # реальный datetime, не SQL-выражение
+            orm.onboarded_at = datetime.now(UTC)  # реальный datetime, не SQL-выражение
             await self._s.flush()
 
     async def list_active(self) -> list[User]:
@@ -287,6 +287,28 @@ class SqlProductRepo:
 class SqlMealRepo:
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
+
+    async def frequent_items(
+        self, user_id: int, *, days: int, limit: int
+    ) -> list[tuple[str, float, int]]:
+        since = datetime.now(UTC) - timedelta(days=days)
+        res = await self._s.execute(
+            select(
+                MealItemORM.name_snapshot,
+                # percentile_cont даёт медиану одним запросом: тащить граммовки
+                # в питон ради сортировки — лишний трафик на ровном месте.
+                func.percentile_cont(0.5)
+                .within_group(MealItemORM.grams)
+                .label("median_grams"),
+                func.count().label("times"),
+            )
+            .join(MealORM, MealORM.id == MealItemORM.meal_id)
+            .where(MealORM.user_id == user_id, MealORM.eaten_at >= since)
+            .group_by(MealItemORM.name_snapshot)
+            .order_by(func.count().desc(), MealItemORM.name_snapshot)
+            .limit(limit)
+        )
+        return [(name, float(grams or 0), int(times)) for name, grams, times in res.all()]
 
     async def add(self, meal: Meal) -> Meal:
         orm = MealORM(
