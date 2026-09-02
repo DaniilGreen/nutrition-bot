@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.coach import LimitReached
@@ -86,7 +86,8 @@ async def day(
 
 @router.post("/meals")
 async def log_meal(
-    body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant, request: Request
+    body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant, request: Request,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, Any]:
     """Записать приём текстом (§7.2). Разбор и подсчёт — в application (INV-1)."""
     text = str(body.get("text") or "").strip()
@@ -94,8 +95,40 @@ async def log_meal(
         raise bad_request("empty_text", "Нечего записывать.")
     if len(text) > 1000:
         raise bad_request("text_too_long", "Слишком длинно — раздели на два сообщения.")
+
+    replay = _replay(request, user, idempotency_key)
+    if replay is not None:
+        return replay
+    _throttle(request, user, "meals", limit=20, window=60)
+
     result = await assistant.process(user, text, input_type=body.get("input_type") or "text")
-    return _result_json(result, user, request, raw_input=text)
+    out = _result_json(result, user, request, raw_input=text)
+    return _remember(request, user, idempotency_key, out)
+
+
+@router.post("/meals/quick")
+async def log_quick(
+    body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant, request: Request,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict[str, Any]:
+    """Запись тапом по «частому»: без модели, мгновенно (AC-MA-31).
+
+    Через `/api/meals` тап стоил бы денег и секунд, а вдобавок мог бы вернуть
+    уточняющий вопрос — на продукте, который человек ест каждый день.
+    """
+    try:
+        product_id = int(body["product_id"])
+        grams = float(body["grams"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise bad_request("bad_quick", "Нужны product_id и grams.") from exc
+    if not 0 < grams <= 5000:
+        raise bad_request("bad_grams", "Вес вне разумных пределов.")
+    replay = _replay(request, user, idempotency_key)
+    if replay is not None:
+        return replay
+    result = await assistant.log_quick(user, product_id, grams)
+    out = _result_json(result, user, request, raw_input="")
+    return _remember(request, user, idempotency_key, out)
 
 
 @router.post("/meals/clarify")
@@ -141,6 +174,7 @@ async def log_voice(
         # Тот же предел, что у бота: длинная фраза доезжает, а мегабайтные файлы
         # держали бы воркера впустую.
         raise bad_request("audio_too_big", "Слишком длинная запись — до полутора минут.")
+    _throttle(request, user, "voice", limit=10, window=60)
     text = await assistant.transcribe(audio, filename="voice.ogg")
     if not text:
         raise unavailable("stt_off", "Распознавание голоса недоступно.")
@@ -165,12 +199,15 @@ async def delete_item(
 ) -> dict[str, Any]:
     """Убрать одну позицию: приём из трёх блюд не должен удаляться целиком
     из-за одной ошибки."""
-    result = await assistant.remove_item(user, meal_id, item_id)
-    if result is None:
+    meal = await assistant.get_meal(user, meal_id)
+    if meal is None or not any(i.id == item_id for i in meal.items):
         raise not_found("item_not_found", "Позиция не найдена.")
+    result = await assistant.remove_item(user, meal_id, item_id)
     stats = await assistant.today(user)
+    # None означает «позиций не осталось, приём удалён целиком» — это успех,
+    # а не 404. Отдавать ошибку на успешное действие значит врать интерфейсу.
     return {
-        "meal": meal_json(result.meal, user.timezone) if result.meal.items else None,
+        "meal": meal_json(result.meal, user.timezone) if result else None,
         "totals": remaining_json(stats.remaining),
     }
 
@@ -295,8 +332,8 @@ async def frequent(
     rows = await assistant.frequent(user, days=days, limit=limit)
     return {
         "items": [
-            {"name": name, "grams": round(grams, 1), "times": times}
-            for name, grams, times in rows
+            {"product_id": pid, "name": name, "grams": round(grams, 1), "times": times}
+            for pid, name, grams, times in rows
         ]
     }
 
@@ -385,21 +422,26 @@ async def edit_product(
 async def duplicates(user: CurrentUser, assistant: CurrentAssistant) -> dict[str, Any]:
     """Группы дублей. Автоматически не сливаем: где плотности разошлись, слияние
     заметно двинуло бы цифры — решает человек (D-32)."""
-    groups = await assistant.duplicate_groups()
+    groups, uses = await assistant.duplicate_groups()
     out = []
     for g in groups:
         rows = [
             Candidate(
                 id=p.id or 0, canonical_key=p.canonical_key, display_name=p.display_name,
-                source=p.source, kcal_per_100g=p.density.kcal_per_100g, uses=0,
+                source=p.source, kcal_per_100g=p.density.kcal_per_100g,
+                uses=uses.get(p.id or 0, 0),
             )
             for p in g
         ]
+        win = winner(rows)
         out.append({
             "spread": round(spread(rows), 3),
             "safe": spread(rows) < SAFE_SPREAD,
-            "suggested_winner": winner(rows).id,
-            "items": [product_json(p, 0) for p in g],
+            "suggested_winner": win.id,
+            # Сколько позиций истории переедет при слиянии. Без этого числа
+            # человек соглашается на необратимое вслепую (AC-MA-26).
+            "affects": sum(r.uses for r in rows if r.id != win.id),
+            "items": [product_json(p, uses.get(p.id or 0, 0)) for p in g],
         })
     return {"groups": out}
 
@@ -454,6 +496,8 @@ async def coach(
     if len(question) > 500:
         raise bad_request("question_too_long", "Слишком длинный вопрос.")
 
+    # Месячный лимит не спасает от залипшего клиента: он выжжет бюджет за минуты.
+    _throttle(request, user, "coach", limit=6, window=60)
     container: Container = request.app.state.container
     service = container.coach_for(session)
     if service is None:
@@ -537,12 +581,18 @@ async def edit_goal(
 
     protein = body.get("protein_g")
     if body.get("protein_per_kg") is not None:
+        try:
+            per_kg = float(body["protein_per_kg"])
+        except (TypeError, ValueError) as exc:
+            raise bad_request("bad_goal", "Граммы на килограмм должны быть числом.") from exc
+        if not 0.5 <= per_kg <= 5:
+            raise bad_request("bad_goal", "От 0,5 до 5 г белка на килограмм.")
         trend = await assistant.weight_trend(user, 1)
         if not trend.logs:
             raise bad_request(
                 "no_weight", "Чтобы считать белок на килограмм, нужен хотя бы один замер веса."
             )
-        protein = float(body["protein_per_kg"]) * trend.logs[0].weight_kg
+        protein = per_kg * trend.logs[0].weight_kg
 
     try:
         goal = Goal(
@@ -589,3 +639,28 @@ def _uid(user: User) -> int:
     — здесь остаётся только сузить тип для проверяльщика."""
     assert user.id is not None
     return user.id
+
+
+def _replay(request: Request, user: User, key: str | None) -> dict[str, Any] | None:
+    """Повтор с тем же `Idempotency-Key` возвращает первый ответ, а не пишет заново.
+
+    Двойной тап и ретрай браузера иначе дают два приёма — цифра выглядит
+    правдоподобно и молча врёт вдвое (§7.5).
+    """
+    if not key:
+        return None
+    remembered = request.app.state.idempotency.get(_uid(user), key)
+    return remembered if isinstance(remembered, dict) else None
+
+
+def _remember(
+    request: Request, user: User, key: str | None, response: dict[str, Any]
+) -> dict[str, Any]:
+    if key:
+        request.app.state.idempotency.put(_uid(user), key, response)
+    return response
+
+
+def _throttle(request: Request, user: User, bucket: str, *, limit: int, window: float) -> None:
+    if not request.app.state.limiter.allow(_uid(user), bucket, limit=limit, window=window):
+        raise ApiError(429, "rate_limited", "Слишком часто. Подожди немного.")

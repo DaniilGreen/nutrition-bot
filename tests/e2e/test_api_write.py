@@ -36,9 +36,12 @@ def _meal(name: str, key: str, grams: float, kcal: float, clarify=None) -> Parse
 def client(fake_container):
     from app.main_api import app
     from app.web.drafts import DraftStore
+    from app.web.limits import IdempotencyStore, RateLimiter
 
     app.state.container = fake_container
     app.state.drafts = DraftStore()
+    app.state.idempotency = IdempotencyStore()
+    app.state.limiter = RateLimiter()
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     )
@@ -215,3 +218,49 @@ async def test_сбой_модели_объясняет_себя(client, fake_co
         r = await c.post("/api/meals", json={"text": "яйца"}, headers=_hdr())
     assert r.status_code == 503
     assert r.json()["error"]["code"] == "upstream_unavailable"
+
+
+async def test_повтор_с_тем_же_ключом_не_пишет_дважды(client, fake_container):
+    """§7.5: двойной тап и ретрай сети иначе дают два приёма — цифра врёт вдвое."""
+    fake_container.nlu = StubNlu(_meal("грудка", "chicken", 200, 165))
+    # Ключ ASCII: заголовки HTTP не переносят кириллицу.
+    hdr = {**_hdr(), "Idempotency-Key": "same-key-0001"}
+    async with client as c:
+        first = (await c.post("/api/meals", json={"text": "грудка"}, headers=hdr)).json()
+        second = (await c.post("/api/meals", json={"text": "грудка"}, headers=hdr)).json()
+        day = (await c.get("/api/day", headers=_hdr())).json()
+    assert first["meal"]["id"] == second["meal"]["id"]
+    assert len(day["meals"]) == 1
+
+
+async def test_разные_ключи_пишут_разное(client, fake_container):
+    """Съел дважды — записалось дважды. Идемпотентность не должна это ломать."""
+    fake_container.nlu = StubNlu(_meal("грудка", "chicken", 200, 165))
+    async with client as c:
+        await c.post("/api/meals", json={"text": "грудка"},
+                     headers={**_hdr(), "Idempotency-Key": "a"})
+        await c.post("/api/meals", json={"text": "грудка"},
+                     headers={**_hdr(), "Idempotency-Key": "b"})
+        day = (await c.get("/api/day", headers=_hdr())).json()
+    assert len(day["meals"]) == 2
+
+
+async def test_чужой_ключ_не_отдаёт_чужой_ответ(client, fake_container):
+    """Ключ скоупится пользователем: иначе один прочитал бы ответ другого."""
+    from app.web.limits import IdempotencyStore
+
+    store = IdempotencyStore()
+    store.put(999, "общий", {"kind": "logged", "meal": {"id": 1}})
+    assert store.get(1, "общий") is None
+
+
+async def test_слишком_частая_запись_429(client, fake_container):
+    """Платный путь без потолка выжигается залипшей кнопкой за минуты."""
+    fake_container.nlu = StubNlu(_meal("грудка", "chicken", 200, 165))
+    async with client as c:
+        codes = []
+        for i in range(22):
+            r = await c.post("/api/meals", json={"text": f"грудка {i}"}, headers=_hdr())
+            codes.append(r.status_code)
+    assert 429 in codes
+    assert codes.count(200) == 20  # лимит 20 в минуту

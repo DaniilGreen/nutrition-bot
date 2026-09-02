@@ -12,9 +12,12 @@ from tests.initdata_fixtures import valid
 def client(fake_container):
     from app.main_api import app
     from app.web.drafts import DraftStore
+    from app.web.limits import IdempotencyStore, RateLimiter
 
     app.state.container = fake_container
     app.state.drafts = DraftStore()
+    app.state.idempotency = IdempotencyStore()
+    app.state.limiter = RateLimiter()
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     )
@@ -160,6 +163,7 @@ async def test_группы_дублей_показываются_с_разбр�
     assert len(g["items"]) == 2
     assert g["safe"] is True          # 60 → 62, слияние цифры не двинет
     assert g["spread"] < 0.15
+    assert "affects" in g             # AC-MA-26: сколько записей переедет
 
 
 async def test_группа_с_большим_разбросом_помечена_небезопасной(client, fake_container):

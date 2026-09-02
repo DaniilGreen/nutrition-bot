@@ -25,9 +25,12 @@ class StubCoach:
 def client(fake_container):
     from app.main_api import app
     from app.web.drafts import DraftStore
+    from app.web.limits import IdempotencyStore, RateLimiter
 
     app.state.container = fake_container
     app.state.drafts = DraftStore()
+    app.state.idempotency = IdempotencyStore()
+    app.state.limiter = RateLimiter()
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     )

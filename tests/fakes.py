@@ -170,25 +170,30 @@ class InMemoryMealRepo:
 
     async def frequent_items(
         self, user_id: int, *, days: int, limit: int
-    ) -> list[tuple[str, float, int]]:
+    ) -> list[tuple[int | None, str, float, int]]:
         from collections import defaultdict
         from datetime import timedelta
 
         since = datetime.now(UTC) - timedelta(days=days)
-        buckets: dict[str, list[float]] = defaultdict(list)
+        # Ключ тот же, что в SQL: product_id, а для беспродуктовых — имя.
+        buckets: dict[object, list[float]] = defaultdict(list)
+        names: dict[object, str] = {}
         for m in self._meals:
             if m.user_id != user_id or m.eaten_at < since:
                 continue
             for it in m.items:
-                buckets[it.name_snapshot].append(it.grams)
+                key = it.product_id if it.product_id is not None else it.name_snapshot
+                buckets[key].append(it.grams)
+                names[key] = it.name_snapshot
         rows = []
-        for name, grams in buckets.items():
+        for key, grams in buckets.items():
             grams.sort()
             median = grams[len(grams) // 2] if len(grams) % 2 else (
                 (grams[len(grams) // 2 - 1] + grams[len(grams) // 2]) / 2
             )
-            rows.append((name, float(median), len(grams)))
-        rows.sort(key=lambda r: (-r[2], r[0]))
+            pid = key if isinstance(key, int) else None
+            rows.append((pid, names[key], float(median), len(grams)))
+        rows.sort(key=lambda r: (-r[3], r[1]))
         return rows[:limit]
 
     async def list_recent(self, user_id: int, limit: int) -> list[Meal]:

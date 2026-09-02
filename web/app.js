@@ -9,7 +9,7 @@
   var tg = window.Telegram && window.Telegram.WebApp;
   var root = document.getElementById('screen');
   var nav = document.getElementById('tabs');
-  var state = { tab: 'day', daysAgo: 0, open: {},
+  var state = { tab: 'day', daysAgo: 0, open: {}, prefs: null,
                 cat: { q: '', offset: 0, view: 'list', product: null, dup: null } };
 
   // Проверка идёт ДО регистрации слушателей: иначе на экране «открой из
@@ -82,6 +82,17 @@
     toastTimer = setTimeout(function () { el.hidden = true; }, 3500);
   }
 
+  /* Telegram в части клиентов глушит window.confirm — он молча возвращает
+     false, и кнопка выглядит мёртвой. Спрашиваем родным диалогом, а confirm
+     оставляем запасным путём для обычного браузера. */
+  function ask(text, then) {
+    if (tg && tg.showConfirm) {
+      try { return tg.showConfirm(text, function (ok) { if (ok) then(); }); }
+      catch (e) { /* старый клиент — падаем на confirm */ }
+    }
+    if (window.confirm(text)) then();
+  }
+
   function show(html) { root.innerHTML = html; }
 
   function loading() {
@@ -104,9 +115,70 @@
          '<div class="mic" style="margin-top:6px">' + esc(hint) + '</div></div>');
   }
 
-  /* ── верхняя панель Е (§6.2) ─────────────────────────────────────────── */
+  /* ── верхняя панель: вид выбирается в настройках (§6.5) ──────────────── */
 
   function hero(d) {
+    var kind = (state.prefs && state.prefs.hero) || 'bars';
+    if (kind === 'rings') return heroRings(d);
+    if (kind === 'kcal') return heroKcal(d);
+    return heroBars(d);
+  }
+
+  /* Кольца: все четыре макроса разом, как в Apple Fitness. */
+  function heroRings(d) {
+    var t = d.totals, g = d.goal;
+    var data = [
+      [52, 'var(--bar)', pct(t.kcal, g.kcal), 'Ккал', t.kcal, g.kcal],
+      [41, 'var(--prot)', pct(t.protein_g, g.protein_g), 'Белок', t.protein_g, g.protein_g],
+      [30, 'var(--fat)', pct(t.fat_g, g.fat_g), 'Жир', t.fat_g, g.fat_g],
+      [19, 'var(--carb)', pct(t.carb_g, g.carb_g), 'Углеводы', t.carb_g, g.carb_g]
+    ];
+    var rings = data.map(function (r) {
+      var c = 2 * Math.PI * r[0], on = Math.round(c * r[2] / 100);
+      return '<circle cx="60" cy="60" r="' + r[0] + '" fill="none" stroke="var(--surface-3)" ' +
+             'stroke-width="9"/><circle cx="60" cy="60" r="' + r[0] + '" fill="none" stroke="' +
+             r[1] + '" stroke-width="9" stroke-linecap="round" stroke-dasharray="' + on + ' ' +
+             Math.round(c - on) + '" transform="rotate(-90 60 60)"/>';
+    }).join('');
+    var rows = data.map(function (r) {
+      return '<div style="display:flex;align-items:baseline;gap:6px">' +
+        '<span class="mic" style="flex-grow:1">' + esc(r[3]) + '</span>' +
+        '<span class="num" style="font-size:var(--f-body-s);font-weight:600">' + n(r[4]) + '</span>' +
+        '<span class="num" style="font-size:var(--f-micro);color:var(--text-faint)">/' +
+        n(r[5]) + '</span></div>';
+    }).join('');
+    return '<section class="card"><div style="display:flex;align-items:center;gap:var(--s-4)">' +
+      '<svg width="120" height="120" viewBox="0 0 120 120" aria-hidden="true" ' +
+      'style="flex-shrink:0">' + rings + '</svg>' +
+      '<div style="flex-grow:1;min-width:0;display:flex;flex-direction:column;gap:6px">' +
+      rows + '</div></div>' + heroFoot(d) + '</section>';
+  }
+
+  /* Минимум: только остаток калорий, белок уходит в подпись. */
+  function heroKcal(d) {
+    var t = d.totals, g = d.goal, over = t.kcal_left < 0;
+    return '<section class="card">' +
+      '<div class="num big" style="font-size:var(--f-hero);font-weight:700;' +
+      'letter-spacing:-1.5px;line-height:1' + (over ? ';color:var(--danger)' : '') + '">' +
+      n(Math.abs(t.kcal_left)) + '</div>' +
+      '<div class="cap" style="margin-top:3px">' +
+      (over ? 'ккал перебор' : 'ккал осталось') + ' · белка ещё ' +
+      n(Math.max(0, t.protein_left)) + ' г</div>' +
+      '<div class="track"><i style="width:' + pct(t.kcal, g.kcal) + '%"></i></div>' +
+      '</section>';
+  }
+
+  function heroFoot(d) {
+    var t = d.totals, g = d.goal;
+    var third = (state.prefs && state.prefs.foot_third) === 'weight'
+      ? foot('Вес', state.weight, null, 'right')
+      : foot('Приёмов', d.meals.length, null, 'right');
+    return '<div class="sep" style="margin:var(--s-4) 0 0"></div>' +
+      '<div class="foot">' + foot('Жир', t.fat_g, g.fat_g, 'left') +
+      foot('Углеводы', t.carb_g, g.carb_g, 'left') + third + '</div>';
+  }
+
+  function heroBars(d) {
     var t = d.totals, g = d.goal;
     var kcalLeft = t.kcal_left, protLeft = t.protein_left;
     var over = kcalLeft < 0;
@@ -130,12 +202,7 @@
               n(t.protein_g) + ' из ' + n(g.protein_g) + ' г</div>' +
           '</div>' +
         '</div>' +
-        '<div class="sep" style="margin:var(--s-4) 0 0"></div>' +
-        '<div class="foot">' +
-          foot('Жир', t.fat_g, g.fat_g, 'left') +
-          foot('Углеводы', t.carb_g, g.carb_g, 'left') +
-          foot('Приёмов', d.meals.length, null, 'right') +
-        '</div>' +
+        heroFoot(d) +
       '</section>';
   }
 
@@ -333,7 +400,7 @@
   function renderTotals() {
     document.getElementById('title').textContent = 'Итоги';
     loading();
-    var days = state.period || 30;
+    var days = state.period || (state.prefs && state.prefs.period) || 30;
     Promise.all([
       api('/api/stats/series?days=' + days),
       api('/api/stats/weight?limit=60').catch(function () { return { points: [] }; })
@@ -345,7 +412,8 @@
            card('Ккал по дням', barChart(d, 'kcal', d.goal.kcal, 'var(--bar)'),
                 'Красным — величина перебора.') +
            card('Полнота записей', heat(d),
-                'Дни ниже 60% цели — огрызки, из средних исключаются.') +
+                'Светлое — записано много, тёмное — почти пусто. Средние выше ' +
+                'считаются по дням, где есть хоть одна запись.') +
            (w.points.length > 1
              ? card('Вес', line(w.points), n(w.points.length) + ' замеров.')
              : '') +
@@ -411,9 +479,9 @@
       return '<div style="background:' + c + '" title="' + esc(x.date) + '"></div>';
     }).join('');
     return '<div class="heat">' + cells + '</div>' +
-      '<div class="legend"><span><i style="background:#EDF1F5"></i>полный</span>' +
-      '<span><i style="background:#7C8899"></i>неполный</span>' +
-      '<span><i style="background:var(--surface-3)"></i>огрызок</span></div>';
+      '<div class="legend"><span><i style="background:#EDF1F5"></i>записано много</span>' +
+      '<span><i style="background:#7C8899"></i>частично</span>' +
+      '<span><i style="background:var(--surface-3)"></i>мало</span></div>';
   }
 
   function line(points) {
@@ -428,7 +496,8 @@
       'aria-label="Линия веса"><path d="' + path + '" fill="none" stroke="var(--data)" ' +
       'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
       'vector-effect="non-scaling-stroke"/></svg>' +
-      '<div class="legend"><span>' + n(lo, 1) + ' → ' + n(kg[kg.length - 1], 1) + ' кг</span></div>';
+      '<div class="legend"><span>' + n(kg[0], 1) + ' → ' + n(kg[kg.length - 1], 1) + ' кг</span>' +
+      '<span>мин ' + n(lo, 1) + ' · макс ' + n(hi, 1) + '</span></div>';
   }
 
   function split(d) {
@@ -477,6 +546,33 @@
               esc(h[1]) + '</span><div class="mic">' + esc(h[2]) + '</div></span></div>';
           }).join(''),
           'Меняется только вид. Записи, цели и подсчёт не трогаются.') +
+
+        group('Подвал панели',
+          [['meals', 'Приёмов за день'], ['weight', 'Последний вес']].map(function (o) {
+            return '<div class="pick' + ((p.foot_third || 'meals') === o[0] ? ' on' : '') +
+              '" data-foot="' + o[0] + '"><span class="dot"></span>' +
+              '<span style="flex-grow:1;font-size:var(--f-body-s)">' + esc(o[1]) +
+              '</span></div>';
+          }).join(''),
+          'Третья ячейка подвала. Жир и углеводы остаются на месте.') +
+
+        group('Ввод',
+          [[false, 'Начинать с текста'], [true, 'Сразу открывать микрофон']].map(function (o) {
+            return '<div class="pick' + ((p.mic_first || false) === o[0] ? ' on' : '') +
+              '" data-mic="' + o[0] + '"><span class="dot"></span>' +
+              '<span style="flex-grow:1;font-size:var(--f-body-s)">' + esc(o[1]) +
+              '</span></div>';
+          }).join(''),
+          'Микрофон сразу — быстрее, но клиент спросит доступ на первом же экране.') +
+
+        group('Период в Итогах',
+          [[7, 'Неделя'], [30, '30 дней'], [90, '3 месяца']].map(function (o) {
+            return '<div class="pick' + ((p.period || 30) === o[0] ? ' on' : '') +
+              '" data-defperiod="' + o[0] + '"><span class="dot"></span>' +
+              '<span style="flex-grow:1;font-size:var(--f-body-s)">' + esc(o[1]) +
+              '</span></div>';
+          }).join(''),
+          'Какой период открывается по умолчанию.') +
 
         group('Цели',
           field('gk', 'Калорий в день', g.kcal) +
@@ -530,8 +626,13 @@
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
-    }).then(function () { toast(ok); renderSettings(); })
-      .catch(function (e) { toast(e.message, true); });
+    }).then(function (d) {
+      // Настройка обязана подействовать сразу, а не после перезахода:
+      // иначе переключатель выглядит сломанным (MA-INV-31).
+      if (d && d.prefs) state.prefs = d.prefs;
+      toast(ok);
+      renderSettings();
+    }).catch(function (e) { toast(e.message, true); });
   }
 
   /* ── AI: вопросы по своим данным (§8.7) ──────────────────────────────── */
@@ -577,7 +678,8 @@
   }
 
   function askCoach(text) {
-    if (!text) return;
+    if (!text || state.asking) return;
+    state.asking = true;
     state.chat = (state.chat || []).concat([{ me: true, text: text }]);
     renderAi();
     send('/api/coach', {
@@ -590,7 +692,7 @@
     }).catch(function (e) {
       state.chat.push({ me: false, text: e.message });
       renderAi();
-    });
+    }).then(function () { state.asking = false; });
   }
 
   function render() {
@@ -628,9 +730,21 @@
     var xs = state.frequent || [];
     if (!xs.length) return '';
     return '<div class="chips">' + xs.map(function (i) {
-      return '<button class="chip" data-say="' + esc(i.name + ' ' + n(i.grams) + ' г') + '">' +
+      /* Есть product_id — пишем мгновенно, без модели. Нет (продукт не
+         запиннен) — падаем на обычный путь через текст. */
+      var attr = i.product_id
+        ? 'data-quick="' + i.product_id + '" data-grams="' + i.grams + '"'
+        : 'data-say="' + esc(i.name + ' ' + n(i.grams) + ' г') + '"';
+      return '<button class="chip" ' + attr + '>' +
         esc(i.name) + ' <span class="g">· ' + n(i.grams) + ' г</span></button>';
     }).join('') + '</div>';
+  }
+
+  function loadWeight() {
+    api('/api/stats/weight?limit=1').then(function (d) {
+      state.weight = d.points.length ? d.points[d.points.length - 1].kg : null;
+      if (state.prefs && state.prefs.foot_third === 'weight') renderDay();
+    }).catch(function () {});
   }
 
   function loadFrequent() {
@@ -693,18 +807,28 @@
     renderDay();
   }
 
+  /* Ключ идемпотентности: один на попытку записи, а не на запрос.
+     Ретрай браузера, двойной тап и повтор после таймаута приходят с тем же
+     ключом, и сервер вернёт первый ответ вместо второй записи (§7.5). */
+  function newKey() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return String(Date.now()) + '-' + Math.random().toString(36).slice(2);
+  }
+
   function submitText() {
     var inp = document.getElementById('say');
     var text = (inp && inp.value || '').trim();
-    if (!text) return;
+    if (!text || state.sending) return;
+    state.sending = true;
     state.text = '';
     inp.value = '';
     inp.blur();
     loading();
     send('/api/meals', {
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newKey() },
       body: JSON.stringify({ text: text })
-    }).then(handle).catch(function (e) { toast(e.message, true); renderDay(); });
+    }).then(handle).catch(function (e) { toast(e.message, true); renderDay(); })
+      .then(function () { state.sending = false; });
   }
 
   /* ── голос ───────────────────────────────────────────────────────────── */
@@ -727,7 +851,7 @@
         if (!blob.size) { renderDay(); return; }
         loading();
         send('/api/meals/voice', {
-          headers: { 'Content-Type': blob.type },
+          headers: { 'Content-Type': blob.type, 'Idempotency-Key': newKey() },
           body: blob
         }).then(handle).catch(function (e) { toast(e.message, true); renderDay(); });
       };
@@ -771,12 +895,21 @@
         .then(handle).catch(function (err) { toast(err.message, true); renderDay(); });
     }
     if (b.dataset.drop) {
-      if (!window.confirm('Удалить этот приём?')) return;
       var did = b.dataset.drop;
+      return ask('Удалить этот приём?', function () {
+        loading();
+        send('/api/meals/' + did, { method: 'DELETE' })
+          .then(function () { delete state.open[did]; toast('Удалил.'); renderDay(); })
+          .catch(function (err) { toast(err.message, true); renderDay(); });
+      });
+    }
+    if (b.dataset.quick) {
       loading();
-      return send('/api/meals/' + did, { method: 'DELETE' })
-        .then(function () { delete state.open[did]; toast('Удалил.'); renderDay(); })
-        .catch(function (err) { toast(err.message, true); renderDay(); });
+      return send('/api/meals/quick', {
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newKey() },
+        body: JSON.stringify({ product_id: Number(b.dataset.quick),
+                               grams: Number(b.dataset.grams) })
+      }).then(handle).catch(function (err) { toast(err.message, true); renderDay(); });
     }
     if (b.dataset.say) {
       var inp = document.getElementById('say');
@@ -842,6 +975,18 @@
     if (pick.dataset.hero) {
       return patch('/api/settings/prefs', { hero: pick.dataset.hero }, 'Вид панели изменён.');
     }
+    if (pick.dataset.foot) {
+      return patch('/api/settings/prefs', { foot_third: pick.dataset.foot }, 'Подвал изменён.');
+    }
+    if (pick.dataset.mic) {
+      return patch('/api/settings/prefs',
+        { mic_first: pick.dataset.mic === 'true' }, 'Ввод изменён.');
+    }
+    if (pick.dataset.defperiod) {
+      state.period = null;
+      return patch('/api/settings/prefs',
+        { period: Number(pick.dataset.defperiod) }, 'Период изменён.');
+    }
     state.cat.dup = state.cat.dup || {};
     state.cat.dup[pick.dataset.group] = Number(pick.dataset.pick);
     renderCatalog();
@@ -873,19 +1018,23 @@
     var losers = g.items.map(function (p) { return p.id; })
                         .filter(function (id) { return id !== chosen; });
     if (!losers.length) return;
-    /* Необратимо: проигравшие строки каталога исчезают. Спрашиваем один раз,
-       но спрашиваем — вернуть их можно только из бэкапа. */
-    if (!window.confirm('Слить ' + losers.length + ' запис' +
-        (losers.length === 1 ? 'ь' : 'и') + ' в выбранную? Отменить будет нельзя.')) return;
-    loading();
-    send('/api/products/merge', {
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ winner_id: chosen, loser_ids: losers })
-    }).then(function (r) {
-      toast('Слил. Перепривязано записей: ' + r.items_repointed + '.');
-      state.cat.dup = null;
-      renderCatalog();
-    }).catch(function (e) { toast(e.message, true); renderCatalog(); });
+    /* Необратимо: проигравшие строки каталога исчезают. Показываем, сколько
+       позиций истории переедет — соглашаться вслепую на необратимое нельзя. */
+    var affects = g.affects || 0;
+    ask('Слить ' + losers.length + ' запис' + (losers.length === 1 ? 'ь' : 'и') +
+        ' в выбранную?' + (affects ? ' Затронет ' + affects + ' позиц' +
+        (affects === 1 ? 'ию' : 'ий') + ' истории.' : '') + ' Отменить будет нельзя.',
+      function () {
+        loading();
+        send('/api/products/merge', {
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ winner_id: chosen, loser_ids: losers })
+        }).then(function (r) {
+          toast('Слил. Перепривязано записей: ' + r.items_repointed + '.');
+          state.cat.dup = null;
+          renderCatalog();
+        }).catch(function (e) { toast(e.message, true); renderCatalog(); });
+      });
   }
 
   var searchTimer = null;
@@ -930,6 +1079,14 @@
   tg.ready();
   tg.expand();
   loadFrequent();
+  loadWeight();
+  /* Настройки нужны до первой отрисовки: иначе панель мигнёт видом по умолчанию
+     и только потом переключится на выбранный. */
+  api('/api/settings').then(function (d) {
+    state.prefs = d.prefs;
+    if (d.prefs.mic_first && state.tab === 'day') state.micFirst = true;
+    render();
+  }).catch(function () { state.prefs = {}; });
   if (tg.setHeaderColor) { try { tg.setHeaderColor('#000000'); } catch (e) { /* старый клиент */ } }
   render();
 })();

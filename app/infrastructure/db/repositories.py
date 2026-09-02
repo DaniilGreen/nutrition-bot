@@ -307,11 +307,14 @@ class SqlMealRepo:
 
     async def frequent_items(
         self, user_id: int, *, days: int, limit: int
-    ) -> list[tuple[str, float, int]]:
+    ) -> list[tuple[int | None, str, float, int]]:
         since = datetime.now(UTC) - timedelta(days=days)
         res = await self._s.execute(
             select(
-                MealItemORM.name_snapshot,
+                MealItemORM.product_id,
+                # Имя — самое свежее из группы: каталог могли переименовать,
+                # и подсказка должна называться так, как называется сейчас.
+                func.max(MealItemORM.name_snapshot).label("name"),
                 # percentile_cont даёт медиану одним запросом: тащить граммовки
                 # в питон ради сортировки — лишний трафик на ровном месте.
                 func.percentile_cont(0.5)
@@ -321,11 +324,15 @@ class SqlMealRepo:
             )
             .join(MealORM, MealORM.id == MealItemORM.meal_id)
             .where(MealORM.user_id == user_id, MealORM.eaten_at >= since)
-            .group_by(MealItemORM.name_snapshot)
-            .order_by(func.count().desc(), MealItemORM.name_snapshot)
+            # coalesce: записи без продукта (LLM не запиннил) группируются
+            # по имени — другого ключа у них нет.
+            .group_by(MealItemORM.product_id, func.coalesce(MealItemORM.product_id, -1))
+            .order_by(func.count().desc())
             .limit(limit)
         )
-        return [(name, float(grams or 0), int(times)) for name, grams, times in res.all()]
+        return [
+            (pid, name, float(grams or 0), int(times)) for pid, name, grams, times in res.all()
+        ]
 
     async def add(self, meal: Meal) -> Meal:
         orm = MealORM(

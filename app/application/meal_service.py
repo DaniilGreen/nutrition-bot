@@ -20,6 +20,13 @@ from app.application.dto import ParsedItem, ParsedMessage
 from app.application.entities import Meal, MealItem, Product, User
 from app.application.ports import MealRepo, ProductRepo
 from app.clock import Clock, utcnow
+from app.domain.naming import (
+    _NAME_THRESHOLD,
+    _coverage,
+    _names_compatible,
+    _norm,
+    _qualifiers,
+)
 from app.domain.nutrition import macros_for_grams, reconcile_density, split_macros_from_kcal
 from app.domain.plausibility import (
     FALLBACK_DENSITY,
@@ -37,7 +44,6 @@ _JUNK_KEYS = frozenset(
     {"", "unknown", "none", "null", "na", "n_a", "item", "product", "food", "еда"}
 )
 _MIN_KEY_LEN = 3
-_NAME_THRESHOLD = 0.72  # доля токенов имени, нашедших пару (INV-4.2)
 _CORRECTION_LOOKBACK = 10  # сколько недавних записей просматриваем для «удали X»
 _CORRECTION_NAME_THRESHOLD = 0.8  # порог нечёткого совпадения имени при удалении
 class MealService:
@@ -184,6 +190,38 @@ class MealService:
                 estimated=src.estimated,
             )
         )
+
+    async def log_known(
+        self, user: User, product: Product, grams: float, *, raw_input: str
+    ) -> Meal:
+        """Записать известный продукт без обращения к модели (AC-MA-31).
+
+        Плотность берётся из каталога, а не переоценивается: продукт уже
+        запиннен (INV-2), спрашивать модель заново значило бы платить деньги
+        за ответ, который обязан совпасть с уже записанным.
+        """
+        macros = macros_for_grams(product.density, grams)
+        item = MealItem(
+            name_snapshot=product.display_name,
+            grams=grams,
+            macros=macros,
+            product_id=product.id,
+            is_estimate=product.is_estimate,
+        )
+        meal = Meal(
+            user_id=_require_id(user),
+            eaten_at=self._clock(),
+            input_type="quick",
+            raw_input=raw_input,
+            items=[item],
+            source_confidence=1.0,
+            totals=macros,
+        )
+        return await self._meals.add(meal)
+
+    async def get(self, user: User, meal_id: int) -> Meal | None:
+        """Приём по идентификатору, только свой."""
+        return await self._meals.get(_require_id(user), meal_id)
 
     async def delete_last(self, user: User) -> Meal | None:
         return await self._meals.delete_last(_require_id(user))
@@ -404,81 +442,6 @@ def order_options_by_history(options: list[str], recent_names: list[str]) -> lis
         return (1, options.index(opt))  # не встречался → после, в LLM-порядке
 
     return sorted(options, key=rank)
-
-
-def _names_compatible(parsed_name: str, pinned_name: str) -> bool:
-    """Имя из ввода и имя запиннутого продукта — одна еда? Защита от reuse ЧУЖОГО ключа: LLM
-    иногда отдаёт ключ другого продукта (молоко миндальное → macadamia_milk «молоко макадамии»).
-
-    INV-5.1: асимметрично — ключ уже утверждает идентичность, имя ловит грубый промах, поэтому
-    уточнение засчитывается («куриная грудка» ⊂ «куриная грудка отварная»). INV-4.3 бьёт первой:
-    разошлись числа-квалификаторы («творог 5%»/«творог 9%») — разная еда при любом покрытии.
-    """
-    if _qualifiers(parsed_name) != _qualifiers(pinned_name):
-        return False
-    best = max(_coverage(parsed_name, pinned_name), _coverage(pinned_name, parsed_name))
-    return best >= _NAME_THRESHOLD
-
-
-def _norm(text: str) -> str:
-    return text.strip().lower()
-
-
-# Порционные числа — шум имени («йогурт 200 г» и «йогурт» одна еда), в отличие от жирности.
-_PORTION_RE = re.compile(r"\b\d+[.,]?\d*\s*(?:г|гр|грамм\w*|мл|л|кг|g|ml|l|kg|шт|скуп\w*)\b")
-# Предлоги: еду не различают, но разбавляют счёт («арбузный сок БЕЗ сахара» vs «сок гуавы БЕЗ
-# сахара» — 3 общих токена из 4). «сахара» НЕ выбрасываем: «кола без сахара» ≠ «кола» по ккал.
-_STOP_WORDS = frozenset({"с", "со", "из", "и", "в", "на", "для", "без", "по"})
-
-
-def _name_tokens(name: str) -> list[str]:
-    """Слова имени: ё→е, без предлогов и без цифр. Цифры целиком на совести `_qualifiers` —
-    иначе общая «3.2» тянет совпадение вверх («кофе с молоком 3.2%» ≈ «молоко 3.2%»)."""
-    words = re.findall(r"[^\W\d_]+", _PORTION_RE.sub(" ", _norm(name).replace("ё", "е")))
-    return [w for w in words if w not in _STOP_WORDS] or words
-
-
-def _same_word(a: str, b: str) -> bool:
-    """Словоформы одного слова: общий префикс ≥3 символов И ≥60% ДЛИННОГО токена (INV-4.2).
-
-    По длинному, а не короткому: иначе «сыр» ⊂ «сырники», «суши» ⊂ «сушёный», «бур» ⊂ «бургер» —
-    разная еда с общим началом склеивается. ponytail: префикс вместо стеммера; русский флексирует
-    хвостом, этого хватает. Понадобится больше — pymorphy/pg_trgm.
-    """
-    if a == b:
-        return True
-    common = 0
-    for x, y in zip(a, b, strict=False):  # слова разной длины — обрезка по короткому тут и нужна
-        if x != y:
-            break
-        common += 1
-    return common >= 3 and common >= 0.6 * max(len(a), len(b))
-
-
-def _coverage(name: str, other: str) -> float:
-    """Доля токенов `name`, нашедших пару в `other`. НАПРАВЛЕННАЯ: _coverage(a,b) != _coverage(b,a).
-
-    Заменила difflib по склеенной строке (D-32): та зависела от порядка слов («пиво нефильтрованное
-    светлое» vs «светлое пиво нефильтрованное» = 0.714 при пороге 0.72), а в русском порядок
-    свободный; и наоборот, роднила разные слова с общими буквами («жареные»/«варёные» = 0.86).
-    """
-    tokens, pool = _name_tokens(name), _name_tokens(other)
-    if not tokens or not pool:
-        return 0.0
-    hit = 0
-    for token in tokens:
-        match = next((w for w in pool if _same_word(token, w)), None)
-        if match is not None:
-            pool.remove(match)
-            hit += 1
-    return hit / len(tokens)
-
-
-def _qualifiers(name: str) -> list[str]:
-    """Числа-квалификаторы имени (жирность «3.2%», «творог 5%») — часть идентичности (INV-4.3).
-    Порционные числа вырезаны: «200 г» продукт не различает."""
-    stripped = _PORTION_RE.sub(" ", _norm(name).replace(",", "."))
-    return sorted(re.findall(r"\d+[.,]?\d*", stripped))
 
 
 def _require_id(user: User) -> int:

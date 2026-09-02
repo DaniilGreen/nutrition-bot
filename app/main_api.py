@@ -22,6 +22,7 @@ from app.config import Settings
 from app.container import Container
 from app.logging import setup_logging
 from app.web.drafts import DraftStore
+from app.web.limits import IdempotencyStore, RateLimiter
 from app.web.routes import router as api_router
 
 log = logging.getLogger(__name__)
@@ -40,6 +41,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Черновики уточнений живут в процессе api и переживают запросы, но не
     # перезапуск — их время жизни 15 минут (§7.1, app/web/drafts.py).
     app.state.drafts = DraftStore()
+    app.state.idempotency = IdempotencyStore()
+    app.state.limiter = RateLimiter()
     yield
     await app.state.container.db.dispose()
 

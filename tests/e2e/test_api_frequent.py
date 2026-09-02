@@ -16,9 +16,12 @@ from tests.initdata_fixtures import valid
 def client(fake_container):
     from app.main_api import app
     from app.web.drafts import DraftStore
+    from app.web.limits import IdempotencyStore, RateLimiter
 
     app.state.container = fake_container
     app.state.drafts = DraftStore()
+    app.state.idempotency = IdempotencyStore()
+    app.state.limiter = RateLimiter()
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     )
@@ -124,3 +127,71 @@ async def test_частое_требует_подписи(client):
     async with client as c:
         assert (await c.get("/api/frequent")).status_code == 401
         assert (await c.post("/api/meals/1/repeat")).status_code == 401
+
+
+async def test_быстрая_запись_не_ходит_в_модель(client, fake_container):
+    """AC-MA-31: тап по чипу обязан быть мгновенным и бесплатным."""
+    from app.application.entities import Product
+    from app.domain.value_objects import Density
+
+    class Explodes:
+        async def parse_samples(self, text, known_keys):
+            raise AssertionError("модель не должна вызываться при быстрой записи")
+
+        async def parse(self, text, known_keys):
+            return await self.parse_samples(text, known_keys)
+
+    fake_container.nlu = Explodes()
+    p = await fake_container.products.create(
+        Product(
+            canonical_key="chicken",
+            display_name="куриная грудка",
+            density=Density(kcal_per_100g=165, protein_per_100g=31,
+                            fat_per_100g=3.6, carb_per_100g=0),
+            source="curated",
+        )
+    )
+    async with client as c:
+        await _login(c)
+        r = await c.post(
+            "/api/meals/quick", json={"product_id": p.id, "grams": 200}, headers=_hdr()
+        )
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["kind"] == "logged"
+    assert d["meal"]["kcal"] == 330
+    assert d["meal"]["items"][0]["grams"] == 200
+
+
+async def test_быстрая_запись_несуществующего_продукта(client):
+    async with client as c:
+        await _login(c)
+        r = await c.post(
+            "/api/meals/quick", json={"product_id": 9999, "grams": 100}, headers=_hdr()
+        )
+    assert r.json()["kind"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    "body", [{}, {"product_id": 1}, {"product_id": 1, "grams": 0},
+             {"product_id": 1, "grams": 99999}, {"product_id": "нет", "grams": 1}],
+)
+async def test_негодная_быстрая_запись_400(client, body):
+    async with client as c:
+        await _login(c)
+        r = await c.post("/api/meals/quick", json=body, headers=_hdr())
+    assert r.status_code == 400
+
+
+async def test_частое_отдаёт_product_id(client, fake_container):
+    """Без него чип не может писать мгновенно и падает на путь через модель."""
+    from app.application.entities import MealItem
+
+    async with client as c:
+        uid = await _login(c)
+        m = _meal(uid, 1, ("грудка", 200))
+        m.items = [MealItem(name_snapshot="грудка", grams=200,
+                            macros=m.totals, product_id=7)]
+        await fake_container.meals.add(m)
+        r = (await c.get("/api/frequent", headers=_hdr())).json()
+    assert r["items"][0]["product_id"] == 7

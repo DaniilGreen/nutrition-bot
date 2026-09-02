@@ -10,7 +10,7 @@ from statistics import median
 from zoneinfo import ZoneInfo
 
 from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
-from app.application.entities import MealItem, Product, User, WeightLog
+from app.application.entities import Meal, MealItem, Product, User, WeightLog
 from app.application.meal_service import MealService
 from app.application.ports import BugRepo, NluPort, ProductRepo, SttPort, VisionPort
 from app.application.results import (
@@ -285,7 +285,7 @@ class Assistant:
 
     async def frequent(
         self, user: User, *, days: int = 30, limit: int = 10
-    ) -> list[tuple[str, float, int]]:
+    ) -> list[tuple[int | None, str, float, int]]:
         """Чаще всего съеденное — для чипов быстрой записи (§6.3)."""
         return await self._meals.frequent_items(_require_id(user), days=days, limit=limit)
 
@@ -304,7 +304,23 @@ class Assistant:
         counts = await self._products.usage_counts([product_id], user_id=_require_id(user))
         return counts.get(product_id, 0)
 
-    async def duplicate_groups(self) -> list[list[Product]]:
+    async def log_quick(self, user: User, product_id: int, grams: float) -> Result:
+        """Запись тапом по чипу: продукт известен, вес известен, модель не нужна."""
+        product = await self._products.get_by_id(product_id)
+        if product is None:
+            return Unknown(reason="Такого продукта больше нет в каталоге.")
+        meal = await self._meals.log_known(
+            user, product, grams, raw_input=f"{product.display_name} {grams:g} г"
+        )
+        stats = await self._stats.daily(user)
+        return MealLogged(meal=meal, remaining=stats.remaining)
+
+    async def get_meal(self, user: User, meal_id: int) -> Meal | None:
+        """Приём по идентификатору. Нужен, чтобы отличить «позиции нет» от
+        «позиция была последней и приём удалён» — это разные ответы."""
+        return await self._meals.get(user, meal_id)
+
+    async def duplicate_groups(self) -> tuple[list[list[Product]], dict[int, int]]:
         """Группы дублей каталога. Не сливает — только показывает: разброс плотности
         внутри группы может быть таким, что слияние заметно двинет цифры (D-32)."""
         items = await self._products.list_all()
@@ -321,7 +337,7 @@ class Assistant:
             if p.id is not None
         ]
         by_id = {p.id: p for p in items}
-        return [[by_id[c.id] for c in g] for g in group(rows)]
+        return [[by_id[c.id] for c in g] for g in group(rows)], uses
 
     async def merge_products(self, winner_id: int, loser_ids: list[int]) -> int:
         """Слить дубли. История не движется: перепривязывается только связь (INV-3)."""

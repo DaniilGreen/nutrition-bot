@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from app.application.meal_service import _coverage, _names_compatible, _qualifiers
+from app.domain.naming import _coverage, _names_compatible, _qualifiers
 
 # Порог, при котором две записи считаются одной едой по симметричному покрытию имён.
 RAG_THRESHOLD = 0.72
