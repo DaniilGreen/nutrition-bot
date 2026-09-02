@@ -8,17 +8,17 @@
 | # | Раздел | Что входит | Статус | Чем проверено |
 |---|---|---|---|---|
 | 0.1 | §5.5 | Сеть `edge`, общая для finance-web и burnfat-api | DONE | `docker network ls` на сервере |
-| 0.2 | §5.8 | Site-блок домена в Caddyfile finance, коммит в их репозиторий | TODO | `curl -I https://nutrition-calorie.greenjola.win` → 200 |
-| 0.3 | §5.8 | `burnfat-api` в сети `edge` с алиасом, compose-оверрей | TODO | `docker exec finance_bot-web-1 wget -qO- burnfat-api:8000/health` |
-| 0.4 | §5.7 | Статика: `web/index.html`, монтирование в api, `StaticFiles` | TODO | `curl https://.../` отдаёт HTML |
+| 0.2 | §5.8 | Site-блок домена в Caddyfile finance, коммит в их репозиторий | IN PROGRESS | `curl -I https://nutrition-calorie.greenjola.win` → 200 |
+| 0.3 | §5.8 | `burnfat-api` в сети `edge` с алиасом, compose-оверрей | IN PROGRESS | `docker exec finance_bot-web-1 wget -qO- burnfat-api:8000/health` |
+| 0.4 | §5.7 | Статика: `web/index.html`, монтирование в api, `StaticFiles` | DONE | `curl https://.../` отдаёт HTML |
 
 ## Этап MA-M0 — вход (§8.1)
 
 | # | Раздел | Что входит | Статус | Чем проверено |
 |---|---|---|---|---|
-| M0.1 | §7.1 | Проверка подписи initData (HMAC-SHA256), чистая функция | TODO | unit-тесты: валидная, битая, протухшая, подменённый user |
-| M0.2 | §7.1 | Зависимость FastAPI: 401 без валидной initData (MA-INV-6, 7, 8) | TODO | e2e через ASGITransport |
-| M0.3 | §7.2 | `GET /api/me` — профиль, цели, вес | TODO | e2e на фейках |
+| M0.1 | §7.1 | Проверка подписи initData (HMAC-SHA256), чистая функция | DONE | 15 unit-тестов, `tests/unit/test_initdata.py` |
+| M0.2 | §7.1 | Зависимость FastAPI: 401 без валидной initData (MA-INV-6, 7, 8) | DONE | 6 e2e, `tests/e2e/test_api_auth.py` |
+| M0.3 | §7.2 | `GET /api/me` — профиль, цели | DONE | e2e на фейках |
 | M0.4 | §5.9 | Шаг `verify miniapp` в деплое | TODO | зелёный прогон CI |
 
 ## Этап MA-M1 — День, только чтение (§8.2)

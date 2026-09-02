@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Дневник КБЖУ</title>
+<!-- Обязан грузиться с telegram.org: локальная копия протухает молча. -->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root{
+    --bg:#000; --surface:#1A1C20; --surface-2:#26292F; --surface-3:#32363D;
+    --separator:#24272C; --text:#FFF; --text-muted:#A7ABB2; --text-faint:#8C9095;
+    --accent:#5E9AC1; --warn:#FFD426; --danger:#FF453A;
+    --bar:#7C8899; --prot:#3AC8E0;
+    --r-lg:16px; --r-sm:10px;
+    --s-2:8px; --s-3:12px; --s-4:16px; --s-5:20px;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font:400 15px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif;
+    padding:var(--s-4) var(--s-4) calc(var(--s-5) + env(safe-area-inset-bottom));
+    -webkit-font-smoothing:antialiased;
+  }
+  .num{font-variant-numeric:tabular-nums; font-feature-settings:"tnum"}
+  h1{font-size:26px; font-weight:700; letter-spacing:-.4px; margin:0 0 var(--s-4)}
+  .card{background:var(--surface); border-radius:var(--r-lg); padding:var(--s-4) var(--s-5)}
+  .mic{font-size:12px; color:var(--text-muted)}
+  .row{display:flex; align-items:baseline; gap:var(--s-3); padding:9px 0}
+  .row + .row{border-top:1px solid var(--separator)}
+  .row span:first-child{flex-grow:1; color:var(--text-muted); font-size:14px}
+  .err{background:var(--surface); border-radius:var(--r-lg); padding:var(--s-4) var(--s-5);
+       border-left:3px solid var(--danger)}
+</style>
+</head>
+<body>
+  <h1>Дневник КБЖУ</h1>
+  <div id="app" class="card"><span class="mic">Загружаю…</span></div>
+
+<script>
+(function () {
+  var tg = window.Telegram && window.Telegram.WebApp;
+  var app = document.getElementById('app');
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+
+  function fail(title, hint) {
+    app.className = 'err';
+    app.innerHTML = '<div>' + esc(title) + '</div>' +
+                    '<div class="mic" style="margin-top:6px">' + esc(hint) + '</div>';
+  }
+
+  if (!tg || !tg.initData) {
+    // Открыто не из Telegram: initData взять неоткуда, и подделать её нельзя.
+    fail('Открой из Telegram', 'Аппка работает только внутри бота — снаружи подпись не выдать.');
+    return;
+  }
+  tg.ready();
+  tg.expand();
+
+  fetch('/api/me', { headers: { 'X-Telegram-Init-Data': tg.initData } })
+    .then(function (r) {
+      if (r.status === 401) throw new Error('Подпись не принята. Переоткрой аппку из бота.');
+      if (!r.ok) throw new Error('Сервер ответил ' + r.status + '. Попробуй позже.');
+      return r.json();
+    })
+    .then(function (d) {
+      var g = d.goal, u = d.user;
+      app.className = 'card';
+      app.innerHTML =
+        '<div class="mic">Вход выполнен</div>' +
+        '<div style="font-size:20px;font-weight:600;margin:4px 0 var(--s-3)">' + esc(u.name || 'без имени') + '</div>' +
+        '<div class="row"><span>Калорий в день</span><b class="num">' + esc(g.kcal) + '</b></div>' +
+        '<div class="row"><span>Белок</span><b class="num">' + esc(g.protein_g) + ' г</b></div>' +
+        '<div class="row"><span>Жир</span><b class="num">' + esc(g.fat_g) + ' г</b></div>' +
+        '<div class="row"><span>Углеводы</span><b class="num">' + esc(g.carb_g) + ' г</b></div>' +
+        '<div class="row"><span>Часовой пояс</span><b>' + esc(u.timezone) + '</b></div>' +
+        (g.is_default
+          ? '<div class="mic" style="margin-top:var(--s-3);color:var(--warn)">Цели пока общие — свои не заданы.</div>'
+          : '');
+    })
+    .catch(function (e) {
+      fail('Не открылось', e.message || 'Неизвестная ошибка.');
+    });
+})();
+</script>
+</body>
+</html>
