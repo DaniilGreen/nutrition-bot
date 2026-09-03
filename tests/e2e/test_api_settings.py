@@ -162,3 +162,37 @@ async def test_настройки_требуют_подписи(client):
         assert (await c.get("/api/settings")).status_code == 401
         assert (await c.patch("/api/settings/prefs", json={})).status_code == 401
         assert (await c.patch("/api/settings/goal", json={})).status_code == 401
+
+
+async def test_багрепорт_уходит_с_контекстом(client, fake_container):
+    """FR-26: без последних приёмов «посчитало не так» не воспроизвести."""
+    async with client as c:
+        await c.get("/api/me", headers=_hdr())
+        r = await c.post("/api/bug", json={"note": "борщ посчитало вдвое"}, headers=_hdr())
+    assert r.status_code == 200
+    assert fake_container.bugs.reports, "багрепорт не сохранился"
+    assert "борщ" in fake_container.bugs.reports[-1]["note"]
+
+
+@pytest.mark.parametrize("note", ["", "   ", None])
+async def test_пустой_багрепорт_400(client, note):
+    async with client as c:
+        await c.get("/api/me", headers=_hdr())
+        r = await c.post("/api/bug", json={"note": note}, headers=_hdr())
+    assert r.status_code == 400
+
+
+async def test_режим_меняется(client):
+    """Колонка user_goals.target существовала, а контрола не было."""
+    async with client as c:
+        await c.get("/api/me", headers=_hdr())
+        r = (await c.patch("/api/settings/goal", json={"target": "cut"},
+                           headers=_hdr())).json()
+        back = (await c.get("/api/settings", headers=_hdr())).json()
+    assert r["goal"]["target"] == "cut"
+    assert back["goal"]["target"] == "cut"
+
+
+async def test_багрепорт_требует_подписи(client):
+    async with client as c:
+        assert (await c.post("/api/bug", json={"note": "х"})).status_code == 401

@@ -217,3 +217,12 @@ nav button[aria-current="page"]{color:var(--accent)}
 .item2 .kk .per{color:var(--text-faint);font-size:var(--f-micro)}
 .item2 .chev{background:none;border:0;color:var(--text-faint);cursor:pointer;flex-shrink:0;
   min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:center}
+
+/* ── превью верхней панели в настройках (§6.6) ───────────────────────────
+   Уменьшаем масштабом, а не отдельной вёрсткой: превью обязано быть тем же
+   компонентом, иначе оно разойдётся с боевой панелью. */
+.pick-v{display:block;padding:11px var(--s-4)}
+.pick-v .pick-h{display:flex;align-items:center;gap:var(--s-3)}
+.pick .prev{transform:scale(.62);transform-origin:top left;width:161%;
+  margin-bottom:-24%;pointer-events:none}
+.pick .prev section{background:var(--surface-2)}

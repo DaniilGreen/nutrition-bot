@@ -704,6 +704,25 @@ async def coach_budget(
     }
 
 
+@router.post("/bug")
+async def report_bug(
+    body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant, request: Request
+) -> dict[str, Any]:
+    """Багрепорт из аппки (FR-26, §6.5).
+
+    Вместе с текстом уходят последние приёмы — без них «посчитало не так»
+    невозможно воспроизвести, а именно такие сообщения и приходят.
+    """
+    note = str(body.get("note") or "").strip()
+    if not note:
+        raise bad_request("empty_note", "Опиши, что пошло не так.")
+    if len(note) > 2000:
+        raise bad_request("note_too_long", "Слишком длинно — оставь суть.")
+    _throttle(request, user, "bug", limit=5, window=300)
+    await assistant.report_bug(user, note)
+    return {"ok": True}
+
+
 @router.get("/settings")
 async def settings(
     user: CurrentUser, assistant: CurrentAssistant, request: Request,

@@ -339,6 +339,7 @@
     loadingDay();
     api('/api/day?days_ago=' + state.daysAgo)
       .then(function (d) {
+        state.lastDay = d;
         document.getElementById('title').textContent = title(d);
         document.getElementById('nav-day').classList.toggle('hidden', false);
         document.getElementById('fwd').disabled = state.daysAgo === 0;
@@ -769,6 +770,19 @@
     ['kcal',  'Только калории',  'Минимум. Белок уходит в подпись.']
   ];
 
+  /* Превью строится теми же функциями, что и боевая панель, но на данных
+     последнего показанного дня. Отдельная «нарисованная» копия неизбежно
+     разъехалась бы с настоящей. */
+  function heroPreview(kind) {
+    var d = state.lastDay;
+    if (!d) return '<div class="state">Загружаю…</div>';
+    var was = state.prefs && state.prefs.hero;
+    state.prefs = Object.assign({}, state.prefs || {}, { hero: kind });
+    var html = hero(d);
+    state.prefs.hero = was;
+    return html;
+  }
+
   function renderSettings() {
     document.getElementById('title').textContent = 'Настройки';
     loading();
@@ -778,10 +792,17 @@
       show(
         group('Вид',
           HEROES.map(function (h) {
-            return '<div class="pick' + (p.hero === h[0] ? ' on' : '') +
-              '" data-hero="' + h[0] + '"><span class="dot"></span>' +
-              '<span style="flex-grow:1"><span style="font-size:var(--f-body-s)">' +
-              esc(h[1]) + '</span><div class="mic">' + esc(h[2]) + '</div></span></div>';
+            /* §6.6: превью, а не название. «Два „осталось"» словами не говорит
+               ничего — выбирать надо глазами. Рисуем теми же функциями, что и
+               настоящую панель, на живых цифрах дня: иначе превью разойдётся
+               с реальностью при первой же правке. */
+            return '<div class="pick pick-v' + (p.hero === h[0] ? ' on' : '') +
+              '" data-hero="' + h[0] + '">' +
+              '<div class="pick-h"><span class="dot"></span>' +
+                '<span style="flex-grow:1;font-size:var(--f-body-s)">' + esc(h[1]) + '</span>' +
+              '</div>' +
+              '<div class="mic" style="margin:2px 0 8px 26px">' + esc(h[2]) + '</div>' +
+              '<div class="prev">' + heroPreview(h[0]) + '</div></div>';
           }).join(''),
           'Меняется только вид. Записи, цели и подсчёт не трогаются.') +
 
@@ -812,6 +833,16 @@
           }).join(''),
           'Какой период открывается по умолчанию.') +
 
+        group('Режим',
+          [['cut', 'Похудение'], ['maintain', 'Поддержание'], ['bulk', 'Набор']]
+            .map(function (o) {
+              return '<div class="pick' + ((g.target || 'maintain') === o[0] ? ' on' : '') +
+                '" data-target="' + o[0] + '"><span class="dot"></span>' +
+                '<span style="flex-grow:1;font-size:var(--f-body-s)">' + esc(o[1]) +
+                '</span></div>';
+            }).join(''),
+          'От режима зависит раскладка макросов при пересчёте цели.') +
+
         group('Цели',
           field('gk', 'Калорий в день', g.kcal) +
           field('gp', 'Белок, г', g.protein_g) +
@@ -831,6 +862,18 @@
           '<input id="tz" style="width:150px;text-align:left" value="' + esc(d.timezone) + '"></div>' +
           '<button class="primary" id="saveTz">Сохранить</button>',
           'Часовой пояс режет сутки: сменив его, ты двигаешь границы всех дней задним числом.') +
+
+        group('О приложении',
+          '<div class="composer" style="margin:0">' +
+            '<input id="bug" type="text" placeholder="Что пошло не так?" ' +
+              'style="flex-grow:1;background:none;border:0;color:var(--text);font:inherit;' +
+              'outline:none;min-width:0">' +
+            '<button id="bugsend" aria-label="Отправить">' +
+              '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+              'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+              '<path d="M5 12h14M13 6l6 6-6 6"/></svg></button></div>',
+          'Вместе с текстом уйдут последние приёмы — без них «посчитало не так» ' +
+          'не воспроизвести.') +
 
         group('Ассистент',
           row('Модель', d.coach.model) +
@@ -1279,6 +1322,17 @@
       { protein_per_kg: Number(document.getElementById('gpk').value) }, 'Белок пересчитан.');
     if (b.id === 'saveTz') return patch('/api/settings/timezone',
       { timezone: document.getElementById('tz').value.trim() }, 'Часовой пояс сохранён.');
+    if (b.id === 'bugsend') {
+      var bi = document.getElementById('bug');
+      var note = (bi && bi.value || '').trim();
+      if (!note) return toast('Опиши, что пошло не так.', true);
+      bi.value = '';
+      return send('/api/bug', {
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: note })
+      }).then(function () { toast('Отправил. Спасибо.'); })
+        .catch(function (e) { toast(e.message, true); });
+    }
     if (b.id === 'wsave') return saveWeight();
     if (b.dataset.period) { state.period = Number(b.dataset.period); return renderTotals(); }
     if (b.dataset.ask) return askCoach(b.dataset.ask);
@@ -1311,6 +1365,9 @@
   root.addEventListener('click', function (e) {
     var pick = e.target.closest('.pick');
     if (!pick) return;
+    if (pick.dataset.target) {
+      return patch('/api/settings/goal', { target: pick.dataset.target }, 'Режим изменён.');
+    }
     if (pick.dataset.hero) {
       return patch('/api/settings/prefs', { hero: pick.dataset.hero }, 'Вид панели изменён.');
     }
