@@ -201,7 +201,7 @@
     /* Вес по умолчанию (§6.2). Но если замеров нет вовсе, ячейка показывала бы
        прочерк — тогда полезнее число приёмов, чем пустое место. */
     var wantWeight = (state.prefs ? state.prefs.foot_third : 'weight') !== 'meals';
-    var kg = d.weight_kg != null ? d.weight_kg : state.weight;
+    var kg = d.weight_kg;
     var third = (wantWeight && kg != null)
       ? foot('Вес', kg, null, 'right', 1)
       : foot('Приёмов', d.meals.length, null, 'right');
@@ -239,10 +239,14 @@
           '<div>' +
             '<div class="lbl">Осталось белка</div>' +
             '<div style="display:flex;align-items:baseline;gap:4px;margin-top:4px">' +
-              '<span class="num big" style="color:var(--warn)">' + n(Math.max(0, protLeft)) + '</span>' +
+              /* MA-INV-20: --warn значит «отстаёт от цели», а не «это белок».
+                 Цель взята — ноль перестаёт быть тревожным. */
+              '<span class="num big"' + (protLeft > 0 ? ' style="color:var(--warn)"' : '') +
+              '>' + n(Math.max(0, protLeft)) + '</span>' +
               '<span class="num unit">г</span></div>' +
             '<div class="track"><i style="width:' + pct(t.protein_g, g.protein_g) + '%;background:var(--prot)"></i></div>' +
-            '<div class="mic" style="margin-top:6px;color:var(--warn)">' +
+            '<div class="mic" style="margin-top:6px' +
+              (protLeft > 0 ? ';color:var(--warn)' : '') + '">' +
               proteinNote(d) + '</div>' +
           '</div>' +
         '</div>' +
@@ -570,7 +574,8 @@
             '</div>';
         }).join('');
         var warn = g.safe ? '' :
-          '<div class="mic" style="color:var(--warn);margin-top:var(--s-2);line-height:1.5">' +
+          /* Предупреждение перед необратимым — это --alert, а не «недобор цели». */
+          '<div class="mic" style="color:var(--alert);margin-top:var(--s-2);line-height:1.5">' +
           'Плотности разошлись на ' + n(g.spread * 100) + '%. Слияние заметно двинет ' +
           'будущие записи — проверь, точно ли это одна еда.</div>';
         return '<section class="card" style="margin-top:var(--s-3)">' +
@@ -642,7 +647,8 @@
     }
     var agree = r.agrees;
     var head = agree ? 'Сходится' : 'Расходится';
-    var color = agree ? 'var(--ok)' : 'var(--warn)';
+    /* Расхождение — не недобор цели: у него свой тон (D-MA-7). */
+    var color = agree ? 'var(--text)' : 'var(--alert)';
     var delta = r.weight_delta_kg;
     var sign = delta > 0 ? '+' : '';
     var body =
@@ -657,7 +663,7 @@
         ' кг</span></div>' +
       (agree ? '' :
         '<div class="field"><label>Не объясняется записями</label>' +
-        '<span class="num" style="font-size:var(--f-body-s);color:var(--warn)">' +
+        '<span class="num" style="font-size:var(--f-body-s);color:var(--alert)">' +
         '≈' + n(Math.abs(r.gap_kcal_per_day)) + ' ккал/день</span></div>');
     var note = agree
       ? 'Записанное и вес говорят одно и то же. Цифрам можно верить.'
@@ -837,13 +843,21 @@
 
   function heat(d) {
     var goal = d.goal.kcal;
+    var full = 0, part = 0;
     var cells = d.days.map(function (x) {
+      if (x.kcal >= goal * 0.9) full++; else if (x.kcal >= goal * 0.6) part++;
       var c = x.kcal >= goal * 0.9 ? '#EDF1F5'
             : x.kcal >= goal * 0.6 ? '#7C8899'
             : 'var(--surface-3)';
       return '<div style="background:' + c + '" title="' + esc(x.date) + '"></div>';
     }).join('');
-    return '<div class="heat">' + cells + '</div>' +
+    /* Сетка из цветных квадратов невизуально не читается вовсе, а это
+       флагманская метрика проекта. Одна подпись даёт её содержание. */
+    var said = 'Полнота записей за ' + n(d.days.length) + ' дней: ' + n(full) +
+      ' записано полно, ' + n(part) + ' частично, ' +
+      n(d.days.length - full - part) + ' почти пусто.';
+    return '<div class="heat" role="img" aria-label="' + esc(said) + '">' +
+      cells + '</div>' +
       '<div class="legend"><span><i style="background:#EDF1F5"></i>записано много</span>' +
       '<span><i style="background:#7C8899"></i>частично</span>' +
       '<span><i style="background:var(--surface-3)"></i>мало</span></div>';
@@ -1103,6 +1117,11 @@
 
   function composer() {
     var rec = state.recording;
+    /* Пока текст набран, правая кнопка отправляет, а не пишет голос. Раньше
+       единственная видимая кнопка при набранном вводе запускала запись —
+       отправить можно было только клавишей Enter, которой на телефоне нет
+       под рукой. */
+    var hasText = !!(state.text || '').trim();
     /* «Сразу открывать микрофон»: включаем запись при первом показе «Дня»,
        один раз за сессию — иначе она перезапускалась бы на каждой перерисовке. */
     if (state.micFirst && !state.micAutoDone && !rec) {
@@ -1112,7 +1131,13 @@
     return '<div class="composer">' +
       '<input id="say" type="text" inputmode="text" autocomplete="off" ' +
         'placeholder="Что съел? Или скажи голосом" value="' + esc(state.text || '') + '">' +
-      '<button id="mic" class="' + (rec ? 'rec' : '') + '" ' +
+      (hasText && !rec
+        ? '<button id="sendtext" aria-label="Записать">' +
+          '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+          'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+          '<path d="M5 12h14M13 6l6 6-6 6"/></svg></button>'
+        : '') +
+      '<button id="mic" class="' + (rec ? 'rec' : '') + (hasText ? ' hidden' : '') + '" ' +
         'aria-label="' + (rec ? 'Остановить запись' : 'Записать голосом') + '">' +
         (rec
           ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
@@ -1140,19 +1165,18 @@
     }).join('') + '</div>';
   }
 
-  function loadWeight() {
-    api('/api/stats/weight?limit=1').then(function (d) {
-      state.weight = d.points.length ? d.points[d.points.length - 1].kg : null;
-      if (!state.prefs || state.prefs.foot_third !== 'meals') renderDay();
-    }).catch(function () {});
-  }
-
   function loadFrequent() {
     /* Тихо: пустые чипы — не ошибка, ради них не стоит ломать экран. */
     api('/api/frequent?limit=10').then(function (d) {
-      var before = (state.frequent || []).length;
       state.frequent = d.items;
-      if (!before && d.items.length && state.tab === 'day') renderDay();
+      if (state.tab !== 'day') return;
+      /* Вставляем строку чипов на место, а не перерисовкой всего дня: та
+         ходила в API заново и мигала экраном ради оформления. */
+      var old = document.querySelector('.chips');
+      var html = chips();
+      if (old) { old.outerHTML = html; return; }
+      var c = document.querySelector('.composer');
+      if (c && html) c.insertAdjacentHTML('afterend', html);
     }).catch(function () {});
   }
 
@@ -1391,6 +1415,7 @@
       state.open[b.dataset.meal] = !state.open[b.dataset.meal];
       return render();
     }
+    if (b.id === 'sendtext') return submitText();
     if (b.id === 'mic') return state.recording ? stopRec() : startRec();
     if (b.dataset.repeat) {
       loading();
@@ -1409,7 +1434,7 @@
     }
     if (b.dataset.quick) {
       loading();
-      var fromAi = state.tab === 'ai';
+      var stay = state.tab === 'ai' || state.tab === 'cat';
       return send('/api/meals/quick', {
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newKey() },
         body: JSON.stringify({ product_id: Number(b.dataset.quick),
@@ -1417,14 +1442,17 @@
       }).then(function (r) {
         /* С вкладки AI не уводим на «День»: человек читает ответ и может
            записать ещё одно. Достаточно подтвердить тостом. */
-        if (fromAi) {
+        /* С вкладок AI и «Продукты» не уводим на «День»: человек читает ответ
+           или листает каталог и может записать ещё. Уход туда стоил лишнего
+           тапа на каждый следующий продукт и рассинхронивал подсветку вкладки. */
+        if (stay) {
           toast(r.meal ? 'Записал ' + n(r.meal.kcal) + ' ккал.' : 'Готово.');
-          return renderAi();
+          return render();
         }
         return handle(r);
       }).catch(function (err) {
         toast(err.message, true);
-        return fromAi ? renderAi() : renderDay();
+        return stay ? render() : renderDay();
       });
     }
     if (b.dataset.say) {
@@ -1615,6 +1643,21 @@
   });
 
   root.addEventListener('input', function (e) {
+    if (e.target.id === 'say') {
+      var was = !!(state.text || '').trim();
+      state.text = e.target.value;
+      /* Перерисовываем композер только на переходе «пусто ↔ не пусто»:
+         на каждом символе это выбивало бы курсор. */
+      if (was !== !!state.text.trim()) {
+        var c = document.querySelector('.composer');
+        if (c) {
+          c.outerHTML = composer();
+          var i = document.getElementById('say');
+          if (i) { i.value = state.text; i.focus(); }
+        }
+      }
+      return;
+    }
     if (e.target.id === 'say') state.text = e.target.value;
     if (e.target.id === 'q') {
       /* Ждём паузу в наборе: запрос на каждый символ — это 15 запросов
@@ -1645,7 +1688,6 @@
   tg.ready();
   tg.expand();
   loadFrequent();
-  loadWeight();
   /* Настройки нужны до первой отрисовки: иначе панель мигнёт видом по умолчанию
      и только потом переключится на выбранный. */
   api('/api/settings').then(function (d) {
@@ -1654,8 +1696,9 @@
        значение просто присваивалось и не читалось нигде — переключатель
        выглядел рабочим и не делал ничего. */
     state.micFirst = !!d.prefs.mic_first;
-    render();
-  }).catch(function () { state.prefs = {}; });
+  }).catch(function () {
+    /* Настройки не пришли — рисуем с видом по умолчанию, а не пустой экран. */
+    state.prefs = {};
+  }).then(render);
   if (tg.setHeaderColor) { try { tg.setHeaderColor('#000000'); } catch (e) { /* старый клиент */ } }
-  render();
 })();

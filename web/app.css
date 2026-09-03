@@ -10,7 +10,7 @@
   --alert:#C98A73;
   --prot:#3AC8E0; --fat:#FF9F45; --carb:#9A87F4;
   --bar:#7C8899; --bar-2:#A7B2C0; --line:#A7ABB2; --data:#C3CBD5;
-  --border:#5A606B; --tint:#182E3F;
+  --border:#6E747F; --tint:#182E3F;
   /* Радиусы и шкала — как в макетах (§6.16). Раньше расходились: у радиусов
      на 2–4px, у шрифта на 6px в герое. Мелочь по отдельности, но вместе
      это другой ритм страницы. */
@@ -97,7 +97,9 @@ nav button[aria-current="page"]{color:var(--accent)}
 
 /* ── состояния ───────────────────────────────────────────────────────── */
 .state{padding:var(--s-5);text-align:center;color:var(--text-muted);font-size:var(--f-body-s)}
-.state.err{border-left:3px solid var(--alert);text-align:left}
+/* box-shadow вместо border-left: на скруглённом углу полоса в 3px
+   обводила радиус серпом. */
+.state.err{box-shadow:inset 3px 0 0 var(--alert);text-align:left}
 .skel{background:var(--surface-3);border-radius:6px;animation:pulse 1.4s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:.45}50%{opacity:.8}}
 @media (prefers-reduced-motion:reduce){.skel{animation:none}.track>i{transition:none}}
@@ -120,12 +122,14 @@ nav button[aria-current="page"]{color:var(--accent)}
 @media (prefers-reduced-motion:reduce){.composer button.rec{animation:none}}
 
 /* ── частое: одна прокручиваемая строка (§6.3) ───────────────────────── */
-.chips{display:flex;gap:var(--s-2);overflow-x:auto;margin:var(--s-3) calc(-1 * var(--s-4)) 0;
+/* Высота зарезервирована: чипы приходят с сервера и раньше толкали ленту
+   вниз уже занесённым пальцем. */
+.chips{min-height:44px;display:flex;gap:var(--s-2);overflow-x:auto;margin:var(--s-3) calc(-1 * var(--s-4)) 0;
   padding:0 var(--s-4);scrollbar-width:none;-webkit-overflow-scrolling:touch}
 .chips::-webkit-scrollbar{display:none}
 .chip{flex-shrink:0;background:var(--surface-2);border:0;color:var(--text);font:inherit;
   font-size:var(--f-caption);border-radius:var(--r-pill);padding:8px 13px;cursor:pointer;
-  white-space:nowrap;min-height:36px}
+  white-space:nowrap;min-height:44px}
 .chip .g{color:var(--text-faint)}
 
 /* ── подтверждение записи ────────────────────────────────────────────── */
@@ -133,21 +137,23 @@ nav button[aria-current="page"]{color:var(--accent)}
 .just .ttl{font-size:var(--f-caption);color:var(--accent);font-weight:600}
 .actions{display:flex;gap:var(--s-2);margin-top:var(--s-4)}
 .actions button{background:var(--surface-2);border:0;color:var(--text);font:inherit;
-  font-size:var(--f-caption);border-radius:var(--r-pill);padding:9px 15px;cursor:pointer;min-height:38px}
+  font-size:var(--f-caption);border-radius:var(--r-pill);padding:9px 15px;cursor:pointer;min-height:44px}
 .actions button.danger{color:var(--alert)}
 
 /* ── уточнение вариантами ────────────────────────────────────────────── */
 .opts{display:flex;flex-wrap:wrap;gap:var(--s-2);margin-top:var(--s-3)}
 .opts button{background:var(--tint);border:1px solid var(--accent);color:var(--text);
   font:inherit;font-size:var(--f-caption);border-radius:var(--r-sm);padding:10px 14px;
-  cursor:pointer;min-height:40px}
+  cursor:pointer;min-height:44px}
 
 /* ── всплывающее сообщение ───────────────────────────────────────────── */
 .toast{position:fixed;left:var(--s-4);right:var(--s-4);
   bottom:calc(var(--tabbar) + var(--s-3) + env(safe-area-inset-bottom));
   background:var(--surface-2);border:1px solid var(--surface-3);border-radius:var(--r-field);
   padding:var(--s-3) var(--s-4);font-size:var(--f-body-s);z-index:20}
-.toast.bad{border-color:var(--alert)}
+/* Провал записи не должен выглядеть как успех: рамки в 1px для этого
+   мало. Полоса слева читается мгновенно и не кричит цветом. */
+.toast.bad{border-color:var(--alert);box-shadow:inset 3px 0 0 var(--alert)}
 
 /* ── каталог ─────────────────────────────────────────────────────────── */
 .search{display:flex;align-items:center;gap:var(--s-2);background:var(--surface-2);
@@ -166,7 +172,7 @@ nav button[aria-current="page"]{color:var(--accent)}
   font-size:var(--f-micro);flex-shrink:0;margin-left:6px}
 .pager{display:flex;gap:var(--s-2);justify-content:center;margin-top:var(--s-4)}
 .pager button{background:var(--surface-2);border:0;color:var(--text);font:inherit;
-  font-size:var(--f-caption);border-radius:var(--r-pill);padding:9px 16px;cursor:pointer;min-height:38px}
+  font-size:var(--f-caption);border-radius:var(--r-pill);padding:9px 16px;cursor:pointer;min-height:44px}
 .pager button[disabled]{opacity:.4;cursor:default}
 .field{display:flex;align-items:center;gap:var(--s-3);padding:9px 0}
 .field + .field{border-top:1px solid var(--separator)}
@@ -197,7 +203,7 @@ nav button[aria-current="page"]{color:var(--accent)}
 .heat div{aspect-ratio:1;border-radius:4px}
 .periods{display:flex;gap:var(--s-2);margin-bottom:var(--s-3)}
 .periods button{background:var(--surface-2);border:0;color:var(--text-muted);font:inherit;
-  font-size:var(--f-caption);border-radius:var(--r-pill);padding:8px 14px;cursor:pointer;min-height:36px}
+  font-size:var(--f-caption);border-radius:var(--r-pill);padding:8px 14px;cursor:pointer;min-height:44px}
 .periods button[aria-pressed="true"]{background:var(--tint);color:var(--accent)}
 
 /* ── ассистент ───────────────────────────────────────────────────────── */
@@ -246,7 +252,9 @@ nav button[aria-current="page"]{color:var(--accent)}
 /* Переключатель порядка ленты. Отдельно от .badge.dup: тот сидит внутри
    строки текста, а этот стоит в шапке карточки — ему нужна своя высота и
    выключка по центру, иначе текст съезжает относительно заголовка. */
-.sortbtn{background:var(--tint);color:var(--accent);border:0;cursor:pointer;
+/* Нейтральный: порядок сортировки ничего не требует, а --accent по
+   MA-INV-20 значит «действие, требует внимания». */
+.sortbtn{background:var(--surface-2);color:var(--text-muted);border:0;cursor:pointer;
   border-radius:var(--r-pill);padding:0 10px;height:24px;
   display:inline-flex;align-items:center;font-size:var(--f-micro);
   font-family:inherit;line-height:1;flex-shrink:0}
@@ -264,3 +272,17 @@ nav button[aria-current="page"]{color:var(--accent)}
   .dots i:nth-child(2){opacity:.7}
   .dots i:nth-child(3){opacity:1}
 }
+
+/* Мгновенный отклик на тап: экран перерисовывается через сотню миллисекунд,
+   и без этого палец не получает подтверждения вовсе. */
+.chip:active, .actions button:active, .pager button:active,
+.opts button:active, .item2 .body:active, .meal:active{opacity:.55}
+
+/* Тёмная клетка тепловой карты против фона карточки даёт 1.41 — порога не
+   взять: три заливки не помещаются в диапазон яркости тёмной темы (нужно 27,
+   есть 18,5). Поэтому у клеток есть обводка — второй носитель смысла,
+   которого и требует WCAG 1.4.1. */
+.heat div{outline:1px solid var(--border);outline-offset:-1px}
+
+/* Видимый фокус: outline:none стоит на полях, а замена была не везде. */
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
