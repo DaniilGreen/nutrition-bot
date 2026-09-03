@@ -151,6 +151,16 @@ class MealRepo(Protocol):
         """
         ...
 
+    async def items_of_product(
+        self, user_id: int, product_id: int, *, limit: int
+    ) -> list[tuple[datetime, float, float]]:
+        """Последние появления продукта в приёмах: (когда, граммы, ккал).
+
+        Нужен карточке продукта (§6.8): «где я это ел» — единственный способ
+        понять, откуда взялась плотность, и стоит ли её править.
+        """
+        ...
+
     async def estimate_share(self, user_id: int, *, days: int) -> tuple[float, float]:
         """(ккал из оценок, ккал всего) за окно — для «точности учёта» (§3.5).
 

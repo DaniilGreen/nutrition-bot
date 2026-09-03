@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from statistics import median
 from zoneinfo import ZoneInfo
 
@@ -324,6 +324,23 @@ class Assistant:
     ) -> list[tuple[int | None, str, float, int]]:
         """Куда уходят калории (§3.3). Абсолютный вклад, не доля."""
         return await self._meals.contributions(_require_id(user), days=days, limit=limit)
+
+    async def product_history(
+        self, user: User, product_id: int, *, limit: int = 5
+    ) -> list[tuple[datetime, float, float]]:
+        """Последние появления продукта в приёмах ЭТОГО человека (§6.8)."""
+        return await self._meals.items_of_product(
+            _require_id(user), product_id, limit=limit
+        )
+
+    async def duplicate_index(self) -> dict[int, int]:
+        """product_id → номер группы дублей. Нужен графику вкладов: один
+        продукт двумя строками там виден сразу, и это лучший момент предложить
+        слияние — человек как раз смотрит, куда уходят калории (§3.3)."""
+        groups, _ = await self.duplicate_groups()
+        return {
+            p.id: gi for gi, g in enumerate(groups) for p in g if p.id is not None
+        }
 
     async def accuracy(self, user: User, *, days: int = 30) -> tuple[float, float]:
         """Доверие к цифре: сколько калорий из оценок, сколько всего (§3.5)."""

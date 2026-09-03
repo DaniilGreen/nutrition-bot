@@ -477,8 +477,34 @@
           'Правка меняет будущие записи. Уже съеденное не двинется — в истории ' +
           'хранится снимок на момент записи.</div>' +
         '</section>' +
+        recentCard(d.recent_items, p) +
         '<div class="pager"><button id="toList">К списку</button></div>');
     }).catch(failure);
+  }
+
+  /* §6.8: «где я это ел». Без истории непонятно, откуда взялась плотность и
+     стоит ли её править — а карточка ровно про это. Здесь же кнопка записать
+     привычной порцией: пришёл посмотреть, заодно записал. */
+  function recentCard(items, p) {
+    var g = p.usual_grams || 100;
+    var log = '<div class="actions" style="margin-top:var(--s-3)">' +
+      '<button data-quick="' + p.id + '" data-grams="' + g + '">' +
+      'Записать ' + n(g) + ' г</button></div>';
+    if (!items || !items.length) {
+      return card('В приёмах',
+        '<div class="state">Этот продукт ещё не встречался в записях.</div>' + log, '');
+    }
+    var rows = items.map(function (i) {
+      return '<div class="row">' +
+        '<span style="flex-grow:1">' + esc(i.at) + '</span>' +
+        '<span class="num g">' + n(i.grams) + ' г</span>' +
+        '<span class="num" style="width:52px;text-align:right">' + n(i.kcal) + '</span>' +
+      '</div>';
+    }).join('');
+    return card('В приёмах', '<div class="items" style="padding-left:0">' + rows +
+                '</div>' + log,
+                'Последние ' + n(items.length) + ' появления. Столбец справа — ' +
+                'ккал по снимку на момент записи, а не по нынешней плотности.');
   }
 
   function field(id, label, value) {
@@ -609,10 +635,16 @@
     if (!c || !c.items.length) return '';
     var max = c.items[0].kcal || 1;
     var rows = c.items.map(function (i) {
+      /* AC-MA-36: два продукта из одной группы дублей в одном графике — самый
+         удачный момент предложить слияние: человек уже смотрит на расход и
+         видит, что одна еда разбита надвое. */
+      var dup = i.duplicate_group != null
+        ? '<button class="badge dup" data-dups="1">слить?</button>'
+        : '';
       return '<div style="padding:7px 0">' +
         '<div style="display:flex;align-items:baseline;gap:var(--s-2)">' +
           '<span style="flex-grow:1;min-width:0;overflow:hidden;text-overflow:ellipsis;' +
-          'white-space:nowrap;font-size:var(--f-body-s)">' + esc(i.name) + '</span>' +
+          'white-space:nowrap;font-size:var(--f-body-s)">' + esc(i.name) + dup + '</span>' +
           '<span class="num" style="font-size:var(--f-caption)">' + n(i.kcal) + ' ккал</span>' +
           '<span class="mic" style="width:44px;text-align:right">' + n(i.times) + '×</span>' +
         '</div>' +
@@ -1358,6 +1390,15 @@
         .catch(function (e) { toast(e.message, true); });
     }
     if (b.id === 'wsave') return saveWeight();
+    if (b.dataset.dups) {
+      state.tab = 'cat';
+      state.cat = { view: 'dups', offset: 0, q: '' };
+      [].forEach.call(nav.querySelectorAll('button'), function (x) {
+        if (x.dataset.tab === 'cat') x.setAttribute('aria-current', 'page');
+        else x.removeAttribute('aria-current');
+      });
+      return renderCatalog();
+    }
     if (b.dataset.period) { state.period = Number(b.dataset.period); return renderTotals(); }
     if (b.dataset.ask) return askCoach(b.dataset.ask);
     if (b.id === 'send') {

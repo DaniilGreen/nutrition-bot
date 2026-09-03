@@ -220,3 +220,77 @@ async def test_каталог_требует_подписи(client):
     async with client as c:
         assert (await c.get("/api/products")).status_code == 401
         assert (await c.post("/api/products/merge", json={})).status_code == 401
+
+
+async def test_карточка_показывает_где_продукт_встречался(client, fake_container):
+    """§6.8: без истории непонятно, откуда взялась плотность и стоит ли её править."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.application.entities import Meal, MealItem
+    from app.domain.value_objects import Macros
+
+    (p,) = await _seed(fake_container.products, ("chicken", "грудка", 165, "curated"))
+    m = Macros(kcal=330, protein=62, fat=7, carb=0)
+    async with client as c:
+        uid = int((await c.get("/api/me", headers=_hdr())).json()["user"]["id"])
+        for days, grams in ((1, 200.0), (3, 180.0)):
+            await fake_container.meals.add(Meal(
+                user_id=uid, eaten_at=datetime.now(UTC) - timedelta(days=days),
+                input_type="text", raw_input="грудка",
+                items=[MealItem(name_snapshot="грудка", grams=grams,
+                                macros=m, product_id=p.id)],
+                source_confidence=1.0, totals=m,
+            ))
+        r = (await c.get(f"/api/products/{p.id}", headers=_hdr())).json()
+    assert len(r["recent_items"]) == 2
+    assert r["recent_items"][0]["grams"] == 200      # свежее первым
+    # Привычная граммовка — медиана из истории, ради кнопки «Записать N г».
+    assert r["product"]["usual_grams"] in (180, 200)
+
+
+async def test_чужая_история_продукта_не_видна(client, fake_container):
+    from datetime import UTC, datetime
+
+    from app.application.entities import Meal, MealItem
+    from app.domain.value_objects import Macros
+
+    (p,) = await _seed(fake_container.products, ("chicken", "грудка", 165, "curated"))
+    m = Macros(kcal=330, protein=62, fat=7, carb=0)
+    await fake_container.meals.add(Meal(
+        user_id=999, eaten_at=datetime.now(UTC), input_type="text", raw_input="чужое",
+        items=[MealItem(name_snapshot="грудка", grams=500, macros=m, product_id=p.id)],
+        source_confidence=1.0, totals=m,
+    ))
+    async with client as c:
+        await c.get("/api/me", headers=_hdr())
+        r = (await c.get(f"/api/products/{p.id}", headers=_hdr())).json()
+    assert r["recent_items"] == []
+
+
+async def test_дубли_помечены_в_графике_вкладов(client, fake_container):
+    """AC-MA-36: два продукта одной группы в одном графике — момент предложить
+    слияние. Одинокая строка дублем не выглядит и не метится."""
+    from datetime import UTC, datetime
+
+    from app.application.entities import Meal, MealItem
+    from app.domain.value_objects import Macros
+
+    a, b = await _seed(
+        fake_container.products,
+        ("fried_eggs", "яичница", 190, "llm"),
+        ("fried_eggs_2", "Яичница", 195, "llm"),
+    )
+    m = Macros(kcal=300, protein=20, fat=20, carb=2)
+    async with client as c:
+        uid = int((await c.get("/api/me", headers=_hdr())).json()["user"]["id"])
+        for prod in (a, b):
+            await fake_container.meals.add(Meal(
+                user_id=uid, eaten_at=datetime.now(UTC), input_type="text",
+                raw_input=prod.display_name,
+                items=[MealItem(name_snapshot=prod.display_name, grams=150,
+                                macros=m, product_id=prod.id)],
+                source_confidence=1.0, totals=m,
+            ))
+        r = (await c.get("/api/stats/contributions", headers=_hdr())).json()
+    marked = [i for i in r["items"] if i.get("duplicate_group") is not None]
+    assert len(marked) == 2, r["items"]

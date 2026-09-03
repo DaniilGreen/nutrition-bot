@@ -326,6 +326,18 @@ class SqlMealRepo:
             (pid, name, float(kcal or 0), int(times)) for pid, name, kcal, times in res.all()
         ]
 
+    async def items_of_product(
+        self, user_id: int, product_id: int, *, limit: int
+    ) -> list[tuple[datetime, float, float]]:
+        res = await self._s.execute(
+            select(MealORM.eaten_at, MealItemORM.grams, MealItemORM.kcal)
+            .join(MealORM, MealORM.id == MealItemORM.meal_id)
+            .where(MealORM.user_id == user_id, MealItemORM.product_id == product_id)
+            .order_by(MealORM.eaten_at.desc())
+            .limit(limit)
+        )
+        return [(at, float(g or 0), float(k or 0)) for at, g, k in res.all()]
+
     async def estimate_share(self, user_id: int, *, days: int) -> tuple[float, float]:
         since = datetime.now(UTC) - timedelta(days=days)
         res = await self._s.execute(

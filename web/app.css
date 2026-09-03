@@ -233,3 +233,8 @@ nav button[aria-current="page"]{color:var(--accent)}
 .pick .prev{transform:scale(.62);transform-origin:top left;width:161%;
   margin-bottom:-24%;pointer-events:none}
 .pick .prev section{background:var(--surface-2)}
+
+/* Метка дубля в графике вкладов — кнопка, а не подпись: она ведёт на слияние. */
+.badge.dup{background:var(--tint);color:var(--accent);border:0;cursor:pointer;
+  border-radius:var(--r-pill);padding:1px 7px;font-size:var(--f-micro);
+  margin-left:6px;font-family:inherit}

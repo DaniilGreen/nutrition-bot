@@ -192,6 +192,19 @@ class InMemoryMealRepo:
         rows.sort(key=lambda r: -r[2])
         return rows[:limit]
 
+    async def items_of_product(
+        self, user_id: int, product_id: int, *, limit: int
+    ) -> list[tuple[datetime, float, float]]:
+        rows = [
+            (m.eaten_at, it.grams, it.macros.kcal)
+            for m in self._meals
+            if m.user_id == user_id
+            for it in m.items
+            if it.product_id == product_id
+        ]
+        rows.sort(key=lambda r: r[0], reverse=True)
+        return rows[:limit]
+
     async def estimate_share(self, user_id: int, *, days: int) -> tuple[float, float]:
         from datetime import timedelta
 

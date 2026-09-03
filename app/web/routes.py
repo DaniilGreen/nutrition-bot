@@ -450,10 +450,28 @@ async def contributions(
         raise bad_request("bad_range", "Период вне допустимого диапазона.")
     rows = await assistant.contributions(user, days=days, limit=limit)
     total = sum(k for _, _, k, _ in rows)
+    # AC-MA-36: если два продукта из графика сидят в одной группе дублей —
+    # помечаем оба. Радар дублей там, где человек и так смотрит на расход.
+    dup = await assistant.duplicate_index()
+    seen: dict[int, int] = {}
+    for pid, _, _, _ in rows:
+        g = dup.get(pid or 0)
+        if g is not None:
+            seen[g] = seen.get(g, 0) + 1
     return {
         "total_kcal": round(total, 1),
         "items": [
-            {"product_id": pid, "name": name, "kcal": round(k, 1), "times": t}
+            {
+                "product_id": pid,
+                "name": name,
+                "kcal": round(k, 1),
+                "times": t,
+                # Метим только когда в графике ДВА и больше из одной группы:
+                # одинокая строка дублем не выглядит и подсказка была бы шумом.
+                "duplicate_group": (
+                    dup.get(pid or 0) if seen.get(dup.get(pid or 0, -1), 0) > 1 else None
+                ),
+            }
             for pid, name, k, t in rows
         ],
     }
@@ -548,7 +566,24 @@ async def product(
     if p is None:
         raise not_found("product_not_found", "Продукт не найден.")
     counts = await assistant.usage_of(user, product_id)
-    return {"product": product_json(p, counts)}
+    tz = ZoneInfo(user.timezone)
+    # §6.8: «где я это ел» — единственный способ понять, откуда взялась
+    # плотность, и стоит ли её править.
+    history = await assistant.product_history(user, product_id, limit=5)
+    grams = [g for _, g, _ in history if g > 0]
+    return {
+        "product": product_json(
+            p, counts, sorted(grams)[len(grams) // 2] if grams else None
+        ),
+        "recent_items": [
+            {
+                "at": at.astimezone(tz).strftime("%d.%m %H:%M"),
+                "grams": round(g, 1),
+                "kcal": round(k, 1),
+            }
+            for at, g, k in history
+        ],
+    }
 
 
 @router.patch("/products/{product_id}")

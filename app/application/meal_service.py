@@ -14,7 +14,7 @@ from __future__ import annotations
 import difflib
 import re
 from collections.abc import Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from app.application.dto import ParsedItem, ParsedMessage
 from app.application.entities import Meal, MealItem, Product, User
@@ -196,6 +196,12 @@ class MealService:
     ) -> list[tuple[int | None, str, float, int]]:
         """Куда уходят калории за окно."""
         return await self._meals.contributions(user_id, days=days, limit=limit)
+
+    async def items_of_product(
+        self, user_id: int, product_id: int, *, limit: int = 5
+    ) -> list[tuple[datetime, float, float]]:
+        """Где встречался продукт."""
+        return await self._meals.items_of_product(user_id, product_id, limit=limit)
 
     async def estimate_share(self, user_id: int, *, days: int) -> tuple[float, float]:
         """Сколько калорий пришло из оценок, а сколько из выверенного."""
