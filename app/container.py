@@ -131,6 +131,7 @@ class Container:
             SqlSpendRepo(session),
             stats,
             self.settings.coach_month_limit_usd,
+            meals,
         )
 
     def assistant_for(self, session: AsyncSession) -> tuple[Assistant, SqlUserRepo]:

@@ -10,12 +10,13 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from app.application.entities import User
-from app.application.ports import SpendRepo
+from app.application.ports import MealRepo, SpendRepo
 from app.application.stats_service import StatsService
+from app.domain.mentions import Candidate, mentioned
 from app.domain.spend import Usage, month_limit_reached
 
 
@@ -31,6 +32,10 @@ class CoachAnswer:
     text: str
     spent_usd: float
     limit_usd: float
+    # Продукты, названные в ответе, которые человек уже ел: у них есть и
+    # плотность, и своя граммовка — значит запись в один тап без модели.
+    # §4.3: совет, который нельзя выполнить в один тап, остаётся советом.
+    actions: list[Candidate] = field(default_factory=list)
 
 
 class LimitReached(Exception):
@@ -45,11 +50,15 @@ class Coach:
         spend: SpendRepo,
         stats: StatsService,
         limit_usd: float,
+        meals: MealRepo | None = None,
     ) -> None:
         self._port = port
         self._spend = spend
         self._stats = stats
         self._limit = limit_usd
+        # Нужен только ради «что из этого записать»: берём частое человека,
+        # там уже есть product_id и медианная граммовка.
+        self._meals = meals
 
     async def ask(self, user: User, question: str) -> CoachAnswer:
         # Проверка ДО запроса. После — это «превысил и узнал», то есть лимит,
@@ -69,7 +78,27 @@ class Coach:
             output_tokens=usage.output_tokens,
             cost_usd=usage.cost_usd,
         )
-        return CoachAnswer(text=text, spent_usd=spent + usage.cost_usd, limit_usd=self._limit)
+        return CoachAnswer(
+            text=text,
+            spent_usd=spent + usage.cost_usd,
+            limit_usd=self._limit,
+            actions=await self._actions(user, text),
+        )
+
+    async def _actions(self, user: User, text: str) -> list[Candidate]:
+        """Что из названного можно записать одним тапом.
+
+        Кандидаты — только то, что человек УЖЕ ел: у нового продукта нет ни
+        запиннутой плотности, ни своей граммовки, и кнопка «Записать» повела бы
+        в тот же разбор моделью, от которого мы тут и уходим.
+        """
+        if self._meals is None or user.id is None:
+            return []
+        rows = await self._meals.frequent_items(user.id, days=90, limit=40)
+        return mentioned(
+            text,
+            [Candidate(pid, name, grams) for pid, name, grams, _ in rows if pid is not None],
+        )
 
     async def _facts(self, user: User) -> str:
         """Факты для модели — уже посчитанные приложением.

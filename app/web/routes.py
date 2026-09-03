@@ -674,6 +674,14 @@ async def coach(
         "text": answer.text,
         "spent_usd": round(answer.spent_usd, 4),
         "limit_usd": answer.limit_usd,
+        # AC-MA-40: у названных продуктов — кнопка «Записать» с своей граммовкой.
+        "actions": [
+            {"product_id": a.product_id, "name": a.name, "grams": round(a.grams, 1)}
+            for a in answer.actions
+        ],
+        # §7.2: дисклеймер константой с сервера, а не текстом во фронте —
+        # иначе он разъедется между ботом и аппкой.
+        "disclaimer": "Это не медицинский совет. Считает по твоим записям за 30 дней.",
     }
 
 

@@ -847,7 +847,16 @@
   function renderAi() {
     document.getElementById('title').textContent = 'AI';
     var chat = (state.chat || []).map(function (m) {
-      return '<div class="bubble ' + (m.me ? 'me' : 'ai') + '">' + esc(m.text) + '</div>';
+      /* §4.3: совет, который нельзя выполнить в один тап, остаётся советом.
+         Под ответом — кнопки на продукты, которые человек уже ел: у них есть
+         и плотность, и своя граммовка, значит запись без модели. */
+      var acts = (m.actions || []).map(function (a) {
+        return '<button class="chip" data-quick="' + a.product_id +
+          '" data-grams="' + a.grams + '">Записать ' + esc(a.name) +
+          ' <span class="g">· ' + n(a.grams) + ' г</span></button>';
+      }).join('');
+      return '<div class="bubble ' + (m.me ? 'me' : 'ai') + '">' + esc(m.text) + '</div>' +
+        (acts ? '<div class="chips" style="margin:6px 0 var(--s-3)">' + acts + '</div>' : '');
     }).join('');
     var sug = state.chat && state.chat.length ? '' :
       '<div class="chips">' + SUGGESTS.map(function (q) {
@@ -887,7 +896,8 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: text })
     }).then(function (d) {
-      state.chat.push({ me: false, text: d.text });
+      state.chat.push({ me: false, text: d.text, actions: d.actions || [] });
+      state.disclaimer = d.disclaimer || state.disclaimer;
       state.budget = { spent_usd: d.spent_usd, limit_usd: d.limit_usd, available: true };
       renderAi();
     }).catch(function (e) {
@@ -1164,11 +1174,23 @@
     }
     if (b.dataset.quick) {
       loading();
+      var fromAi = state.tab === 'ai';
       return send('/api/meals/quick', {
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newKey() },
         body: JSON.stringify({ product_id: Number(b.dataset.quick),
                                grams: Number(b.dataset.grams) })
-      }).then(handle).catch(function (err) { toast(err.message, true); renderDay(); });
+      }).then(function (r) {
+        /* С вкладки AI не уводим на «День»: человек читает ответ и может
+           записать ещё одно. Достаточно подтвердить тостом. */
+        if (fromAi) {
+          toast(r.meal ? 'Записал ' + n(r.meal.kcal) + ' ккал.' : 'Готово.');
+          return renderAi();
+        }
+        return handle(r);
+      }).catch(function (err) {
+        toast(err.message, true);
+        return fromAi ? renderAi() : renderDay();
+      });
     }
     if (b.dataset.say) {
       var inp = document.getElementById('say');

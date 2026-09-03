@@ -91,6 +91,9 @@ class FakeContainer:
         return Coach(
             self.coach_port, self.spend or InMemorySpendRepo(),
             stats, self.settings.coach_month_limit_usd,
+            # Без репозитория приёмов ассистент не соберёт кандидатов на
+            # «Записать» — и тест бы молча проверял пустой список.
+            self.meals,
         )
 
     def assistant_for(self, session):

@@ -112,3 +112,52 @@ async def test_слишком_длинный_вопрос_400(client, fake_conta
 async def test_ассистент_требует_подписи(client):
     async with client as c:
         assert (await c.post("/api/coach", json={"question": "х"})).status_code == 401
+
+
+async def test_ответ_несёт_кнопки_на_названные_продукты(client, fake_container):
+    """AC-MA-40 / §4.3: совет, который нельзя выполнить в один тап, остаётся
+    советом. Кандидаты — только то, что человек уже ел."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.application.entities import Meal, MealItem
+    from app.domain.value_objects import Macros
+
+    m = Macros(kcal=330, protein=62, fat=7, carb=0)
+    async with client as c:
+        uid = int((await c.get("/api/me", headers=_hdr())).json()["user"]["id"])
+        await fake_container.meals.add(Meal(
+            user_id=uid, eaten_at=datetime.now(UTC) - timedelta(days=1),
+            input_type="text", raw_input="грудка",
+            items=[MealItem(name_snapshot="куриная грудка", grams=200,
+                            macros=m, product_id=7)],
+            source_confidence=1.0, totals=m,
+        ))
+        fake_container.coach_port = StubCoach("Добери белок: подойдёт куриная грудка.")
+        r = (await c.post("/api/coach", json={"question": "как добрать белок"},
+                          headers=_hdr())).json()
+    assert r["actions"], r
+    assert r["actions"][0]["product_id"] == 7
+    assert r["actions"][0]["grams"] == 200
+    assert r["disclaimer"]
+
+
+async def test_неназванное_в_кнопки_не_попадает(client, fake_container):
+    from datetime import UTC, datetime, timedelta
+
+    from app.application.entities import Meal, MealItem
+    from app.domain.value_objects import Macros
+
+    m = Macros(kcal=330, protein=62, fat=7, carb=0)
+    async with client as c:
+        uid = int((await c.get("/api/me", headers=_hdr())).json()["user"]["id"])
+        await fake_container.meals.add(Meal(
+            user_id=uid, eaten_at=datetime.now(UTC) - timedelta(days=1),
+            input_type="text", raw_input="грудка",
+            items=[MealItem(name_snapshot="куриная грудка", grams=200,
+                            macros=m, product_id=7)],
+            source_confidence=1.0, totals=m,
+        ))
+        fake_container.coach_port = StubCoach("Ешь больше овощей и пей воду.")
+        r = (await c.post("/api/coach", json={"question": "что делать"},
+                          headers=_hdr())).json()
+    assert r["actions"] == []
