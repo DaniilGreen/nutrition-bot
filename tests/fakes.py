@@ -307,6 +307,12 @@ class InMemoryWeightRepo:
         ]
         return max(xs, key=lambda log: log.measured_at) if xs else None
 
+    async def delete(self, user_id: int, log_id: int) -> WeightLog | None:
+        for i, w in enumerate(self._logs):
+            if w.id == log_id and w.user_id == user_id:
+                return self._logs.pop(i)
+        return None
+
     async def history(self, user_id: int, limit: int) -> list[WeightLog]:
         xs = [log for log in self._logs if log.user_id == user_id]
         xs.sort(key=lambda log: log.measured_at, reverse=True)

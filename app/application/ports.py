@@ -189,6 +189,11 @@ class WeightRepo(Protocol):
 
     async def history(self, user_id: int, limit: int) -> list[WeightLog]: ...
 
+    async def delete(self, user_id: int, log_id: int) -> WeightLog | None:
+        """Удалить свой замер. Без этого опечатку «83,6» вместо «93,6» починить
+        нечем, а именно про такой выброс и рассказывает экран веса."""
+        ...
+
 
 class SpendRepo(Protocol):
     """Учёт расходов на LLM (OQ-M3). Отдельный порт, а не поле в UserRepo:

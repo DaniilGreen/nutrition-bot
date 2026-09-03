@@ -11,7 +11,16 @@ class WeightService:
         self._weights = weights
         self._clock = clock
 
+    # Человек весит в этих пределах. Проверка живёт в сервисе, а не в разборе
+    # текста: иначе запись весов из аппки шла бы мимо неё.
+    MIN_KG, MAX_KG = 20.0, 400.0
+
+    def plausible(self, weight_kg: float) -> bool:
+        return self.MIN_KG <= weight_kg <= self.MAX_KG
+
     async def log(self, user: User, weight_kg: float) -> tuple[WeightLog, float | None]:
+        if not self.plausible(weight_kg):
+            raise ValueError("вес вне разумных пределов (20–400 кг)")
         user_id = _require_id(user)
         now = self._clock()
         previous = await self._weights.latest(user_id, before=now)
@@ -23,6 +32,9 @@ class WeightService:
 
     async def history(self, user: User, limit: int = 14) -> list[WeightLog]:
         return await self._weights.history(_require_id(user), limit)
+
+    async def delete(self, user: User, log_id: int) -> WeightLog | None:
+        return await self._weights.delete(_require_id(user), log_id)
 
 
 def _require_id(user: User) -> int:

@@ -773,6 +773,12 @@
 
   function composer() {
     var rec = state.recording;
+    /* «Сразу открывать микрофон»: включаем запись при первом показе «Дня»,
+       один раз за сессию — иначе она перезапускалась бы на каждой перерисовке. */
+    if (state.micFirst && !state.micAutoDone && !rec) {
+      state.micAutoDone = true;
+      setTimeout(function () { if (!state.recording) startRec(); }, 350);
+    }
     return '<div class="composer">' +
       '<input id="say" type="text" inputmode="text" autocomplete="off" ' +
         'placeholder="Что съел? Или скажи голосом" value="' + esc(state.text || '') + '">' +
@@ -840,14 +846,51 @@
   }
 
   function clarifyCard(c) {
+    var cancel = '<button data-answer="" data-cancel="1" ' +
+      'style="border-color:var(--surface-3);background:var(--surface-2)">Отмена</button>';
+
+    /* Сервер спрашивает две разные вещи, и путать их нельзя: "variant" —
+       выбор из предложенных имён, "portion" — сколько это было. Раньше
+       карточка рисовала только кнопки из options; при вопросе о порции
+       options пуст, оставалась одна «Отмена», и приём терялся. */
+    if (c.ask === 'portion') {
+      return '<section class="card just" style="margin-top:var(--s-3)">' +
+        '<div class="ttl">Сколько было: ' + esc(c.item_name) + '?</div>' +
+        '<div class="opts">' +
+          ['Маленькая', 'Средняя', 'Большая'].map(function (o) {
+            return '<button data-answer="' + esc(o) + '">' + esc(o) + '</button>';
+          }).join('') +
+        '</div>' +
+        '<div class="composer" style="margin-top:var(--s-3)">' +
+          '<input id="grams" type="number" inputmode="numeric" min="1" max="5000" ' +
+            'placeholder="или граммами, напр. 250" ' +
+            'style="flex-grow:1;background:none;border:0;color:var(--text);' +
+            'font:inherit;outline:none;min-width:0">' +
+          '<button data-grams="1" aria-label="Записать">' +
+            '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" ' +
+            'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+            'stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/>' +
+            '</svg></button>' +
+        '</div>' +
+        '<div class="opts" style="margin-top:var(--s-2)">' + cancel + '</div></section>';
+    }
+
     var opts = (c.options || []).map(function (o) {
       return '<button data-answer="' + esc(o) + '">' + esc(o) + '</button>';
     }).join('');
     return '<section class="card just" style="margin-top:var(--s-3)">' +
       '<div class="ttl">Уточни: ' + esc(c.item_name) + '</div>' +
-      '<div class="opts">' + opts +
-        '<button data-answer="" data-cancel="1" style="border-color:var(--surface-3);' +
-        'background:var(--surface-2)">Отмена</button></div></section>';
+      '<div class="opts">' + opts + cancel + '</div></section>';
+  }
+
+  function sendAnswer(answer) {
+    var c = state.clarify;
+    if (!c) return;
+    loading();
+    return send('/api/meals/clarify', {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ draft_id: c.draft_id, answer: answer })
+    }).then(handle).catch(function (err) { toast(err.message, true); renderDay(); });
   }
 
   function handle(res) {
@@ -1022,14 +1065,16 @@
     }
     if (b.dataset.merge != null) return doMerge(Number(b.dataset.merge));
 
+    if (b.dataset.grams) {
+      var gi = document.getElementById('grams');
+      var grams = (gi && gi.value || '').trim();
+      if (!grams) { toast('Введи вес в граммах или выбери размер.', true); return; }
+      return sendAnswer(grams);
+    }
+
     if (b.hasAttribute('data-answer')) {
       if (b.dataset.cancel) { state.clarify = null; return renderDay(); }
-      var c = state.clarify;
-      loading();
-      return send('/api/meals/clarify', {
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ draft_id: c.draft_id, answer: b.dataset.answer })
-      }).then(handle).catch(function (err) { toast(err.message, true); renderDay(); });
+      return sendAnswer(b.dataset.answer);
     }
   });
 
@@ -1105,6 +1150,12 @@
 
   root.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && e.target.id === 'say') { e.preventDefault(); submitText(); }
+    if (e.key === 'Enter' && e.target.id === 'grams') {
+      e.preventDefault();
+      var v = (e.target.value || '').trim();
+      if (v) sendAnswer(v);
+      return;
+    }
     if (e.key === 'Enter' && e.target.id === 'ask') {
       e.preventDefault();
       var t = (e.target.value || '').trim(); e.target.value = '';
@@ -1148,7 +1199,10 @@
      и только потом переключится на выбранный. */
   api('/api/settings').then(function (d) {
     state.prefs = d.prefs;
-    if (d.prefs.mic_first && state.tab === 'day') state.micFirst = true;
+    /* Настройка обязана иметь поведение за собой (MA-INV-31). Раньше здесь
+       значение просто присваивалось и не читалось нигде — переключатель
+       выглядел рабочим и не делал ничего. */
+    state.micFirst = !!d.prefs.mic_first;
     render();
   }).catch(function () { state.prefs = {}; });
   if (tg.setHeaderColor) { try { tg.setHeaderColor('#000000'); } catch (e) { /* старый клиент */ } }

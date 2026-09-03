@@ -94,7 +94,8 @@ class Assistant:
             return await self._handle_meal(user, parsed, raw_input=text, input_type=input_type)
 
         if parsed.intent is Intent.WEIGHT and parsed.weight_kg is not None:
-            if not 20 <= parsed.weight_kg <= 400:  # человек весит в этих пределах
+            # Проверка диапазона живёт в WeightService (одна на бота и аппку).
+            if not self._weights.plausible(parsed.weight_kg):
                 return Unknown(reason="вес вне разумных пределов (20–400 кг)")
             log, delta = await self._weights.log(user, parsed.weight_kg)
             return WeightLogged(log=log, delta_kg=delta)
@@ -304,6 +305,9 @@ class Assistant:
         """Сколько раз ЭТОТ человек ел продукт. Карточке нужно одно число."""
         counts = await self._products.usage_counts([product_id], user_id=_require_id(user))
         return counts.get(product_id, 0)
+
+    async def delete_weight(self, user: User, log_id: int) -> WeightLog | None:
+        return await self._weights.delete(user, log_id)
 
     async def contributions(
         self, user: User, *, days: int = 30, limit: int = 8

@@ -264,3 +264,77 @@ async def test_слишком_частая_запись_429(client, fake_contain
             codes.append(r.status_code)
     assert 429 in codes
     assert codes.count(200) == 20  # лимит 20 в минуту
+
+
+def _needs_portion(name: str, key: str, kcal: float) -> ParsedMessage:
+    """Позиция без веса и без штук — приложение обязано спросить порцию."""
+    return ParsedMessage(
+        intent=Intent.MEAL,
+        confidence=0.9,
+        items=[
+            ParsedItem(
+                name=name, canonical_key=key, unit=Unit.PORTION, grams=None,
+                kcal_per_100g=kcal, protein_per_100g=round(kcal * 0.19, 1),
+                fat_per_100g=round(kcal * 0.022, 1), carb_per_100g=0, confidence=0.9,
+                portion_options={"small": 200.0, "medium": 350.0, "large": 500.0},
+            )
+        ],
+    )
+
+
+async def test_уточнение_порции_помечено_и_без_вариантов(client, fake_container):
+    """Клиент обязан отличать «выбери имя» от «сколько было»: перепутав, он
+    отправит «300 г» как название продукта."""
+    fake_container.nlu = StubNlu(_needs_portion("борщ", "borsch", 60))
+    async with client as c:
+        r = (await c.post("/api/meals", json={"text": "борщ"}, headers=_hdr())).json()
+    assert r["kind"] == "clarify"
+    assert r["ask"] == "portion"
+    assert r["options"] == []
+
+
+async def test_ответ_граммами_доводит_приём_до_записи(client, fake_container):
+    """Раньше этот путь был тупиком — записать было нечем, приём терялся."""
+    fake_container.nlu = StubNlu(_needs_portion("борщ", "borsch", 60))
+    async with client as c:
+        q = (await c.post("/api/meals", json={"text": "борщ"}, headers=_hdr())).json()
+        r = (await c.post("/api/meals/clarify",
+                          json={"draft_id": q["draft_id"], "answer": "350"},
+                          headers=_hdr())).json()
+        day = (await c.get("/api/day", headers=_hdr())).json()
+    assert r["kind"] == "logged", r
+    assert r["meal"]["items"][0]["grams"] == 350
+    assert len(day["meals"]) == 1
+
+
+async def test_ответ_размером_тоже_записывает(client, fake_container):
+    fake_container.nlu = StubNlu(_needs_portion("борщ", "borsch", 60))
+    async with client as c:
+        q = (await c.post("/api/meals", json={"text": "борщ"}, headers=_hdr())).json()
+        r = (await c.post("/api/meals/clarify",
+                          json={"draft_id": q["draft_id"], "answer": "средняя"},
+                          headers=_hdr())).json()
+    assert r["kind"] == "logged"
+    assert r["meal"]["items"][0]["grams"] == 350
+
+
+async def test_небольшая_это_маленькая_а_не_большая(client, fake_container):
+    """Подстрока «больш» внутри «небольшая» раньше давала БОЛЬШУЮ порцию."""
+    fake_container.nlu = StubNlu(_needs_portion("борщ", "borsch", 60))
+    async with client as c:
+        q = (await c.post("/api/meals", json={"text": "борщ"}, headers=_hdr())).json()
+        r = (await c.post("/api/meals/clarify",
+                          json={"draft_id": q["draft_id"], "answer": "небольшая"},
+                          headers=_hdr())).json()
+    assert r["meal"]["items"][0]["grams"] == 200
+
+
+async def test_непонятный_ответ_не_съедает_черновик_молча(client, fake_container):
+    fake_container.nlu = StubNlu(_needs_portion("борщ", "borsch", 60))
+    async with client as c:
+        q = (await c.post("/api/meals", json={"text": "борщ"}, headers=_hdr())).json()
+        r = (await c.post("/api/meals/clarify",
+                          json={"draft_id": q["draft_id"], "answer": "ну как обычно"},
+                          headers=_hdr())).json()
+    assert r["kind"] == "unknown"
+    assert "размером" in r["message"] or "граммами" in r["message"]

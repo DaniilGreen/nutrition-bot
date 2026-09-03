@@ -318,6 +318,50 @@ async def weight(
     }
 
 
+@router.post("/weight")
+async def log_weight(
+    body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant, request: Request,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict[str, Any]:
+    """Запись веса одним полем, без модели (§8.3).
+
+    Через общий ввод вес идёт текстом и стоит вызова LLM — на цифре, которую
+    человек и так знает точно.
+    """
+    try:
+        kg = float(body["weight_kg"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise bad_request("bad_weight", "Вес должен быть числом.") from exc
+
+    replay = _replay(request, user, idempotency_key)
+    if replay is not None:
+        return replay
+    try:
+        log, delta = await assistant.log_weight(user, kg)
+    except ValueError as exc:
+        # Диапазон 20–400 кг держит WeightService — одна проверка на бота и аппку.
+        raise bad_request("bad_weight", str(exc)) from exc
+    out = {
+        "id": log.id,
+        "weight_kg": log.weight_kg,
+        "delta_kg": delta,
+        "at": log.measured_at.astimezone(ZoneInfo(user.timezone)).isoformat(),
+    }
+    return _remember(request, user, idempotency_key, out)
+
+
+@router.delete("/weight/{log_id}")
+async def delete_weight(
+    log_id: int, user: CurrentUser, assistant: CurrentAssistant
+) -> dict[str, Any]:
+    """Удалить свой замер. Без этого опечатку «83,6» вместо «93,6» не починить,
+    а именно про такой выброс и рассказывает график веса."""
+    gone = await assistant.delete_weight(user, log_id)
+    if gone is None:
+        raise not_found("weight_not_found", "Замер не найден.")
+    return {"deleted": gone.id, "weight_kg": gone.weight_kg}
+
+
 @router.get("/stats/reconcile")
 async def reconcile_weight(
     user: CurrentUser, assistant: CurrentAssistant, days: int = 30

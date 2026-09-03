@@ -529,6 +529,22 @@ class SqlWeightRepo:
             id=orm.id, user_id=orm.user_id, measured_at=orm.measured_at, weight_kg=orm.weight_kg
         )
 
+    async def delete(self, user_id: int, log_id: int) -> WeightLog | None:
+        res = await self._s.execute(
+            select(WeightLogORM).where(
+                WeightLogORM.id == log_id, WeightLogORM.user_id == user_id
+            )
+        )
+        orm = res.scalar_one_or_none()
+        if orm is None:
+            return None
+        gone = WeightLog(
+            id=orm.id, user_id=orm.user_id, measured_at=orm.measured_at, weight_kg=orm.weight_kg
+        )
+        await self._s.delete(orm)
+        await self._s.flush()
+        return gone
+
     async def history(self, user_id: int, limit: int) -> list[WeightLog]:
         res = await self._s.execute(
             select(WeightLogORM)
