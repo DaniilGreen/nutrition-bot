@@ -273,8 +273,27 @@
         show(hero(d) + composer() + chips() + extra + feed(d));
         var inp = document.getElementById('say');
         if (inp && state.keepFocus) { inp.focus(); state.keepFocus = false; }
+        armJustTimer();
       })
       .catch(failure);
+  }
+
+  /* MA-INV-22: карточка «Записал» живёт 5 секунд, потом уходит сама. Правка
+     после этого достижима тапом по строке ленты — иначе «пишем сразу»
+     превращается в «записал мусор навсегда».
+
+     Таймер снимается при каждой перерисовке: без этого два подряд приёма
+     оставляли два таймера, и второй гасил карточку раньше срока. */
+  function armJustTimer() {
+    clearTimeout(state.justTimer);
+    if (!state.justLogged) return;
+    var shown = state.justLogged.id;
+    state.justTimer = setTimeout(function () {
+      if (state.justLogged && state.justLogged.id === shown && state.tab === 'day') {
+        state.justLogged = null;
+        renderDay();
+      }
+    }, 5000);
   }
 
   /* ── Продукты ────────────────────────────────────────────────────────── */
@@ -979,6 +998,8 @@
     if (!b) return;
     state.tab = b.dataset.tab;
     state.daysAgo = 0;
+    clearTimeout(state.justTimer);
+    state.justLogged = null;
     [].forEach.call(nav.querySelectorAll('button'), function (x) {
       if (x.dataset.tab === state.tab) x.setAttribute('aria-current', 'page');
       else x.removeAttribute('aria-current');
