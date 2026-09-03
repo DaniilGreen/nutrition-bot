@@ -132,3 +132,19 @@ async def test_доля_оценок_считается_по_калориям(se
     await session.flush()
     est, total = await SqlMealRepo(session).estimate_share(u.id, days=30)
     assert total >= 800
+
+
+async def test_вклад_по_белку_на_живой_базе(session):
+    """Фейк считает по атрибутам доменного объекта, SQL — по колонкам таблицы.
+    Имя колонки я уже перепутал однажды (`protein_g` вместо `protein`), и
+    фейковые тесты этого не увидели: там объект, а не схема."""
+    u = await _user(session, 900007)
+    p = await _product(session, "sql_prot", "СКЛ творог", kcal=120)
+    await _meal(session, u, p, 200)
+    rows = await SqlMealRepo(session).contributions(u.id, days=30, limit=5, by="protein")
+    mine = [r for r in rows if r[1] == "СКЛ творог"]
+    assert mine, rows
+    assert mine[0][2] > 0                       # белок посчитался
+    by_kcal = await SqlMealRepo(session).contributions(u.id, days=30, limit=5)
+    kcal_row = [r for r in by_kcal if r[1] == "СКЛ творог"][0]
+    assert mine[0][2] != kcal_row[2]            # это разные колонки, а не одна

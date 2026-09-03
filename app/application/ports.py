@@ -141,7 +141,7 @@ class MealRepo(Protocol):
     async def list_recent(self, user_id: int, limit: int) -> list[Meal]: ...
 
     async def contributions(
-        self, user_id: int, *, days: int, limit: int
+        self, user_id: int, *, days: int, limit: int, by: str = "kcal"
     ) -> list[tuple[int | None, str, float, int]]:
         """Куда уходят калории: (product_id, имя, сумма ккал, сколько раз) за окно.
 

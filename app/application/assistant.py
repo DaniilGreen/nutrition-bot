@@ -320,10 +320,16 @@ class Assistant:
         return await self._weights.delete(user, log_id)
 
     async def contributions(
-        self, user: User, *, days: int = 30, limit: int = 8
+        self, user: User, *, days: int = 30, limit: int = 8, by: str = "kcal"
     ) -> list[tuple[int | None, str, float, int]]:
-        """Куда уходят калории (§3.3). Абсолютный вклад, не доля."""
-        return await self._meals.contributions(_require_id(user), days=days, limit=limit)
+        """Вклад продуктов (§3.3, §6.10). Абсолютная сумма, не доля.
+
+        `by="protein"` отвечает на «откуда приходит белок» — вопрос важнее
+        калорийного, потому что белок и есть главный разрыв дневника (§4.0).
+        """
+        return await self._meals.contributions(
+            _require_id(user), days=days, limit=limit, by=by
+        )
 
     async def product_history(
         self, user: User, product_id: int, *, limit: int = 5

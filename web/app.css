@@ -26,13 +26,12 @@
 }
 *{box-sizing:border-box}
 html,body{overscroll-behavior-y:contain}
-/* Telegram на десктопе даёт аппке широкое окно, а не 390px телефона. Без
-   потолка ширины сетка «1fr 1fr» растягивала верхнюю панель на всю страницу:
-   «Осталось ккал» уезжало влево, «Осталось белка» — к правому краю, и между
-   ними зияла пустота. Колонка фиксированной ширины по центру — тот же макет
-   на любом окне. */
+/* Ширину не ограничиваем: аппка занимает окно целиком, как в finance. Столбец
+   фиксированной ширины по центру выглядел на десктопе марочкой в пустоте.
+   Разъезд верхней панели лечится не потолком страницы, а потолком самих
+   колонок — см. `.hero` ниже. */
 body{
-  margin:0 auto; max-width:var(--column); background:var(--bg); color:var(--text);
+  margin:0; background:var(--bg); color:var(--text);
   font:400 15px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif;
   -webkit-font-smoothing:antialiased;
   padding:var(--s-4) var(--s-4) calc(var(--tabbar) + var(--s-5) + env(safe-area-inset-bottom));
@@ -57,16 +56,21 @@ header h1{font-size:var(--f-t2);font-weight:700;letter-spacing:-.4px;margin:0}
 .iconbtn:disabled{opacity:.3}
 
 /* ── верхняя панель Е: два «осталось» с барами ───────────────────────── */
-/* min-width:0 — иначе колонка грида растягивается под длинное число и
-   толкает соседнюю: половинки перестают быть равными. */
-.hero{display:grid;grid-template-columns:1fr 1fr;gap:var(--s-5)}
-.hero > *{min-width:0}
+/* Две половины держим рядом, а не разгоняем по краям карточки: на широком
+   окне «1fr 1fr» ставило «Осталось белка» в шестистах пикселях от «Осталось
+   ккал», и панель переставала читаться как одно целое.
+   На телефоне колонки делят ширину поровну, на десктопе упираются в потолок
+   и остаются вместе. min-width:0 — чтобы длинное число не толкало соседа. */
+.hero{display:flex;gap:var(--s-5)}
+.hero > *{flex:1 1 0;min-width:0;max-width:300px}
 .hero .lbl{font-size:var(--f-body-s);color:var(--text-muted)}
 .hero .big{font-size:var(--f-hero);font-weight:700;letter-spacing:-1.5px;line-height:1}
 .hero .unit{font-size:var(--f-caption);color:var(--text-muted)}
 .track{height:6px;border-radius:3px;background:var(--surface-3);margin-top:var(--s-3);overflow:hidden}
 .track > i{display:block;height:100%;border-radius:3px;background:var(--bar);transition:width .35s}
-.foot{display:grid;grid-template-columns:1fr 1fr 1fr;margin-top:var(--s-3)}
+/* Подвал по той же причине: три ячейки рядом, а не по углам карточки. */
+.foot{display:flex;gap:var(--s-5);margin-top:var(--s-3)}
+.foot > *{flex:1 1 0;min-width:0;max-width:196px}
 .foot .den{font-size:var(--f-body);color:var(--text-faint)}
 
 /* ── лента приёмов ───────────────────────────────────────────────────── */
@@ -83,11 +87,7 @@ header h1{font-size:var(--f-t2);font-weight:700;letter-spacing:-.4px;margin:0}
 .items .row .g{color:var(--text-faint)}
 
 /* ── нижние вкладки ──────────────────────────────────────────────────── */
-/* Вкладки прибиты к низу, но обязаны жить в той же колонке, что и контент:
-   с left:0;right:0 они растягивались во всю ширину десктопного окна и
-   отрывались от него. */
-nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);
-  width:100%;max-width:var(--column);display:flex;background:rgba(20,22,26,.92);
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:rgba(20,22,26,.92);
   backdrop-filter:blur(18px);border-top:1px solid var(--separator);
   padding-bottom:env(safe-area-inset-bottom);z-index:10}
 nav button{flex:1;background:none;border:0;color:var(--text-faint);cursor:pointer;

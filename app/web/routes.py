@@ -439,7 +439,8 @@ async def reconcile_weight(
 
 @router.get("/stats/contributions")
 async def contributions(
-    user: CurrentUser, assistant: CurrentAssistant, days: int = 30, limit: int = 8
+    user: CurrentUser, assistant: CurrentAssistant,
+    days: int = 30, limit: int = 8, by: str = "kcal",
 ) -> dict[str, Any]:
     """Куда уходят калории (§3.3): абсолютный вклад продуктов, не доли.
 
@@ -448,7 +449,9 @@ async def contributions(
     """
     if not 1 <= days <= 365 or not 1 <= limit <= 30:
         raise bad_request("bad_range", "Период вне допустимого диапазона.")
-    rows = await assistant.contributions(user, days=days, limit=limit)
+    if by not in ("kcal", "protein"):
+        raise bad_request("bad_metric", "Считаем по калориям или по белку.")
+    rows = await assistant.contributions(user, days=days, limit=limit, by=by)
     total = sum(k for _, _, k, _ in rows)
     # AC-MA-36: если два продукта из графика сидят в одной группе дублей —
     # помечаем оба. Радар дублей там, где человек и так смотрит на расход.
@@ -459,11 +462,14 @@ async def contributions(
         if g is not None:
             seen[g] = seen.get(g, 0) + 1
     return {
-        "total_kcal": round(total, 1),
+        "by": by,
+        "total": round(total, 1),
+        "total_kcal": round(total, 1),   # старое имя: фронт может быть свежее сервера
         "items": [
             {
                 "product_id": pid,
                 "name": name,
+                "amount": round(k, 1),
                 "kcal": round(k, 1),
                 "times": t,
                 # Метим только когда в графике ДВА и больше из одной группы:

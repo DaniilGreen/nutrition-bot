@@ -192,10 +192,10 @@ class MealService:
         )
 
     async def contributions(
-        self, user_id: int, *, days: int, limit: int
+        self, user_id: int, *, days: int, limit: int, by: str = "kcal"
     ) -> list[tuple[int | None, str, float, int]]:
-        """Куда уходят калории за окно."""
-        return await self._meals.contributions(user_id, days=days, limit=limit)
+        """Вклад продуктов за окно: по калориям или по белку."""
+        return await self._meals.contributions(user_id, days=days, limit=limit, by=by)
 
     async def items_of_product(
         self, user_id: int, product_id: int, *, limit: int = 5

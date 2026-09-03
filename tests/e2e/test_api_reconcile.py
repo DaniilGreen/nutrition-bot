@@ -151,3 +151,30 @@ async def test_панели_требуют_подписи(client):
     async with client as c:
         for path in ("/api/stats/reconcile", "/api/stats/contributions", "/api/stats/accuracy"):
             assert (await c.get(path)).status_code == 401, path
+
+
+async def test_вклад_по_белку_считается_отдельно(client, fake_container):
+    """§6.10: «Откуда приходит белок» — тот же агрегат, другая величина.
+    Белок и есть главный разрыв дневника, а не калории."""
+    async with client as c:
+        uid = await _login(c)
+        # Пицца даёт больше калорий, творог — больше белка. Порядок обязан
+        # различаться, иначе панель ничего нового не показывает.
+        await fake_container.meals.add(_meal(uid, 1, 900, name="пицца"))
+        await fake_container.meals.add(_meal(uid, 1, 400, name="творог"))
+        by_kcal = (await c.get("/api/stats/contributions", headers=_hdr())).json()
+        by_prot = (await c.get("/api/stats/contributions?by=protein",
+                               headers=_hdr())).json()
+    assert by_kcal["items"][0]["name"] == "пицца"
+    assert by_prot["by"] == "protein"
+    assert by_prot["items"][0]["amount"] > 0
+    # Сумма белка меньше суммы калорий — значит считалась другая колонка.
+    assert by_prot["total"] < by_kcal["total"]
+
+
+async def test_негодная_величина_400(client):
+    async with client as c:
+        await _login(c)
+        r = await c.get("/api/stats/contributions?by=жиры", headers=_hdr())
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "bad_metric"

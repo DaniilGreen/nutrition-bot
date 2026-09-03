@@ -306,20 +306,23 @@ class SqlMealRepo:
         self._s = session
 
     async def contributions(
-        self, user_id: int, *, days: int, limit: int
+        self, user_id: int, *, days: int, limit: int, by: str = "kcal"
     ) -> list[tuple[int | None, str, float, int]]:
         since = datetime.now(UTC) - timedelta(days=days)
+        # Один запрос на две панели: «куда уходят калории» и «откуда приходит
+        # белок» — это одна и та же выборка, отличается только колонка.
+        col = MealItemORM.protein if by == "protein" else MealItemORM.kcal
         res = await self._s.execute(
             select(
                 MealItemORM.product_id,
                 func.max(MealItemORM.name_snapshot).label("name"),
-                func.sum(MealItemORM.kcal).label("kcal"),
+                func.sum(col).label("amount"),
                 func.count().label("times"),
             )
             .join(MealORM, MealORM.id == MealItemORM.meal_id)
             .where(MealORM.user_id == user_id, MealORM.eaten_at >= since)
             .group_by(MealItemORM.product_id, func.coalesce(MealItemORM.product_id, -1))
-            .order_by(func.sum(MealItemORM.kcal).desc())
+            .order_by(func.sum(col).desc())
             .limit(limit)
         )
         return [

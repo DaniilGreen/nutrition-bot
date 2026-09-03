@@ -169,7 +169,7 @@ class InMemoryMealRepo:
         return [m for m in self._meals if m.user_id == user_id and start <= m.eaten_at < end]
 
     async def contributions(
-        self, user_id: int, *, days: int, limit: int
+        self, user_id: int, *, days: int, limit: int, by: str = "kcal"
     ) -> list[tuple[int | None, str, float, int]]:
         from collections import defaultdict
         from datetime import timedelta
@@ -183,7 +183,7 @@ class InMemoryMealRepo:
                 continue
             for it in m.items:
                 key = it.product_id if it.product_id is not None else it.name_snapshot
-                kcal[key] += it.macros.kcal
+                kcal[key] += it.macros.protein if by == "protein" else it.macros.kcal
                 times[key] += 1
                 names[key] = it.name_snapshot
         rows = [

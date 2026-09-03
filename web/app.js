@@ -568,9 +568,10 @@
       api('/api/stats/weight?limit=60').catch(function () { return { points: [] }; }),
       api('/api/stats/reconcile?days=' + Math.max(days, 14)).catch(nothing),
       api('/api/stats/contributions?days=' + days).catch(nothing),
+      api('/api/stats/contributions?by=protein&days=' + days).catch(nothing),
       api('/api/stats/accuracy?days=' + days).catch(nothing)
     ]).then(function (res) {
-      var d = res[0], w = res[1], rec = res[2], con = res[3], acc = res[4];
+      var d = res[0], w = res[1], rec = res[2], con = res[3], pro = res[4], acc = res[5];
       show(periods() +
            reconcileCard(rec) +
            card('Белок по дням', barChart(d, 'protein_g', d.goal.protein_g, 'var(--prot)'),
@@ -582,6 +583,14 @@
                 'считаются по дням, где есть хоть одна запись.') +
            weightCard(w) +
            contribCard(con) +
+           contribCard(pro, {
+             title: 'Откуда приходит белок',
+             unit: 'г',
+             color: 'var(--prot)',
+             note: 'Белок — главный разрыв дневника. Здесь видно, на чём он ' +
+                   'держится: если весь набор идёт с одного продукта, ' +
+                   'пропустил его — просел весь день.'
+           }) +
            accuracyCard(acc));
     }).catch(failure);
   }
@@ -631,13 +640,16 @@
   /* §3.3: абсолютный вклад в калории, а НЕ доля макросов. Доли нормируются
      на съеденное — чем меньше ешь, тем лучше картина, и метрика прячет
      ровно ту проблему, ради которой экран нужен (§4.1). */
-  function contribCard(c) {
+  function contribCard(c, opts) {
     if (!c || !c.items.length) return '';
-    var max = c.items[0].kcal || 1;
+    var o = opts || {};
+    var unit = o.unit || 'ккал';
+    var max = (c.items[0].amount != null ? c.items[0].amount : c.items[0].kcal) || 1;
     var rows = c.items.map(function (i) {
       /* AC-MA-36: два продукта из одной группы дублей в одном графике — самый
          удачный момент предложить слияние: человек уже смотрит на расход и
          видит, что одна еда разбита надвое. */
+      var v = i.amount != null ? i.amount : i.kcal;
       var dup = i.duplicate_group != null
         ? '<button class="badge dup" data-dups="1">слить?</button>'
         : '';
@@ -645,15 +657,20 @@
         '<div style="display:flex;align-items:baseline;gap:var(--s-2)">' +
           '<span style="flex-grow:1;min-width:0;overflow:hidden;text-overflow:ellipsis;' +
           'white-space:nowrap;font-size:var(--f-body-s)">' + esc(i.name) + dup + '</span>' +
-          '<span class="num" style="font-size:var(--f-caption)">' + n(i.kcal) + ' ккал</span>' +
-          '<span class="mic" style="width:44px;text-align:right">' + n(i.times) + '×</span>' +
+          /* Число в колонке фиксированной ширины и без переноса: длинное имя
+             раньше сжимало его, и «1050 ккал» ломалось на две строки. */
+          '<span class="num" style="font-size:var(--f-caption);white-space:nowrap;' +
+            'flex-shrink:0">' + n(v) + ' ' + unit + '</span>' +
+          '<span class="mic" style="width:38px;text-align:right;flex-shrink:0">' +
+            n(i.times) + '×</span>' +
         '</div>' +
         '<div class="track" style="margin-top:5px"><i style="width:' +
-          (i.kcal / max * 100) + '%"></i></div></div>';
+          (v / max * 100) + '%;background:' + (o.color || 'var(--bar)') +
+          '"></i></div></div>';
     }).join('');
-    return card('Куда уходят калории', rows,
-      'Столько калорий пришло с каждым продуктом за период. Не доля, а сумма: ' +
-      'долю легко улучшить, просто съев меньше.');
+    return card(o.title || 'Куда уходят калории', rows,
+      o.note || 'Столько калорий пришло с каждым продуктом за период. Не доля, ' +
+      'а сумма: долю легко улучшить, просто съев меньше.');
   }
 
   /* §3.5: доверие к цифре — какая часть калорий оценена, а не выверена. */
