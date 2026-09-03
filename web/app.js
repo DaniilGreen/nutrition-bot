@@ -23,6 +23,13 @@
 
   /* ── утилиты ─────────────────────────────────────────────────────────── */
 
+  /* Радио без роли и без tabindex недостижимо с клавиатуры и молчит для
+     скринридера, а состояние несёт только кольцо контрастом 2.7. Это и
+     настройки, и выбор победителя при НЕОБРАТИМОМ слиянии дублей. */
+  function pk(on) {
+    return ' role="radio" tabindex="0" aria-checked="' + (on ? 'true' : 'false') + '"';
+  }
+
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -137,7 +144,7 @@
       : e.code === 'inactive'
         ? 'Доступ к аппке отключён.'
         : e.message === 'Failed to fetch'
-          ? 'Нет связи. Проверь интернет и потяни вниз, чтобы обновить.'
+          ? 'Нет связи. Проверь интернет и попробуй ещё раз.'
           : e.message;
     show('<div class="card state err"><b>Не загрузилось</b>' +
          '<div class="mic" style="margin-top:6px">' + esc(hint) + '</div></div>');
@@ -565,8 +572,8 @@
       var blocks = d.groups.map(function (g, gi) {
         var chosen = state.cat.dup[gi] == null ? g.suggested_winner : state.cat.dup[gi];
         var rows = g.items.map(function (p) {
-          return '<div class="pick' + (p.id === chosen ? ' on' : '') +
-            '" data-group="' + gi + '" data-pick="' + p.id + '">' +
+          return '<div class="pick' + (p.id === chosen ? ' on' : '') + '"' + pk(p.id === chosen) +
+            ' data-group="' + gi + '" data-pick="' + p.id + '">' +
             '<span class="dot"></span>' +
             '<span style="flex-grow:1;min-width:0"><span style="font-size:var(--f-body-s)">' +
               esc(p.name) + '</span>' +
@@ -607,6 +614,16 @@
       api('/api/stats/accuracy?days=' + days).catch(nothing)
     ]).then(function (res) {
       var d = res[0], w = res[1], rec = res[2], con = res[3], pro = res[4], acc = res[5];
+      /* Без единой записи графики рисуют пустые сетки и «среднее 0 при цели
+         170» — шесть коробок, которые выглядят поломкой, а не отсутствием
+         данных. Одна честная карточка понятнее. */
+      if (!d.days.some(function (x) { return x.meals > 0; })) {
+        show(periods() +
+          card('За этот период записей нет',
+               '<div class="state">Выбери период побольше или запиши приём — ' +
+               'графики появятся сами.</div>', ''));
+        return;
+      }
       show(periods() +
            reconcileCard(rec) +
            card('Белок по дням', barChart(d, 'protein_g', d.goal.protein_g, 'var(--prot)'),
@@ -662,7 +679,7 @@
         '<span class="num" style="font-size:var(--f-body-s)">' + sign + n(delta, 1) +
         ' кг</span></div>' +
       (agree ? '' :
-        '<div class="field"><label>Не объясняется записями</label>' +
+        '<div class="field"><label>Сверх записанного</label>' +
         '<span class="num" style="font-size:var(--f-body-s);color:var(--alert)">' +
         '≈' + n(Math.abs(r.gap_kcal_per_day)) + ' ккал/день</span></div>');
     var note = agree
@@ -737,7 +754,7 @@
       ? (pts.length < 5
           ? n(pts.length) + ' замера — данных мало, тренд будет гулять.'
           : n(pts.length) + ' замеров.')
-      : 'Взвешивайся в одно и то же время, натощак.';
+      : 'Точнее всего — утром, до еды.';
     return card('Вес', body + weightForm(pts),
                 note + ' Нажми на замер, чтобы удалить.');
   }
@@ -913,8 +930,8 @@
                ничего — выбирать надо глазами. Рисуем теми же функциями, что и
                настоящую панель, на живых цифрах дня: иначе превью разойдётся
                с реальностью при первой же правке. */
-            return '<div class="pick pick-v' + (p.hero === h[0] ? ' on' : '') +
-              '" data-hero="' + h[0] + '">' +
+            return '<div class="pick pick-v' + (p.hero === h[0] ? ' on' : '') + '"' + pk(p.hero === h[0]) +
+              ' data-hero="' + h[0] + '">' +
               '<div class="pick-h"><span class="dot"></span>' +
                 '<span style="flex-grow:1;font-size:var(--f-body-s)">' + esc(h[1]) + '</span>' +
               '</div>' +
@@ -925,8 +942,8 @@
 
         group('Подвал панели',
           [['meals', 'Приёмов за день'], ['weight', 'Последний вес']].map(function (o) {
-            return '<div class="pick' + ((p.foot_third || 'weight') === o[0] ? ' on' : '') +
-              '" data-foot="' + o[0] + '"><span class="dot"></span>' +
+            return '<div class="pick' + ((p.foot_third || 'weight') === o[0] ? ' on' : '') + '"' + pk((p.foot_third || 'weight') === o[0]) +
+              ' data-foot="' + o[0] + '"><span class="dot"></span>' +
               '<span style="flex-grow:1;font-size:var(--f-body-s)">' + esc(o[1]) +
               '</span></div>';
           }).join(''),
@@ -934,8 +951,8 @@
 
         group('Ввод',
           [[false, 'Начинать с текста'], [true, 'Сразу открывать микрофон']].map(function (o) {
-            return '<div class="pick' + ((p.mic_first || false) === o[0] ? ' on' : '') +
-              '" data-mic="' + o[0] + '"><span class="dot"></span>' +
+            return '<div class="pick' + ((p.mic_first || false) === o[0] ? ' on' : '') + '"' + pk((p.mic_first || false) === o[0]) +
+              ' data-mic="' + o[0] + '"><span class="dot"></span>' +
               '<span style="flex-grow:1;font-size:var(--f-body-s)">' + esc(o[1]) +
               '</span></div>';
           }).join(''),
@@ -943,8 +960,8 @@
 
         group('Период в Итогах',
           [[7, 'Неделя'], [30, '30 дней'], [90, '3 месяца']].map(function (o) {
-            return '<div class="pick' + ((p.period || 30) === o[0] ? ' on' : '') +
-              '" data-defperiod="' + o[0] + '"><span class="dot"></span>' +
+            return '<div class="pick' + ((p.period || 30) === o[0] ? ' on' : '') + '"' + pk((p.period || 30) === o[0]) +
+              ' data-defperiod="' + o[0] + '"><span class="dot"></span>' +
               '<span style="flex-grow:1;font-size:var(--f-body-s)">' + esc(o[1]) +
               '</span></div>';
           }).join(''),
@@ -953,8 +970,8 @@
         group('Режим',
           [['cut', 'Похудение'], ['maintain', 'Поддержание'], ['bulk', 'Набор']]
             .map(function (o) {
-              return '<div class="pick' + ((g.target || 'maintain') === o[0] ? ' on' : '') +
-                '" data-target="' + o[0] + '"><span class="dot"></span>' +
+              return '<div class="pick' + ((g.target || 'maintain') === o[0] ? ' on' : '') + '"' + pk((g.target || 'maintain') === o[0]) +
+                ' data-target="' + o[0] + '"><span class="dot"></span>' +
                 '<span style="flex-grow:1;font-size:var(--f-body-s)">' + esc(o[1]) +
                 '</span></div>';
             }).join(''),
@@ -1007,7 +1024,12 @@
     return '<div style="margin-top:var(--s-4)">' +
       '<div class="mic" style="margin:0 var(--s-2) var(--s-2);text-transform:uppercase;' +
       'letter-spacing:.4px;color:var(--text-faint)">' + esc(title) + '</div>' +
-      '<section class="card">' + body + '</section>' +
+      /* Группа радио обязана быть radiogroup с именем: иначе скринридер
+         объявляет варианты вне контекста — «выбрано» без ответа на «что». */
+      '<section class="card"' +
+        (body.indexOf('role="radio"') > -1
+          ? ' role="radiogroup" aria-label="' + esc(title) + '"' : '') +
+      '>' + body + '</section>' +
       (note ? '<div class="mic" style="margin-top:var(--s-2);padding:0 var(--s-2);' +
               'line-height:1.5;color:var(--text-faint)">' + esc(note) + '</div>' : '') +
       '</div>';
@@ -1269,7 +1291,7 @@
     } else if (res.kind === 'correction_failed') {
       toast(res.message, true);
     } else if (res.kind === 'stats') {
-      toast('Это вопрос, а не запись — цифры сверху обновлены.');
+      toast('Похоже на вопрос, а не на еду. Записывать не стал — цифры сверху свежие.');
     } else {
       toast(res.message || 'Не понял, что записать.', true);
     }
@@ -1335,7 +1357,7 @@
 
   function startRec() {
     if (!navigator.mediaDevices || !window.MediaRecorder) {
-      toast('Этот клиент не умеет записывать голос — набери текстом.', true);
+      toast('Здесь голос не записывается — набери текстом.', true);
       return;
     }
     navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
@@ -1372,7 +1394,7 @@
       state.recording = true;
       setMic(true);
     }).catch(function () {
-      toast('Не дали доступ к микрофону — набери текстом.', true);
+      toast('Микрофон недоступен — можно набрать текстом.', true);
     });
   }
 
@@ -1496,7 +1518,7 @@
     if (b.id === 'bugsend') {
       var bi = document.getElementById('bug');
       var note = (bi && bi.value || '').trim();
-      if (!note) return toast('Опиши, что пошло не так.', true);
+      if (!note) return;   // кнопка при пустом поле просто ничего не делает
       bi.value = '';
       return send('/api/bug', {
         headers: { 'Content-Type': 'application/json' },
@@ -1618,7 +1640,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ winner_id: chosen, loser_ids: losers })
         }).then(function (r) {
-          toast('Слил. Перепривязано записей: ' + r.items_repointed + '.');
+          toast('Объединил. Записей перенесено: ' + r.items_repointed + '.');
           state.cat.dup = null;
           renderCatalog();
         }).catch(function (e) { toast(e.message, true); renderCatalog(); });
@@ -1628,6 +1650,12 @@
   var searchTimer = null;
 
   root.addEventListener('keydown', function (e) {
+    var pick = e.target.closest && e.target.closest('.pick');
+    if (pick && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault();
+      pick.click();
+      return;
+    }
     if (e.key === 'Enter' && e.target.id === 'say') { e.preventDefault(); submitText(); }
     if (e.key === 'Enter' && e.target.id === 'grams') {
       e.preventDefault();
