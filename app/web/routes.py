@@ -143,6 +143,9 @@ async def clarify(
     # значит потерять разобранный приём.
     if not answer:
         raise bad_request("empty_answer", "Пустой ответ.")
+    # Лимит до работы с черновиком: уточнение вариантов идёт в модель, а цикл
+    # в клиенте иначе крутил бы отказы вечно и бесплатно только на вид.
+    _throttle(request, user, "meals", limit=20, window=60)
     draft = request.app.state.drafts.take(token, _uid(user))
     if draft is None:
         # Один код на «нет такого» и «чужой»: различать их — подсказывать перебор.
@@ -164,7 +167,8 @@ async def clarify(
 
 @router.post("/meals/voice")
 async def log_voice(
-    request: Request, user: CurrentUser, assistant: CurrentAssistant
+    request: Request, user: CurrentUser, assistant: CurrentAssistant,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, Any]:
     """Голос сырым телом, без multipart: пакета `python-multipart` в проекте нет,
     а ради одного поля тянуть зависимость незачем (§7.2)."""
@@ -175,12 +179,19 @@ async def log_voice(
         # Тот же предел, что у бота: длинная фраза доезжает, а мегабайтные файлы
         # держали бы воркера впустую.
         raise bad_request("audio_too_big", "Слишком длинная запись — до полутора минут.")
+    # Ключ обязателен по смыслу: голос — самый дорогой путь записи, и повтор
+    # после таймаута сети писал бы второй приём. Раньше фронт ключ слал, а
+    # обработчик его не принимал — защита существовала только на бумаге.
+    replay = _replay(request, user, idempotency_key)
+    if replay is not None:
+        return replay
     _throttle(request, user, "voice", limit=10, window=60)
     text = await assistant.transcribe(audio, filename="voice.ogg")
     if not text:
         raise unavailable("stt_off", "Распознавание голоса недоступно.")
     result = await assistant.process(user, text, input_type="voice")
-    return {**_result_json(result, user, request, raw_input=text), "transcript": text}
+    out = {**_result_json(result, user, request, raw_input=text), "transcript": text}
+    return _remember(request, user, idempotency_key, out)
 
 
 @router.delete("/meals/{meal_id}")
@@ -311,7 +322,11 @@ async def weight(
     return {
         "points": [
             {
+                # id нужен, чтобы замер можно было удалить: без него опечатку
+                # «83,6» вместо «93,6» из интерфейса не убрать (§6.12).
+                "id": log.id,
                 "date": log.measured_at.astimezone(tz).date().isoformat(),
+                "at": log.measured_at.astimezone(tz).strftime("%d.%m %H:%M"),
                 "kg": log.weight_kg,
             }
             for log in logs
@@ -479,17 +494,23 @@ async def frequent(
 
 
 @router.post("/meals/{meal_id}/repeat")
-async def repeat(meal_id: int, user: CurrentUser, assistant: CurrentAssistant) -> dict[str, Any]:
+async def repeat(
+    meal_id: int, user: CurrentUser, assistant: CurrentAssistant, request: Request,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict[str, Any]:
     """Повторить приём одним тапом: тот же состав, тот же вес, текущее время.
 
     Копируется снапшот КБЖУ, а не пересчитывается из каталога (INV-3): повтор
     обязан совпасть с оригиналом до грамма. Если каталог с тех пор поправили,
     повтор всё равно повторяет то, что было съедено, а не то, что стало в базе.
     """
+    replay = _replay(request, user, idempotency_key)
+    if replay is not None:
+        return replay
     result = await assistant.repeat_meal(user, meal_id)
     if result is None:
         raise not_found("meal_not_found", "Приём не найден — возможно, его удалили.")
-    return logged_json(result, user.timezone)
+    return _remember(request, user, idempotency_key, logged_json(result, user.timezone))
 
 
 @router.get("/products")

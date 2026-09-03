@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
-from tests.fakes import StubNlu
+from tests.fakes import StubNlu, StubStt
 from tests.initdata_fixtures import valid
 
 H = {"X-Telegram-Init-Data": None}
@@ -390,3 +390,42 @@ async def test_негодный_вес_400(client, fake_container, body):
 async def test_правка_требует_подписи(client):
     async with client as c:
         assert (await c.patch("/api/meals/1/items/1", json={"grams": 100})).status_code == 401
+
+
+async def test_голос_идемпотентен(client, fake_container):
+    """Голос — самый дорогой путь: повтор после таймаута сети писал два приёма,
+    потому что фронт слал ключ, а обработчик его не принимал."""
+    fake_container.nlu = StubNlu(_meal("грудка", "chicken", 200, 165))
+    fake_container.stt = StubStt("грудка 200 г")
+    h = {**_hdr(), "Content-Type": "audio/ogg", "Idempotency-Key": "voice-1"}
+    async with client as c:
+        a = (await c.post("/api/meals/voice", content=b"x" * 100, headers=h)).json()
+        b = (await c.post("/api/meals/voice", content=b"x" * 100, headers=h)).json()
+        day = (await c.get("/api/day", headers=_hdr())).json()
+    assert a["meal"]["id"] == b["meal"]["id"]
+    assert len(day["meals"]) == 1
+
+
+async def test_повтор_идемпотентен(client, fake_container):
+    fake_container.nlu = StubNlu(_meal("грудка", "chicken", 200, 165))
+    h = {**_hdr(), "Idempotency-Key": "rep-1"}
+    async with client as c:
+        m = (await c.post("/api/meals", json={"text": "грудка"}, headers=_hdr())).json()["meal"]
+        a = (await c.post(f"/api/meals/{m['id']}/repeat", headers=h)).json()
+        b = (await c.post(f"/api/meals/{m['id']}/repeat", headers=h)).json()
+        day = (await c.get("/api/day", headers=_hdr())).json()
+    assert a["meal"]["id"] == b["meal"]["id"]
+    assert len(day["meals"]) == 2      # оригинал + один повтор, не два
+
+
+async def test_уточнение_под_лимитом(client, fake_container):
+    """resolve_clarification идёт в модель — значит платный путь и обязан
+    иметь потолок, как обычная запись."""
+    fake_container.nlu = StubNlu(_meal("грудка", "chicken", 200, 165))
+    async with client as c:
+        codes = []
+        for i in range(22):
+            r = await c.post("/api/meals/clarify",
+                             json={"draft_id": f"нет-{i}", "answer": "да"}, headers=_hdr())
+            codes.append(r.status_code)
+    assert 429 in codes

@@ -101,3 +101,13 @@ async def test_вес_требует_подписи(client):
     async with client as c:
         assert (await c.post("/api/weight", json={"weight_kg": 90})).status_code == 401
         assert (await c.delete("/api/weight/1")).status_code == 401
+
+
+async def test_серия_отдаёт_id_для_удаления(client):
+    """Без id замер нельзя удалить из интерфейса — а ради этого экран и нужен."""
+    async with client as c:
+        await c.get("/api/me", headers=_hdr())
+        await c.post("/api/weight", json={"weight_kg": 91.5}, headers=_hdr())
+        pts = (await c.get("/api/stats/weight", headers=_hdr())).json()["points"]
+    assert pts[0]["id"] is not None
+    assert "at" in pts[0] and "kg" in pts[0]

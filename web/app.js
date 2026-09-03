@@ -268,7 +268,24 @@
         'aria-label="Сохранить вес">' +
         '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
         'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-        '<path d="M20 6L9 17l-5-5"/></svg></button></div>';
+        '<path d="M20 6L9 17l-5-5"/></svg></button>' +
+      '</div>' +
+      '<div class="actions" style="margin:0 0 10px">' +
+        '<button data-del-i="' + item.id + '" data-del-m="' + mealId + '" class="danger">' +
+        'Убрать позицию</button></div>';
+  }
+
+  function dropItem(mealId, itemId) {
+    ask('Убрать эту позицию из приёма?', function () {
+      state.editItem = null;
+      loading();
+      send('/api/meals/' + mealId + '/items/' + itemId, { method: 'DELETE' })
+        .then(function (r) {
+          toast(r.meal ? 'Убрал позицию.' : 'Позиций не осталось — приём удалён.');
+          renderDay();
+        })
+        .catch(function (e) { toast(e.message, true); renderDay(); });
+    });
   }
 
   function saveGrams(mealId, itemId) {
@@ -456,7 +473,7 @@
   function renderTotals() {
     document.getElementById('title').textContent = 'Итоги';
     loading();
-    var days = state.period || (state.prefs && state.prefs.period) || 30;
+    var days = activePeriod();
     var nothing = function () { return null; };
     Promise.all([
       api('/api/stats/series?days=' + days),
@@ -475,9 +492,7 @@
            card('Полнота записей', heat(d),
                 'Светлое — записано много, тёмное — почти пусто. Средние выше ' +
                 'считаются по дням, где есть хоть одна запись.') +
-           (w.points.length > 1
-             ? card('Вес', line(w.points), n(w.points.length) + ' замеров.')
-             : '') +
+           weightCard(w) +
            contribCard(con) +
            accuracyCard(acc));
     }).catch(failure);
@@ -564,10 +579,76 @@
         : 'Оценок ' + n(share) + '%. Позиции со знаком ≈ можно уточнить в каталоге.');
   }
 
+  /* §6.12: вес без правки бесполезен — опечатку «83,6» вместо «93,6» иначе
+     не убрать, а именно про такой выброс график и рассказывает. */
+  function weightCard(w) {
+    var pts = w.points || [];
+    var body = pts.length > 1
+      ? line(pts)
+      : '<div class="state">Замеров пока мало — тренд появится со второго.</div>';
+    var note = pts.length > 1
+      ? (pts.length < 5
+          ? n(pts.length) + ' замера — данных мало, тренд будет гулять.'
+          : n(pts.length) + ' замеров.')
+      : 'Взвешивайся в одно и то же время, натощак.';
+    return card('Вес', body + weightForm(pts),
+                note + ' Нажми на замер, чтобы удалить.');
+  }
+
+  function weightForm(pts) {
+    var rows = pts.slice(-6).reverse().map(function (p) {
+      return '<div class="row" data-wid="' + p.id + '" style="cursor:pointer">' +
+        '<span style="flex-grow:1">' + esc(p.at || '') + '</span>' +
+        '<span class="num">' + n(p.kg, 1) + ' кг</span>' +
+        '<span class="mic" style="width:56px;text-align:right;color:var(--text-faint)">' +
+        'удалить</span></div>';
+    }).join('');
+    return '<div class="composer" style="margin:var(--s-3) 0 0">' +
+        '<input id="wkg" type="number" inputmode="decimal" step="0.1" min="20" max="400" ' +
+          'placeholder="Вес сегодня, кг" ' +
+          'style="flex-grow:1;background:none;border:0;color:var(--text);font:inherit;' +
+          'outline:none;min-width:0">' +
+        '<button id="wsave" aria-label="Записать вес">' +
+          '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+          'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+          '<path d="M20 6L9 17l-5-5"/></svg></button></div>' +
+      (rows ? '<div class="items" style="padding-left:0">' + rows + '</div>' : '');
+  }
+
+  function saveWeight() {
+    var el = document.getElementById('wkg');
+    var v = (el && el.value || '').trim();
+    if (!v) return;
+    send('/api/weight', {
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newKey() },
+      body: JSON.stringify({ weight_kg: Number(v) })
+    }).then(function (r) {
+      var d = r.delta_kg;
+      toast('Записал ' + n(r.weight_kg, 1) + ' кг' +
+            (d ? ' · ' + (d > 0 ? '+' : '') + n(d, 1) + ' кг' : ''));
+      renderTotals();
+    }).catch(function (e) { toast(e.message, true); });
+  }
+
+  function dropWeight(id) {
+    ask('Удалить этот замер?', function () {
+      send('/api/weight/' + id, { method: 'DELETE' })
+        .then(function () { toast('Удалил замер.'); renderTotals(); })
+        .catch(function (e) { toast(e.message, true); });
+    });
+  }
+
+  /* Один источник правды для периода: подсветка чипа и загрузка данных
+     считались по разным выражениям, и при настройке «Неделя» график строился
+     за 7 дней, а подсвечен был чип «30 дней». */
+  function activePeriod() {
+    return state.period || (state.prefs && state.prefs.period) || 30;
+  }
+
   function periods() {
     return '<div class="periods">' + PERIODS.map(function (p) {
       return '<button data-period="' + p[0] + '" aria-pressed="' +
-        ((state.period || 30) === p[0]) + '">' + p[1] + '</button>';
+        (activePeriod() === p[0]) + '">' + p[1] + '</button>';
     }).join('') + '</div>';
   }
 
@@ -1048,6 +1129,9 @@
   root.addEventListener('click', function (e) {
     /* Тап по позиции раскрывает правку веса. Ловим до поиска кнопки: строка
        позиции — не кнопка, иначе она была бы вложенной в кнопку приёма. */
+    var wrow = e.target.closest('.row[data-wid]');
+    if (wrow) return dropWeight(Number(wrow.dataset.wid));
+
     var row = e.target.closest('.row[data-item]');
     if (row && !e.target.closest('.composer')) {
       var id = Number(row.dataset.item);
@@ -1065,7 +1149,8 @@
     if (b.id === 'mic') return state.recording ? stopRec() : startRec();
     if (b.dataset.repeat) {
       loading();
-      return send('/api/meals/' + b.dataset.repeat + '/repeat')
+      return send('/api/meals/' + b.dataset.repeat + '/repeat',
+                  { headers: { 'Idempotency-Key': newKey() } })
         .then(handle).catch(function (err) { toast(err.message, true); renderDay(); });
     }
     if (b.dataset.drop) {
@@ -1123,6 +1208,7 @@
       { protein_per_kg: Number(document.getElementById('gpk').value) }, 'Белок пересчитан.');
     if (b.id === 'saveTz') return patch('/api/settings/timezone',
       { timezone: document.getElementById('tz').value.trim() }, 'Часовой пояс сохранён.');
+    if (b.id === 'wsave') return saveWeight();
     if (b.dataset.period) { state.period = Number(b.dataset.period); return renderTotals(); }
     if (b.dataset.ask) return askCoach(b.dataset.ask);
     if (b.id === 'send') {
@@ -1132,6 +1218,9 @@
     }
     if (b.dataset.merge != null) return doMerge(Number(b.dataset.merge));
 
+    if (b.dataset.delI) {
+      return dropItem(Number(b.dataset.delM), Number(b.dataset.delI));
+    }
     if (b.dataset.saveG) {
       return saveGrams(Number(b.dataset.saveM), Number(b.dataset.saveG));
     }
