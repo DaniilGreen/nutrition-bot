@@ -36,7 +36,8 @@ from app.domain.plausibility import (
     is_alcoholic,
     vet_macros,
 )
-from app.domain.portions import resolve_grams
+from app.domain.portions import GramsResolution, resolve_grams
+from app.domain.stated_amount import stated_grams
 from app.domain.value_objects import Density, Macros, sum_macros
 
 # Ключи, которые LLM возвращает «от неуверенности» — не идентичность продукта.
@@ -87,17 +88,25 @@ class MealService:
                 continue
             product = await self._resolve_product(parsed_item)
             estimated = estimated or product.is_estimate
-            resolution = resolve_grams(
-                unit=parsed_item.unit.value,
-                quantity=parsed_item.quantity,
-                grams_estimate=parsed_item.grams,
-                portion_hint=parsed_item.portion_hint,
-                parsed_unit_weight_g=parsed_item.unit_weight_g,
-                product_unit_weight_g=product.unit_weight_g,
-                product_default_portion_g=product.default_portion_g,
-                product_portion_sizes=product.portion_sizes,
-                parsed_portion_sizes=parsed_item.portion_options,
-            )
+            # INV-7, шаг «явный вес»: объём или вес, названный прямо в имени,
+            # старше любой оценки модели. Реальный случай — «Пиво Сайгон 0.3 л»
+            # записалось как 500 г: модель поставила объём в имя, а граммовку
+            # взяла свою «кружку пива», и цифра вышла вдвое больше названной.
+            said = stated_grams(parsed_item.name)
+            if said is not None and said != parsed_item.grams:
+                resolution = GramsResolution(grams=said, assumed=False)
+            else:
+                resolution = resolve_grams(
+                    unit=parsed_item.unit.value,
+                    quantity=parsed_item.quantity,
+                    grams_estimate=parsed_item.grams,
+                    portion_hint=parsed_item.portion_hint,
+                    parsed_unit_weight_g=parsed_item.unit_weight_g,
+                    product_unit_weight_g=product.unit_weight_g,
+                    product_default_portion_g=product.default_portion_g,
+                    product_portion_sizes=product.portion_sizes,
+                    parsed_portion_sizes=parsed_item.portion_options,
+                )
             grams = clamp_grams(resolution.grams)  # INV-11.2: граммы в санитарные границы
             raw_macros = macros_for_grams(product.density, grams)
             # INV-14: алкоголь — ккал от этанола, доверяем (только границы); иначе Атвотер-сверка

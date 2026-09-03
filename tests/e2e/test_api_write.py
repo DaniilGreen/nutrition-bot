@@ -448,3 +448,50 @@ async def test_имя_файла_по_типу_записи(client, fake_contain
                      headers={**_hdr(), "Content-Type": ctype,
                               "Idempotency-Key": f"ct-{ctype}"})
     assert fake_container.stt.seen_filename == expect
+
+
+def _named_volume(name: str, key: str, kcal: float, model_grams: float) -> ParsedMessage:
+    """Модель ставит объём в имя, а граммовку берёт свою — ровно так и вышло
+    с «Пиво Сайгон 0.3 л»: 500 г вместо 300."""
+    return ParsedMessage(
+        intent=Intent.MEAL,
+        confidence=0.9,
+        items=[
+            ParsedItem(
+                name=name, canonical_key=key, unit=Unit.GRAM, grams=model_grams,
+                kcal_per_100g=kcal, protein_per_100g=0.5, fat_per_100g=0.0,
+                carb_per_100g=3.6, confidence=0.9,
+            )
+        ],
+    )
+
+
+async def test_объём_в_имени_старше_оценки_модели(client, fake_container):
+    """INV-7: явный вес — первый шаг цепочки. Названные 0.3 л это 300 г,
+    а не «кружка пива» из оценки."""
+    fake_container.nlu = StubNlu(_named_volume("Пиво Сайгон 0.3 л", "beer_saigon", 42, 500))
+    async with client as c:
+        r = (await c.post("/api/meals", json={"text": "пиво сайгон 03"},
+                          headers=_hdr())).json()
+    item = r["meal"]["items"][0]
+    assert item["grams"] == 300, item
+    # 42 ккал/100 г × 300 г = 126, а не 210.
+    assert 120 <= item["kcal"] <= 132, item
+
+
+async def test_жирность_в_имени_не_путается_с_объёмом(client, fake_container):
+    """«молоко 3.2%» — не 3,2 грамма. На такой ошибке цифра уехала бы в ноль."""
+    fake_container.nlu = StubNlu(_named_volume("молоко 3.2%", "milk_32", 60, 200))
+    async with client as c:
+        r = (await c.post("/api/meals", json={"text": "молоко 200"},
+                          headers=_hdr())).json()
+    assert r["meal"]["items"][0]["grams"] == 200
+
+
+async def test_согласная_граммовка_не_переписывается(client, fake_container):
+    """Если модель и имя сходятся, ничего не трогаем."""
+    fake_container.nlu = StubNlu(_named_volume("кола 500 мл", "cola", 42, 500))
+    async with client as c:
+        r = (await c.post("/api/meals", json={"text": "кола 500 мл"},
+                          headers=_hdr())).json()
+    assert r["meal"]["items"][0]["grams"] == 500
