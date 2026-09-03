@@ -189,6 +189,18 @@
       foot('Углеводы', t.carb_g, g.carb_g, 'left') + third + '</div>';
   }
 
+  /* §6.2: под белком — граммы на килограмм веса. Цель ставят именно в этих
+     единицах, и они не устаревают при изменении массы: 170 г при 91 кг и при
+     84 кг — это разные вещи, а 1,9 г/кг остаётся собой.
+     Нет замеров веса — строку не показываем: выдумывать вес нельзя. */
+  function proteinNote(d) {
+    var t = d.totals, g = d.goal;
+    var base = n(t.protein_g) + ' из ' + n(g.protein_g) + ' г';
+    if (!d.weight_kg) return base;
+    return base + ' · ' + n(t.protein_g / d.weight_kg, 2) + ' г/кг из ' +
+           n(g.protein_g / d.weight_kg, 1);
+  }
+
   function heroBars(d) {
     var t = d.totals, g = d.goal;
     var kcalLeft = t.kcal_left, protLeft = t.protein_left;
@@ -210,7 +222,7 @@
               '<span class="num unit">г</span></div>' +
             '<div class="track"><i style="width:' + pct(t.protein_g, g.protein_g) + '%;background:var(--prot)"></i></div>' +
             '<div class="mic" style="margin-top:6px;color:var(--warn)">' +
-              n(t.protein_g) + ' из ' + n(g.protein_g) + ' г</div>' +
+              proteinNote(d) + '</div>' +
           '</div>' +
         '</div>' +
         heroFoot(d) +

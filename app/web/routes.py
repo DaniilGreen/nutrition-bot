@@ -77,8 +77,13 @@ async def day(
         raise bad_request("bad_days_ago", "День вне диапазона.")
     remaining, view = await assistant.day_card(user, days_ago)
     goal = await assistant.current_goal(user)
+    # Вес нужен ради «г/кг» под белком (§6.2): именно в этих единицах цель
+    # ставит нутрициолог, и именно они не устаревают при изменении массы.
+    trend = await assistant.weight_trend(user, 1)
+    weight = trend.logs[0].weight_kg if trend.logs else None
     return {
         "day": view.day.isoformat(),
+        "weight_kg": weight,
         "days_ago": days_ago,
         "goal": goal_json(goal),
         "totals": remaining_json(remaining),

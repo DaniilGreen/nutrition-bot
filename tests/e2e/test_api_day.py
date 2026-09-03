@@ -131,3 +131,24 @@ async def test_день_требует_подписи(client):
     async with client as c:
         r = await c.get("/api/day")
     assert r.status_code == 401
+
+
+async def test_день_отдаёт_вес_для_грамм_на_кг(client, fake_container):
+    """§6.2: под белком — г/кг. Без веса это не посчитать."""
+    from app.application.entities import WeightLog
+
+    async with client as c:
+        uid = await _login(c)
+        await fake_container.weights.add(
+            WeightLog(user_id=uid, measured_at=_at_local_noon(1), weight_kg=91.5)
+        )
+        d = (await c.get("/api/day", headers={"X-Telegram-Init-Data": valid()})).json()
+    assert d["weight_kg"] == 91.5
+
+
+async def test_без_замеров_вес_пустой(client):
+    """Выдумывать вес нельзя — фронт по этому признаку прячет строку г/кг."""
+    async with client as c:
+        await _login(c)
+        d = (await c.get("/api/day", headers={"X-Telegram-Init-Data": valid()})).json()
+    assert d["weight_kg"] is None
