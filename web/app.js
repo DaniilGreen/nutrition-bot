@@ -181,8 +181,12 @@
 
   function heroFoot(d) {
     var t = d.totals, g = d.goal;
-    var third = (state.prefs && state.prefs.foot_third) === 'weight'
-      ? foot('Вес', state.weight, null, 'right')
+    /* Вес по умолчанию (§6.2). Но если замеров нет вовсе, ячейка показывала бы
+       прочерк — тогда полезнее число приёмов, чем пустое место. */
+    var wantWeight = (state.prefs ? state.prefs.foot_third : 'weight') !== 'meals';
+    var kg = d.weight_kg != null ? d.weight_kg : state.weight;
+    var third = (wantWeight && kg != null)
+      ? foot('Вес', kg, null, 'right', 1)
       : foot('Приёмов', d.meals.length, null, 'right');
     return '<div class="sep" style="margin:var(--s-4) 0 0"></div>' +
       '<div class="foot">' + foot('Жир', t.fat_g, g.fat_g, 'left') +
@@ -229,11 +233,14 @@
       '</section>';
   }
 
-  function foot(label, value, goal, align) {
+  /* `digits` нужен весу: он единственный дробный в подвале. Раньше вызывающий
+     форматировал сам и передавал строку, а foot форматировал её повторно —
+     число превращалось в NaN и рисовался прочерк. */
+  function foot(label, value, goal, align, digits) {
     return '<div style="text-align:' + align + '">' +
       '<div class="mic">' + esc(label) + '</div>' +
       '<div style="margin-top:3px"><span class="num" style="font-size:var(--f-body);font-weight:600">' +
-        n(value) + '</span>' +
+        n(value, digits) + '</span>' +
       (goal ? '<span class="num den"> /' + n(goal) + '</span>' : '') + '</div></div>';
   }
 
@@ -484,6 +491,11 @@
     loading();
     api('/api/products/duplicates/groups').then(function (d) {
       document.getElementById('title').textContent = 'Дубли';
+      /* MA-INV-25: человек должен знать заранее, что история не поедет.
+         Иначе он ждёт пересчёта съеденного и считает его отсутствие багом. */
+      var vow = '<div class="mic" style="padding:0 var(--s-2) var(--s-3);line-height:1.55">' +
+        'Слияние меняет только каталог. Съеденное не пересчитается — в приёмах ' +
+        'лежит снапшот КБЖУ на момент записи.</div>';
       if (!d.groups.length) {
         show('<section class="card"><div class="state">Дублей не нашлось.</div></section>' +
              '<div class="pager"><button id="toList">К списку</button></div>');
@@ -510,7 +522,7 @@
           rows + warn +
           '<button class="primary" data-merge="' + gi + '">Слить в выбранную</button></section>';
       }).join('');
-      show(blocks + '<div class="pager"><button id="toList">К списку</button></div>');
+      show(vow + blocks + '<div class="pager"><button id="toList">К списку</button></div>');
       state.cat._groups = d.groups;
     }).catch(failure);
   }
@@ -820,7 +832,7 @@
 
         group('Подвал панели',
           [['meals', 'Приёмов за день'], ['weight', 'Последний вес']].map(function (o) {
-            return '<div class="pick' + ((p.foot_third || 'meals') === o[0] ? ' on' : '') +
+            return '<div class="pick' + ((p.foot_third || 'weight') === o[0] ? ' on' : '') +
               '" data-foot="' + o[0] + '"><span class="dot"></span>' +
               '<span style="flex-grow:1;font-size:var(--f-body-s)">' + esc(o[1]) +
               '</span></div>';
@@ -1052,7 +1064,7 @@
   function loadWeight() {
     api('/api/stats/weight?limit=1').then(function (d) {
       state.weight = d.points.length ? d.points[d.points.length - 1].kg : null;
-      if (state.prefs && state.prefs.foot_third === 'weight') renderDay();
+      if (!state.prefs || state.prefs.foot_third !== 'meals') renderDay();
     }).catch(function () {});
   }
 

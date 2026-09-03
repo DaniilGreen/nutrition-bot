@@ -447,7 +447,7 @@ async def contributions(
     метрика прячет ровно ту проблему, ради которой экран нужен (§4.1).
     """
     if not 1 <= days <= 365 or not 1 <= limit <= 30:
-        raise bad_request("bad_range", "Неверные параметры.")
+        raise bad_request("bad_range", "Период вне допустимого диапазона.")
     rows = await assistant.contributions(user, days=days, limit=limit)
     total = sum(k for _, _, k, _ in rows)
     return {
@@ -488,7 +488,7 @@ async def frequent(
     так, что подсказка перестала бы попадать в реальность.
     """
     if not 1 <= days <= 365 or not 1 <= limit <= 30:
-        raise bad_request("bad_range", "Неверные параметры.")
+        raise bad_request("bad_range", "Период вне допустимого диапазона.")
     rows = await assistant.frequent(user, days=days, limit=limit)
     return {
         "items": [
@@ -525,7 +525,7 @@ async def products(
 ) -> dict[str, Any]:
     """Каталог страницами: полный список нельзя — их больше двух сотен (§7.2)."""
     if offset < 0 or limit < 1 or limit > 100:
-        raise bad_request("bad_paging", "Неверные параметры страницы.")
+        raise bad_request("bad_paging", "Страница вне диапазона.")
     items, total, uses, grams = await assistant.catalog_page(
         user, offset=offset, limit=limit, query=(q or "").strip() or None
     )

@@ -60,8 +60,9 @@ async def test_частичная_правка_не_сбрасывает_ост�
         await _login(c)
         await c.patch("/api/settings/prefs", json={"hero": "rings"}, headers=_hdr())
         r = await c.patch("/api/settings/prefs", json={"period": 7}, headers=_hdr())
+    # foot_third по умолчанию "weight": в макете панели Е третья ячейка — вес.
     assert r.json()["prefs"] == {"hero": "rings", "period": 7,
-                                 "foot_third": "meals", "mic_first": False}
+                                 "foot_third": "weight", "mic_first": False}
 
 
 @pytest.mark.parametrize(
