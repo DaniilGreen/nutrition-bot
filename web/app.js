@@ -1082,20 +1082,21 @@
         return '<button class="chip" data-ask="' + esc(q) + '">' + esc(q) + '</button>';
       }).join('') + '</div>';
     var b = state.budget;
-    /* Бюджет наверху узкой строкой: это рамка разговора, её смотрят до
-       вопроса, а не после ответа. Внизу он отжимал поле ввода от края. */
+    /* Бюджет — короткая метка в углу карточки, а не полоса во весь экран.
+       Пока потрачено два цента, шкала занимала места больше, чем весь смысл;
+       заметной она обязана стать только на исходе. */
+    var used = b && b.limit_usd ? b.spent_usd / b.limit_usd : 0;
+    var low = used >= 0.8;
     var budget = !b ? '' :
-      '<div class="budgetbar">' +
-        '<span class="mic">Бюджет ассистента</span>' +
-        '<div class="budget"><i style="width:' + pct(b.spent_usd, b.limit_usd) + '%"></i></div>' +
-        '<span class="mic num">$' + n(b.spent_usd, 2) + ' из $' + n(b.limit_usd, 2) +
-        (b.available ? '' : ' · нет ключа') + '</span></div>';
+      '<span class="budgetTag' + (low ? ' low' : '') + '">' +
+        (b.available ? '$' + n(b.spent_usd, 2) + ' из $' + n(b.limit_usd, 2)
+                     : 'ключ не настроен') + '</span>';
 
     /* Поле ввода последним и прижато к низу: разговор идёт снизу вверх, как
        в любом чате, и рука не тянется через весь экран. */
-    show(budget +
-         '<section class="card">' +
-           '<div class="cap">Спроси про свои данные</div>' +
+    show('<section class="card">' +
+           '<div class="cardhead"><span class="cap">Спроси про свои данные</span>' +
+             budget + '</div>' +
            '<div class="mic" style="margin-top:6px;line-height:1.5">' +
              'Ассистент видит только твои цифры за 30 дней. Он не врач и не ставит диагнозов.' +
            '</div>' + sug + '</section>' +

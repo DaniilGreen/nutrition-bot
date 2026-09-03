@@ -211,9 +211,6 @@ nav button[aria-current="page"]{color:var(--accent)}
   font-size:var(--f-body-s);line-height:1.5;white-space:pre-wrap}
 .bubble.me{background:var(--tint);margin-left:var(--s-5)}
 .bubble.ai{background:var(--surface);margin-right:var(--s-5)}
-.budget{height:5px;border-radius:3px;background:var(--surface-3);overflow:hidden;
-  margin-top:var(--s-2)}
-.budget > i{display:block;height:100%;background:var(--accent);border-radius:3px}
 
 /* ── строка каталога: две зоны тапа (MA-INV-24) ──────────────────────────
    Тело пишет приём, шеврон открывает карточку. Шеврон рисуется 18px, но
@@ -290,11 +287,13 @@ nav button[aria-current="page"]{color:var(--accent)}
 /* ── экран AI ─────────────────────────────────────────────────────────────
    Бюджет — узкая строка сверху: это рамка разговора, а не его итог.
    Поле ввода липнет к низу, как в чате: тянуться к нему через экран не надо. */
-.budgetbar{display:flex;align-items:center;gap:var(--s-3);
-  padding:var(--s-2) var(--s-4);background:var(--surface);border-radius:var(--r-pill);
-  margin-bottom:var(--s-3)}
-.budgetbar .budget{flex-grow:1;margin:0}
-.budgetbar .num{flex-shrink:0;white-space:nowrap}
+.cardhead{display:flex;align-items:baseline;gap:var(--s-3)}
+.cardhead .cap{flex-grow:1}
+/* Метка бюджета: тихая, пока деньги есть. На исходе — своим тоном, но всё
+   ещё меткой, а не полосой во весь экран. */
+.budgetTag{flex-shrink:0;font-size:var(--f-micro);color:var(--text-faint);
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.budgetTag.low{color:var(--alert)}
 /* Ввод закреплён над вкладками, а не идёт следом за перепиской: в длинном
    диалоге к нему пришлось бы прокручивать, в коротком он висел посреди
    пустоты. sticky здесь не годится — он держит элемент только пока тот
