@@ -11,11 +11,19 @@
   --f-micro:11px; --f-caption:13px; --f-body-s:14px; --f-body:16px;
   --f-t3:18px; --f-t2:22px; --f-t1:28px; --f-hero:38px;
   --tabbar:64px;
+  /* Ширина колонки: телефон отдаёт меньше и колонка просто ужимается,
+     десктоп даёт больше — и мы им не пользуемся. */
+  --column:460px;
 }
 *{box-sizing:border-box}
 html,body{overscroll-behavior-y:contain}
+/* Telegram на десктопе даёт аппке широкое окно, а не 390px телефона. Без
+   потолка ширины сетка «1fr 1fr» растягивала верхнюю панель на всю страницу:
+   «Осталось ккал» уезжало влево, «Осталось белка» — к правому краю, и между
+   ними зияла пустота. Колонка фиксированной ширины по центру — тот же макет
+   на любом окне. */
 body{
-  margin:0; background:var(--bg); color:var(--text);
+  margin:0 auto; max-width:var(--column); background:var(--bg); color:var(--text);
   font:400 15px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif;
   -webkit-font-smoothing:antialiased;
   padding:var(--s-4) var(--s-4) calc(var(--tabbar) + var(--s-5) + env(safe-area-inset-bottom));
@@ -63,7 +71,11 @@ header h1{font-size:var(--f-t2);font-weight:700;letter-spacing:-.4px;margin:0}
 .items .row .g{color:var(--text-faint)}
 
 /* ── нижние вкладки ──────────────────────────────────────────────────── */
-nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:rgba(20,22,26,.92);
+/* Вкладки прибиты к низу, но обязаны жить в той же колонке, что и контент:
+   с left:0;right:0 они растягивались во всю ширину десктопного окна и
+   отрывались от него. */
+nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);
+  width:100%;max-width:var(--column);display:flex;background:rgba(20,22,26,.92);
   backdrop-filter:blur(18px);border-top:1px solid var(--separator);
   padding-bottom:env(safe-area-inset-bottom);z-index:10}
 nav button{flex:1;background:none;border:0;color:var(--text-faint);cursor:pointer;
