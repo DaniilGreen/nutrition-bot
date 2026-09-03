@@ -293,13 +293,17 @@ class Assistant:
 
     async def catalog_page(
         self, user: User, *, offset: int = 0, limit: int = 20, query: str | None = None
-    ) -> tuple[list[Product], int, dict[int, int]]:
-        """Страница каталога + сколько раз ЭТОТ человек ел каждый продукт (§7.2)."""
+    ) -> tuple[list[Product], int, dict[int, int], dict[int, float]]:
+        """Страница каталога: продукты, всего, сколько раз ел, привычный вес."""
         items, total = await self._products.list_page(offset=offset, limit=limit, query=query)
         uses = await self._products.usage_counts(
             [p.id for p in items if p.id], user_id=_require_id(user)
         )
-        return items, total, uses
+        # Привычная граммовка — из истории самого человека: без неё тап по
+        # строке каталога не знает, сколько записывать (MA-INV-24).
+        rows = await self._meals.frequent_items(_require_id(user), days=180, limit=200)
+        grams = {pid: g for pid, _, g, _ in rows if pid is not None}
+        return items, total, uses, grams
 
     async def usage_of(self, user: User, product_id: int) -> int:
         """Сколько раз ЭТОТ человек ел продукт. Карточке нужно одно число."""

@@ -95,6 +95,17 @@
 
   function show(html) { root.innerHTML = html; }
 
+  /* §6.2: поле ввода активно сразу, ввод не ждёт загрузки. Раньше скелет
+     затирал весь экран вместе с композером — и записать во время загрузки
+     было нельзя. */
+  function loadingDay() {
+    show('<section class="card">' +
+         '<div class="skel" style="height:14px;width:45%"></div>' +
+         '<div class="skel" style="height:34px;width:65%;margin-top:10px"></div>' +
+         '<div class="skel" style="height:6px;margin-top:14px"></div>' +
+         '</section>' + composer() + chips());
+  }
+
   function loading() {
     show('<div class="card">' +
          '<div class="skel" style="height:14px;width:45%"></div>' +
@@ -216,6 +227,15 @@
 
   /* ── лента приёмов ───────────────────────────────────────────────────── */
 
+  /* Метка происхождения цифры (INV-13, FR-22): «≈» — оценка модели,
+     «📋» — человек назвал сам. Бот метит так же; расхождение аппки и бота
+     на одних данных читалось бы как баг в подсчёте. */
+  function itemMark(i) {
+    if (i.is_estimate) return ' <span style="color:var(--text-faint)">≈</span>';
+    if (i.is_stated) return ' <span style="color:var(--text-faint)">📋</span>';
+    return '';
+  }
+
   function feed(d) {
     if (!d.meals.length) {
       return '<section class="card" style="margin-top:var(--s-3)">' +
@@ -241,8 +261,9 @@
         return '<div class="row"' + (can ? ' data-item="' + i.id + '" data-meal="' + m.id +
                '" style="cursor:pointer"' : '') + '>' +
           '<span style="flex-grow:1">' + esc(i.name) +
-            (i.is_estimate ? ' <span style="color:var(--text-faint)">≈</span>' : '') + '</span>' +
-          '<span class="num g">' + n(i.grams) + ' г</span>' +
+            itemMark(i) + '</span>' +
+          (i.grams > 0 ? '<span class="num g">' + n(i.grams) + ' г</span>'
+                       : '<span class="mic g">свои цифры</span>') +
           '<span class="num" style="width:52px;text-align:right">' + n(i.kcal) + '</span>' +
         '</div>' + (editing ? gramsEditor(m.id, i) : '');
       }).join('');
@@ -315,7 +336,7 @@
   }
 
   function renderDay() {
-    loading();
+    loadingDay();
     api('/api/day?days_ago=' + state.daysAgo)
       .then(function (d) {
         document.getElementById('title').textContent = title(d);
@@ -367,10 +388,26 @@
           var est = p.source === 'llm'
             ? '<span class="badge">оценка</span>'
             : (p.source === 'label' ? '<span class="badge">с этикетки</span>' : '');
-          return '<button class="item" data-product="' + p.id + '">' +
-            '<span class="nm">' + esc(p.name) + est + '</span>' +
-            '<span class="num kk">' + n(p.kcal_per_100g) + ' ккал</span></button>';
+          /* MA-INV-24: две зоны. Тело строки пишет приём с привычной
+             граммовкой — ради этого вкладка и сделана. Шеврон открывает
+             карточку. Одна зона на всё превращала каталог в редактор. */
+          var g = p.usual_grams || 100;
+          return '<div class="item2">' +
+            '<button class="body" data-quick="' + p.id + '" data-grams="' + g + '">' +
+              '<span class="nm">' + esc(p.name) + est + '</span>' +
+              '<span class="mic use">' +
+                (p.uses ? n(p.uses) + ' раз · обычно ' + n(g) + ' г' : n(g) + ' г') +
+              '</span></button>' +
+            '<span class="num kk">' + n(p.kcal_per_100g) + '<span class="per">/100 г</span></span>' +
+            '<button class="chev" data-product="' + p.id + '" aria-label="Открыть карточку">' +
+              '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+              'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+              '<path d="M9 18l6-6-6-6"/></svg></button></div>';
         }).join('') || '<div class="state">Ничего не нашлось.</div>';
+        var hint = d.items.length
+          ? '<div class="mic" style="padding:var(--s-2) var(--s-2) 0">' +
+            'Тап по строке — записать. Шеврон — открыть карточку.</div>'
+          : '';
         var from = d.total ? c.offset + 1 : 0;
         var to = Math.min(c.offset + PAGE, d.total);
         show(
@@ -380,7 +417,7 @@
               '<path d="M20 20l-3.5-3.5" stroke-linecap="round"/></svg>' +
             '<input id="q" type="search" placeholder="Найти продукт" value="' + esc(c.q) + '">' +
           '</div>' +
-          '<section class="card"><div class="plist">' + rows + '</div></section>' +
+          '<section class="card">' + hint + '<div class="plist">' + rows + '</div></section>' +
           '<div class="cap" style="text-align:center;margin-top:var(--s-3)">' +
             (d.total ? from + '–' + to + ' из ' + d.total : 'пусто') + '</div>' +
           '<div class="pager">' +
@@ -1074,15 +1111,27 @@
     var text = (inp && inp.value || '').trim();
     if (!text || state.sending) return;
     state.sending = true;
-    state.text = '';
+    /* Ключ фиксируем на попытку, а не на запрос: если сеть отвалилась и человек
+       нажал ещё раз, сервер вернёт первый ответ вместо второй записи. */
+    var key = state.retryKey || newKey();
+    state.retryKey = key;
     inp.value = '';
     inp.blur();
     loading();
     send('/api/meals', {
-      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newKey() },
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
       body: JSON.stringify({ text: text })
-    }).then(handle).catch(function (e) { toast(e.message, true); renderDay(); })
-      .then(function () { state.sending = false; });
+    }).then(function (r) {
+      state.text = '';
+      state.retryKey = null;
+      return handle(r);
+    }).catch(function (e) {
+      /* Текст НЕ теряем: пропавшая фраза — это непоставленная запись, а
+         полнота записей и есть главная дыра проекта (§4.0). */
+      state.text = text;
+      toast(e.message + ' Текст сохранён.', true);
+      renderDay();
+    }).then(function () { state.sending = false; });
   }
 
   /* ── голос ───────────────────────────────────────────────────────────── */

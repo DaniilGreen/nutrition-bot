@@ -521,14 +521,17 @@ async def products(
     """Каталог страницами: полный список нельзя — их больше двух сотен (§7.2)."""
     if offset < 0 or limit < 1 or limit > 100:
         raise bad_request("bad_paging", "Неверные параметры страницы.")
-    items, total, uses = await assistant.catalog_page(
+    items, total, uses, grams = await assistant.catalog_page(
         user, offset=offset, limit=limit, query=(q or "").strip() or None
     )
     return {
         "total": total,
         "offset": offset,
         "limit": limit,
-        "items": [product_json(p, uses.get(p.id or 0, 0)) for p in items],
+        "items": [
+            product_json(p, uses.get(p.id or 0, 0), grams.get(p.id or 0))
+            for p in items
+        ],
     }
 
 

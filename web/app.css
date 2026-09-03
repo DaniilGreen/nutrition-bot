@@ -201,3 +201,19 @@ nav button[aria-current="page"]{color:var(--accent)}
 .budget{height:5px;border-radius:3px;background:var(--surface-3);overflow:hidden;
   margin-top:var(--s-2)}
 .budget > i{display:block;height:100%;background:var(--accent);border-radius:3px}
+
+/* ── строка каталога: две зоны тапа (MA-INV-24) ──────────────────────────
+   Тело пишет приём, шеврон открывает карточку. Шеврон рисуется 18px, но
+   его цель касания — 44px: иначе «открыть» промахивается в «записать». */
+.item2{display:flex;align-items:center;gap:var(--s-2);padding:0}
+.item2 + .item2{border-top:1px solid var(--separator)}
+.item2 .body{flex-grow:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;
+  gap:2px;background:none;border:0;color:inherit;font:inherit;text-align:left;cursor:pointer;
+  padding:11px 0;min-height:44px;justify-content:center}
+.item2 .nm{font-size:var(--f-body-s);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  max-width:100%}
+.item2 .use{color:var(--text-faint)}
+.item2 .kk{font-size:var(--f-caption);color:var(--text-muted);flex-shrink:0}
+.item2 .kk .per{color:var(--text-faint);font-size:var(--f-micro)}
+.item2 .chev{background:none;border:0;color:var(--text-faint);cursor:pointer;flex-shrink:0;
+  min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:center}

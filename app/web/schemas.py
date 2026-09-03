@@ -45,6 +45,9 @@ def item_json(item: MealItem) -> dict[str, Any]:
         # INV-13: «≈» рисует фронт по этому флагу. Скрыть его нельзя —
         # пользователь обязан видеть, где цифра оценочная.
         "is_estimate": item.is_estimate,
+        # FR-22: цифры назвал сам человек — ни каталог, ни модель. Бот метит
+        # такие строки «📋», аппка обязана вести себя так же на тех же данных.
+        "is_stated": item.product_id is None and not item.is_estimate,
     }
 
 
@@ -102,9 +105,13 @@ def clarify_json(result: Any, draft_id: str, kind: str) -> dict[str, Any]:
     }
 
 
-def product_json(p: Any, uses: int) -> dict[str, Any]:
+def product_json(p: Any, uses: int, usual_grams: float | None = None) -> dict[str, Any]:
     """Карточка продукта. `source` наружу нужен: он объясняет, почему цифре
-    можно верить — этикетка это не то же, что оценка модели."""
+    можно верить — этикетка это не то же, что оценка модели.
+
+    `usual_grams` — привычная граммовка человека; без неё тап по строке
+    каталога не знает, сколько записывать (MA-INV-24).
+    """
     return {
         "id": p.id,
         "name": p.display_name,
@@ -118,4 +125,8 @@ def product_json(p: Any, uses: int) -> dict[str, Any]:
         "default_portion_g": p.default_portion_g,
         "source": p.source,
         "uses": uses,
+        # Своя граммовка, иначе курируемый размер порции, иначе 100 г.
+        "usual_grams": round(
+            usual_grams or p.default_portion_g or p.unit_weight_g or 100.0, 1
+        ),
     }
