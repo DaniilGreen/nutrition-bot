@@ -230,8 +230,12 @@ nav button[aria-current="page"]{color:var(--accent)}
    компонентом, иначе оно разойдётся с боевой панелью. */
 .pick-v{display:block;padding:11px var(--s-4)}
 .pick-v .pick-h{display:flex;align-items:center;gap:var(--s-3)}
-.pick .prev{transform:scale(.62);transform-origin:top left;width:161%;
-  margin-bottom:-24%;pointer-events:none}
+/* Превью рисуется в НАСТОЯЩУЮ ширину телефона и не масштабируется.
+   Раньше здесь был transform:scale с процентной шириной и отрицательным
+   отступом — эта арифметика сходится ровно при одной ширине окна, а на
+   широком экране превью разъезжалось и наползало на соседние группы.
+   Заодно так честнее: видно ровно то, что будет на телефоне. */
+.pick .prev{width:min(340px, 100%);pointer-events:none;overflow:hidden}
 .pick .prev section{background:var(--surface-2)}
 
 /* Метка дубля в графике вкладов — кнопка, а не подпись: она ведёт на слияние. */
