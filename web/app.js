@@ -98,6 +98,19 @@
   /* §6.2: поле ввода активно сразу, ввод не ждёт загрузки. Раньше скелет
      затирал весь экран вместе с композером — и записать во время загрузки
      было нельзя. */
+  /* Пока идёт расшифровка или запись, экран НЕ стирается: общий скелет
+     выглядел как падение — панель, лента и чипы исчезали на несколько секунд
+     без единого слова. Меняем только поле ввода, всё остальное на месте. */
+  function busy(text) {
+    var c = document.querySelector('.composer');
+    if (!c) return;
+    c.className = 'composer';
+    c.innerHTML =
+      '<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>' +
+      '<span style="flex-grow:1;color:var(--text-muted);font-size:var(--f-body-s)">' +
+      esc(text) + '</span>';
+  }
+
   function loadingDay() {
     show('<section class="card">' +
          '<div class="skel" style="height:14px;width:45%"></div>' +
@@ -255,12 +268,20 @@
     return '';
   }
 
+  function feedOrder() {
+    return (state.prefs && state.prefs.feed_order) || 'new_first';
+  }
+
   function feed(d) {
     if (!d.meals.length) {
       return '<section class="card" style="margin-top:var(--s-3)">' +
              '<div class="state">За этот день записей нет.</div></section>';
     }
-    var rows = d.meals.map(function (m) {
+    /* Новое сверху по умолчанию: только что записанное проверяют сразу,
+       а утренний кофе — почти никогда. Порядок переключается тут же и
+       запоминается, чтобы не спорить с привычкой. */
+    var meals = feedOrder() === 'new_first' ? d.meals.slice().reverse() : d.meals;
+    var rows = meals.map(function (m) {
       var opened = !!state.open[m.id];
       var mark = m.estimated ? ' <span style="color:var(--text-faint)">≈</span>' : '';
       var head =
@@ -293,8 +314,13 @@
         '<button data-drop="' + m.id + '" class="danger">Удалить</button></div>';
       return head + '<div class="items">' + items + macros + acts + '</div>';
     }).join('');
-    return '<section class="card" style="margin-top:var(--s-3)">' +
-           '<div class="cap" style="margin-bottom:var(--s-2)">Съедено</div>' + rows + '</section>';
+    var newFirst = feedOrder() === 'new_first';
+    var head = '<div style="display:flex;align-items:center;margin-bottom:var(--s-2)">' +
+      '<span class="cap" style="flex-grow:1">Съедено</span>' +
+      '<button class="badge dup" data-order="' + (newFirst ? 'old_first' : 'new_first') +
+        '" aria-label="Порядок записей">' +
+        (newFirst ? 'сначала новое' : 'сначала старое') + '</button></div>';
+    return '<section class="card" style="margin-top:var(--s-3)">' + head + rows + '</section>';
   }
 
   function gramsEditor(mealId, item) {
@@ -1233,7 +1259,7 @@
     state.retryKey = key;
     inp.value = '';
     inp.blur();
-    loading();
+    busy('Записываю…');
     send('/api/meals', {
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
       body: JSON.stringify({ text: text })
@@ -1268,7 +1294,8 @@
         state.recording = false;
         var blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
         if (!blob.size) { renderDay(); return; }
-        loading();
+        renderDay();
+        setTimeout(function () { busy('Расшифровываю…'); }, 60);
         send('/api/meals/voice', {
           headers: { 'Content-Type': blob.type, 'Idempotency-Key': newKey() },
           body: blob
@@ -1407,6 +1434,18 @@
         .catch(function (e) { toast(e.message, true); });
     }
     if (b.id === 'wsave') return saveWeight();
+    if (b.dataset.order) {
+      state.prefs = Object.assign({}, state.prefs || {}, { feed_order: b.dataset.order });
+      renderDay();
+      /* Порядок запоминаем, но экран не ждёт ответа сервера: это оформление,
+         и мигать из-за него нечестно. */
+      send('/api/settings/prefs', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feed_order: b.dataset.order })
+      }).catch(function () {});
+      return;
+    }
     if (b.dataset.dups) {
       state.tab = 'cat';
       state.cat = { view: 'dups', offset: 0, q: '' };

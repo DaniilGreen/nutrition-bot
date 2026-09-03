@@ -62,7 +62,8 @@ async def test_частичная_правка_не_сбрасывает_ост�
         r = await c.patch("/api/settings/prefs", json={"period": 7}, headers=_hdr())
     # foot_third по умолчанию "weight": в макете панели Е третья ячейка — вес.
     assert r.json()["prefs"] == {"hero": "rings", "period": 7,
-                                 "foot_third": "weight", "mic_first": False}
+                                 "foot_third": "weight", "mic_first": False,
+                                 "feed_order": "new_first"}
 
 
 @pytest.mark.parametrize(
@@ -197,3 +198,29 @@ async def test_режим_меняется(client):
 async def test_багрепорт_требует_подписи(client):
     async with client as c:
         assert (await c.post("/api/bug", json={"note": "х"})).status_code == 401
+
+
+async def test_порядок_ленты_запоминается(client):
+    """Порядок — оформление, но переспрашивать его при каждом заходе значит
+    спорить с привычкой."""
+    async with client as c:
+        await c.get("/api/me", headers=_hdr())
+        default = (await c.get("/api/settings", headers=_hdr())).json()
+        r = (await c.patch("/api/settings/prefs", json={"feed_order": "old_first"},
+                           headers=_hdr())).json()
+        back = (await c.get("/api/settings", headers=_hdr())).json()
+    assert default["prefs"]["feed_order"] == "new_first"   # новое сверху по умолчанию
+    assert r["prefs"]["feed_order"] == "old_first"
+    assert back["prefs"]["feed_order"] == "old_first"
+
+
+async def test_негодный_порядок_не_применяется(client):
+    """Недопустимое значение отбрасывается молча, а не роняет запрос: клиент
+    может быть новее сервера (см. prefs.sanitize). Прежнее значение остаётся."""
+    async with client as c:
+        await c.get("/api/me", headers=_hdr())
+        await c.patch("/api/settings/prefs", json={"feed_order": "old_first"},
+                      headers=_hdr())
+        r = (await c.patch("/api/settings/prefs", json={"feed_order": "как попало"},
+                           headers=_hdr())).json()
+    assert r["prefs"]["feed_order"] == "old_first"
