@@ -26,6 +26,7 @@ from app.application.results import (
     WeightLogged,
 )
 from app.container import Container
+from app.domain.audio import filename_for
 from app.domain.duplicates import SAFE_SPREAD, Candidate, spread, winner
 from app.domain.goals import Goal
 from app.domain.prefs import merge as merge_prefs
@@ -191,7 +192,11 @@ async def log_voice(
     if replay is not None:
         return replay
     _throttle(request, user, "voice", limit=10, window=60)
-    text = await assistant.transcribe(audio, filename="voice.ogg")
+    # Имя файла берём из типа: Whisper выбирает парсер по расширению, и
+    # запись Safari (mp4), названная «voice.ogg», не распознавалась вовсе.
+    text = await assistant.transcribe(
+        audio, filename=filename_for(request.headers.get("content-type"))
+    )
     if not text:
         raise unavailable("stt_off", "Распознавание голоса недоступно.")
     result = await assistant.process(user, text, input_type="voice")

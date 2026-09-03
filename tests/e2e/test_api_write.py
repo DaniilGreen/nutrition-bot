@@ -429,3 +429,22 @@ async def test_уточнение_под_лимитом(client, fake_container):
                              json={"draft_id": f"нет-{i}", "answer": "да"}, headers=_hdr())
             codes.append(r.status_code)
     assert 429 in codes
+
+
+@pytest.mark.parametrize(
+    ("ctype", "expect"),
+    [("audio/webm;codecs=opus", "voice.webm"),
+     ("audio/ogg", "voice.ogg"),
+     ("audio/mp4", "voice.mp4"),          # Safari и Telegram на iOS
+     ("application/octet-stream", "voice.webm")],
+)
+async def test_имя_файла_по_типу_записи(client, fake_container, ctype, expect):
+    """Whisper выбирает парсер по расширению. Запись Safari, названная
+    «voice.ogg», не распознавалась вовсе — хотя сама запись проходила."""
+    fake_container.nlu = StubNlu(_meal("грудка", "chicken", 200, 165))
+    fake_container.stt = StubStt("грудка 200 г")
+    async with client as c:
+        await c.post("/api/meals/voice", content=b"x" * 100,
+                     headers={**_hdr(), "Content-Type": ctype,
+                              "Idempotency-Key": f"ct-{ctype}"})
+    assert fake_container.stt.seen_filename == expect

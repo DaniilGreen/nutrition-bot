@@ -387,8 +387,12 @@ class StubStt:
 
     def __init__(self, transcript: str) -> None:
         self._transcript = transcript
+        # Имя файла запоминаем: Whisper выбирает парсер по расширению, и
+        # неверное имя ломает распознавание при успешной записи.
+        self.seen_filename: str | None = None
 
     async def transcribe(self, audio: bytes, *, filename: str = "voice.ogg") -> str:
+        self.seen_filename = filename
         return self._transcript
 
 

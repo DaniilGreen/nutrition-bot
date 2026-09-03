@@ -239,6 +239,14 @@ nav button[aria-current="page"]{color:var(--accent)}
   border-radius:var(--r-pill);padding:1px 7px;font-size:var(--f-micro);
   margin-left:6px;font-family:inherit}
 
+/* Переключатель порядка ленты. Отдельно от .badge.dup: тот сидит внутри
+   строки текста, а этот стоит в шапке карточки — ему нужна своя высота и
+   выключка по центру, иначе текст съезжает относительно заголовка. */
+.sortbtn{background:var(--tint);color:var(--accent);border:0;cursor:pointer;
+  border-radius:var(--r-pill);padding:0 10px;height:24px;
+  display:inline-flex;align-items:center;font-size:var(--f-micro);
+  font-family:inherit;line-height:1;flex-shrink:0}
+
 /* Три точки: «идёт работа». Анимация уважает prefers-reduced-motion —
    там точки просто разной яркости, движение не нужно, чтобы понять смысл. */
 .dots{display:inline-flex;gap:4px;align-items:center;padding:0 var(--s-2)}

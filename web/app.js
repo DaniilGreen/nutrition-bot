@@ -317,7 +317,7 @@
     var newFirst = feedOrder() === 'new_first';
     var head = '<div style="display:flex;align-items:center;margin-bottom:var(--s-2)">' +
       '<span class="cap" style="flex-grow:1">Съедено</span>' +
-      '<button class="badge dup" data-order="' + (newFirst ? 'old_first' : 'new_first') +
+      '<button class="sortbtn" data-order="' + (newFirst ? 'old_first' : 'new_first') +
         '" aria-label="Порядок записей">' +
         (newFirst ? 'сначала новое' : 'сначала старое') + '</button></div>';
     return '<section class="card" style="margin-top:var(--s-3)">' + head + rows + '</section>';
@@ -1280,6 +1280,22 @@
 
   var recorder = null, chunks = [];
 
+  /* Кнопку микрофона переключаем на месте, а не перерисовкой всего дня:
+     renderDay ходит за данными, и на время ответа экран мигал. */
+  function setMic(on) {
+    var b = document.getElementById('mic');
+    if (!b) return;
+    b.className = on ? 'rec' : '';
+    b.setAttribute('aria-label', on ? 'Остановить запись' : 'Записать голосом');
+    b.innerHTML = on
+      ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" ' +
+        'aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>'
+      : '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+        'stroke-width="2" stroke-linecap="round" aria-hidden="true">' +
+        '<rect x="9" y="3" width="6" height="11" rx="3"/>' +
+        '<path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
+  }
+
   function startRec() {
     if (!navigator.mediaDevices || !window.MediaRecorder) {
       toast('Этот клиент не умеет записывать голос — набери текстом.', true);
@@ -1287,15 +1303,29 @@
     }
     navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
       chunks = [];
-      recorder = new MediaRecorder(stream);
+      /* Формат выбираем явно и из поддерживаемых: без указания браузер даёт
+         что хочет, а Safari и Telegram на iOS пишут mp4. Опус в webm первым —
+         он самый компактный, а объём это время загрузки на мобильной сети. */
+      var want = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus',
+                  'audio/ogg', 'audio/mp4'];
+      var pick = null;
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported) {
+        for (var i = 0; i < want.length && !pick; i++) {
+          if (MediaRecorder.isTypeSupported(want[i])) pick = want[i];
+        }
+      }
+      recorder = pick ? new MediaRecorder(stream, { mimeType: pick })
+                      : new MediaRecorder(stream);
       recorder.ondataavailable = function (e) { if (e.data.size) chunks.push(e.data); };
       recorder.onstop = function () {
         stream.getTracks().forEach(function (t) { t.stop(); });
         state.recording = false;
         var blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
-        if (!blob.size) { renderDay(); return; }
-        renderDay();
-        setTimeout(function () { busy('Расшифровываю…'); }, 60);
+        if (!blob.size) { setMic(false); return; }
+        /* Никакого renderDay: он уходит за данными и своим ответом затирает
+           индикатор через пару сотен миллисекунд. Именно это и выглядело
+           дёрганьем — экран дважды перерисовывался за одну запись. */
+        busy('Расшифровываю…');
         send('/api/meals/voice', {
           headers: { 'Content-Type': blob.type, 'Idempotency-Key': newKey() },
           body: blob
@@ -1303,7 +1333,7 @@
       };
       recorder.start();
       state.recording = true;
-      renderDay();
+      setMic(true);
     }).catch(function () {
       toast('Не дали доступ к микрофону — набери текстом.', true);
     });
