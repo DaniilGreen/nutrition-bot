@@ -36,6 +36,7 @@ from app.web.errors import ApiError, bad_request, not_found, unavailable
 from app.web.schemas import (
     clarify_json,
     goal_json,
+    item_json,
     logged_json,
     meal_json,
     product_json,
@@ -315,6 +316,38 @@ async def weight(
             }
             for log in logs
         ]
+    }
+
+
+@router.patch("/meals/{meal_id}/items/{item_id}")
+async def adjust_item(
+    meal_id: int, item_id: int, body: dict[str, Any],
+    user: CurrentUser, assistant: CurrentAssistant,
+) -> dict[str, Any]:
+    """Поправить вес позиции (MA-INV-22).
+
+    Снапшот масштабируется пропорционально, а не пересчитывается из каталога:
+    иначе правка веса потянула бы за собой сегодняшнюю плотность продукта, и
+    съеденное вчера поехало бы (INV-3).
+    """
+    try:
+        grams = float(body["grams"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise bad_request("bad_grams", "Вес должен быть числом.") from exc
+    if not 0 < grams <= 5000:
+        raise bad_request("bad_grams", "Вес вне разумных пределов.")
+
+    changed = await assistant.adjust_item(user, meal_id, item_id, grams)
+    if changed is None:
+        raise not_found("item_not_found", "Позицию не найти или у неё нет веса.")
+    item, old_grams = changed
+    stats = await assistant.today(user)
+    meal = await assistant.get_meal(user, meal_id)
+    return {
+        "item": item_json(item),
+        "old_grams": round(old_grams, 1),
+        "meal": meal_json(meal, user.timezone) if meal else None,
+        "totals": remaining_json(stats.remaining),
     }
 
 

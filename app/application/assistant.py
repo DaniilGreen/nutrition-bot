@@ -306,6 +306,12 @@ class Assistant:
         counts = await self._products.usage_counts([product_id], user_id=_require_id(user))
         return counts.get(product_id, 0)
 
+    async def adjust_item(
+        self, user: User, meal_id: int, item_id: int, new_grams: float
+    ) -> tuple[MealItem, float] | None:
+        """Правка веса позиции из ленты."""
+        return await self._meals.adjust_item(user, meal_id, item_id, new_grams)
+
     async def delete_weight(self, user: User, log_id: int) -> WeightLog | None:
         return await self._weights.delete(user, log_id)
 

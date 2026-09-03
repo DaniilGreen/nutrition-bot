@@ -338,3 +338,55 @@ async def test_непонятный_ответ_не_съедает_чернов�
                           headers=_hdr())).json()
     assert r["kind"] == "unknown"
     assert "размером" in r["message"] or "граммами" in r["message"]
+
+
+async def _logged(c, fake_container):
+    fake_container.nlu = StubNlu(_meal("грудка", "chicken", 200, 165))
+    r = (await c.post("/api/meals", json={"text": "грудка 200 г"}, headers=_hdr())).json()
+    return r["meal"]
+
+
+async def test_правка_граммовки_масштабирует_снапшот(client, fake_container):
+    """MA-INV-22: правка достижима из ленты. INV-3: снапшот масштабируется,
+    а НЕ пересчитывается из каталога."""
+    async with client as c:
+        m = await _logged(c, fake_container)
+        item = m["items"][0]
+        before = item["kcal"]
+        r = (await c.patch(f"/api/meals/{m['id']}/items/{item['id']}",
+                           json={"grams": 100}, headers=_hdr())).json()
+    assert r["item"]["grams"] == 100
+    assert r["old_grams"] == 200
+    assert r["item"]["kcal"] == round(before / 2, 1)     # ровно половина
+    assert r["totals"]["kcal"] == r["item"]["kcal"]
+
+
+async def test_правка_чужой_позиции_404(client, fake_container):
+    async with client as c:
+        m = await _logged(c, fake_container)
+        r = await c.patch(f"/api/meals/{m['id']}/items/99999",
+                          json={"grams": 100}, headers=_hdr())
+    assert r.status_code == 404
+
+
+async def test_правка_в_чужом_приёме_404(client, fake_container):
+    async with client as c:
+        m = await _logged(c, fake_container)
+        r = await c.patch(f"/api/meals/99999/items/{m['items'][0]['id']}",
+                          json={"grams": 100}, headers=_hdr())
+    assert r.status_code == 404
+
+
+@pytest.mark.parametrize("body", [{}, {"grams": 0}, {"grams": -5},
+                                  {"grams": 99999}, {"grams": "много"}])
+async def test_негодный_вес_400(client, fake_container, body):
+    async with client as c:
+        m = await _logged(c, fake_container)
+        r = await c.patch(f"/api/meals/{m['id']}/items/{m['items'][0]['id']}",
+                          json=body, headers=_hdr())
+    assert r.status_code == 400
+
+
+async def test_правка_требует_подписи(client):
+    async with client as c:
+        assert (await c.patch("/api/meals/1/items/1", json={"grams": 100})).status_code == 401

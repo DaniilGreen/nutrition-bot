@@ -232,12 +232,19 @@
         '</button>';
       if (!opened) return head;
       var items = m.items.map(function (i) {
-        return '<div class="row">' +
+        /* MA-INV-22: после ухода карточки «Записал» правка обязана быть
+           достижима отсюда — иначе «пишем сразу» превращается в
+           «записал мусор навсегда». Стейтед-позиции без веса не правим:
+           масштабировать не от чего. */
+        var editing = state.editItem === i.id;
+        var can = i.grams > 0;
+        return '<div class="row"' + (can ? ' data-item="' + i.id + '" data-meal="' + m.id +
+               '" style="cursor:pointer"' : '') + '>' +
           '<span style="flex-grow:1">' + esc(i.name) +
             (i.is_estimate ? ' <span style="color:var(--text-faint)">≈</span>' : '') + '</span>' +
           '<span class="num g">' + n(i.grams) + ' г</span>' +
           '<span class="num" style="width:52px;text-align:right">' + n(i.kcal) + '</span>' +
-        '</div>';
+        '</div>' + (editing ? gramsEditor(m.id, i) : '');
       }).join('');
       var macros = '<div class="row" style="border-top:1px solid var(--separator);margin-top:4px;padding-top:8px">' +
         '<span style="flex-grow:1">Б ' + n(m.protein_g) + ' · Ж ' + n(m.fat_g) + ' · У ' + n(m.carb_g) + '</span></div>';
@@ -248,6 +255,36 @@
     }).join('');
     return '<section class="card" style="margin-top:var(--s-3)">' +
            '<div class="cap" style="margin-bottom:var(--s-2)">Съедено</div>' + rows + '</section>';
+  }
+
+  function gramsEditor(mealId, item) {
+    return '<div class="composer" style="margin:6px 0 10px">' +
+      '<input id="newg" type="number" inputmode="numeric" min="1" max="5000" ' +
+        'value="' + n(item.grams) + '" ' +
+        'style="flex-grow:1;background:none;border:0;color:var(--text);font:inherit;' +
+        'outline:none;min-width:0"> ' +
+      '<span class="mic" style="margin-right:6px">г</span>' +
+      '<button data-save-g="' + item.id + '" data-save-m="' + mealId + '" ' +
+        'aria-label="Сохранить вес">' +
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+        'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<path d="M20 6L9 17l-5-5"/></svg></button></div>';
+  }
+
+  function saveGrams(mealId, itemId) {
+    var el = document.getElementById('newg');
+    var v = (el && el.value || '').trim();
+    if (!v) return;
+    state.editItem = null;
+    loading();
+    send('/api/meals/' + mealId + '/items/' + itemId, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grams: Number(v) })
+    }).then(function (r) {
+      toast('Было ' + n(r.old_grams) + ' г, стало ' + n(r.item.grams) + ' г.');
+      renderDay();
+    }).catch(function (e) { toast(e.message, true); renderDay(); });
   }
 
   /* ── экраны ──────────────────────────────────────────────────────────── */
@@ -1009,6 +1046,15 @@
   });
 
   root.addEventListener('click', function (e) {
+    /* Тап по позиции раскрывает правку веса. Ловим до поиска кнопки: строка
+       позиции — не кнопка, иначе она была бы вложенной в кнопку приёма. */
+    var row = e.target.closest('.row[data-item]');
+    if (row && !e.target.closest('.composer')) {
+      var id = Number(row.dataset.item);
+      state.editItem = state.editItem === id ? null : id;
+      return renderDay();
+    }
+
     var b = e.target.closest('button');
     if (!b) return;
 
@@ -1086,6 +1132,9 @@
     }
     if (b.dataset.merge != null) return doMerge(Number(b.dataset.merge));
 
+    if (b.dataset.saveG) {
+      return saveGrams(Number(b.dataset.saveM), Number(b.dataset.saveG));
+    }
     if (b.dataset.grams) {
       var gi = document.getElementById('grams');
       var grams = (gi && gi.value || '').trim();

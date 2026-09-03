@@ -229,6 +229,41 @@ class MealService:
         )
         return await self._meals.add(meal)
 
+    async def adjust_item(
+        self, user: User, meal_id: int, item_id: int, new_grams: float
+    ) -> tuple[MealItem, float] | None:
+        """Поправить вес конкретной позиции (MA-INV-22: правка достижима после
+        ухода карточки «Записал»).
+
+        Отдельно от `adjust_item_by_name`: там цель ищется нечётким совпадением
+        по последним приёмам, здесь она названа точно — и промахнуться нельзя.
+        """
+        user_id = _require_id(user)
+        new_grams = round(clamp_grams(new_grams), 1)
+        meal = await self._meals.get(user_id, meal_id)
+        if meal is None:
+            return None
+        item = next((i for i in meal.items if i.id == item_id), None)
+        # Стейтед-позицию без веса масштабировать не от чего: доли нет.
+        if item is None or not item.grams or item.grams <= 0:
+            return None
+        # Прежний вес забираем ДО записи: репозиторий может обновить тот же
+        # объект, и после вызова item.grams уже новый.
+        old_grams = item.grams
+        new_macros = _scaled(item, new_grams)
+        await self._meals.update_item(
+            user_id, meal_id, item_id, grams=new_grams, macros=new_macros
+        )
+        updated = MealItem(
+            name_snapshot=item.name_snapshot,
+            grams=new_grams,
+            macros=new_macros,
+            product_id=item.product_id,
+            is_estimate=item.is_estimate,
+            id=item.id,
+        )
+        return updated, old_grams
+
     async def get(self, user: User, meal_id: int) -> Meal | None:
         """Приём по идентификатору, только свой."""
         return await self._meals.get(_require_id(user), meal_id)
@@ -268,14 +303,8 @@ class MealService:
             for item in meal.items:
                 if _name_matches(name, item.name_snapshot) and item.grams and item.grams > 0:
                     assert meal.id is not None and item.id is not None
-                    factor = new_grams / item.grams
-                    old_grams, m = item.grams, item.macros
-                    new_macros = Macros(
-                        round(m.kcal * factor, 1),
-                        round(m.protein * factor, 1),
-                        round(m.fat * factor, 1),
-                        round(m.carb * factor, 1),
-                    )
+                    old_grams = item.grams
+                    new_macros = _scaled(item, new_grams)
                     await self._meals.update_item(
                         user_id, meal.id, item.id, grams=new_grams, macros=new_macros
                     )
@@ -452,6 +481,22 @@ def order_options_by_history(options: list[str], recent_names: list[str]) -> lis
         return (1, options.index(opt))  # не встречался → после, в LLM-порядке
 
     return sorted(options, key=rank)
+
+
+def _scaled(item: MealItem, new_grams: float) -> Macros:
+    """Снапшот масштабируется пропорционально, а НЕ пересчитывается из каталога.
+
+    INV-3: съеденное вчера не должно поехать от того, что сегодня поправили
+    плотность продукта. Правим вес — двигаем только его долю.
+    """
+    factor = new_grams / item.grams
+    m = item.macros
+    return Macros(
+        round(m.kcal * factor, 1),
+        round(m.protein * factor, 1),
+        round(m.fat * factor, 1),
+        round(m.carb * factor, 1),
+    )
 
 
 def _require_id(user: User) -> int:
