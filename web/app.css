@@ -30,8 +30,12 @@ body{
 /* ── шапка ───────────────────────────────────────────────────────────── */
 header{display:flex;align-items:center;gap:var(--s-2);padding:var(--s-1) var(--s-1) var(--s-4)}
 header h1{flex-grow:1;font-size:var(--f-t2);font-weight:700;letter-spacing:-.4px;margin:0}
-.iconbtn{background:none;border:0;padding:8px;margin:-8px;color:var(--text-muted);cursor:pointer;
+.iconbtn{background:none;border:0;padding:8px;color:var(--text-muted);cursor:pointer;
   min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:center}
+/* Стрелки дня — в ряд. Без этого контейнер остаётся инлайновым, а .iconbtn
+   внутри — блочными флексами, и кнопки встают в столбик. */
+#nav-day{display:flex;align-items:center;margin-right:var(--s-1)}
+.iconbtn:disabled{opacity:.3}
 
 /* ── верхняя панель Е: два «осталось» с барами ───────────────────────── */
 .hero{display:grid;grid-template-columns:1fr 1fr;gap:var(--s-5)}
