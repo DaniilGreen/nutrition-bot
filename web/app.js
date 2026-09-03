@@ -47,7 +47,11 @@
       .then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (body) {
           if (r.ok) return body;
-          var err = (body.detail && body.detail.error) || {};
+          /* Конверт §7.4 лежит на верхнем уровне: {"error": {...}}. Раньше
+             читалось body.detail.error — форма, которой сервер не отдаёт с
+             тех пор, как конверт свели к одному. Из-за этого КАЖДАЯ ошибка
+             показывалась как «Сервер ответил N», а ветки по коду молчали. */
+          var err = body.error || (body.detail && body.detail.error) || {};
           var e = new Error(err.message || 'Сервер ответил ' + r.status);
           e.code = err.code;
           throw e;
@@ -64,7 +68,7 @@
     return fetch(path, o).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (body) {
         if (r.ok) return body;
-        var err = (body.detail && body.detail.error) || {};
+        var err = body.error || (body.detail && body.detail.error) || {};
         var e = new Error(err.message || 'Сервер ответил ' + r.status);
         e.code = err.code;
         throw e;
@@ -1231,6 +1235,15 @@
       var d = res.delta_kg;
       toast('Вес ' + n(res.weight_kg, 1) + ' кг' +
             (d ? ' · ' + (d > 0 ? '+' : '') + n(d, 1) + ' кг' : ''));
+    } else if (res.kind === 'item_removed') {
+      /* Коррекция сработала и база изменилась — красный «Не понял» здесь
+         заставлял повторять команду поверх уже выполненной. */
+      toast('Убрал: ' + (res.names || []).join(', ') + '.');
+    } else if (res.kind === 'item_adjusted') {
+      toast(res.name + ': было ' + n(res.old_grams) + ' г, стало ' +
+            n(res.grams) + ' г.');
+    } else if (res.kind === 'correction_failed') {
+      toast(res.message, true);
     } else if (res.kind === 'stats') {
       toast('Это вопрос, а не запись — цифры сверху обновлены.');
     } else {
