@@ -286,3 +286,21 @@ nav button[aria-current="page"]{color:var(--accent)}
 
 /* Видимый фокус: outline:none стоит на полях, а замена была не везде. */
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ── экран AI ─────────────────────────────────────────────────────────────
+   Бюджет — узкая строка сверху: это рамка разговора, а не его итог.
+   Поле ввода липнет к низу, как в чате: тянуться к нему через экран не надо. */
+.budgetbar{display:flex;align-items:center;gap:var(--s-3);
+  padding:var(--s-2) var(--s-4);background:var(--surface);border-radius:var(--r-pill);
+  margin-bottom:var(--s-3)}
+.budgetbar .budget{flex-grow:1;margin:0}
+.budgetbar .num{flex-shrink:0;white-space:nowrap}
+/* Ввод закреплён над вкладками, а не идёт следом за перепиской: в длинном
+   диалоге к нему пришлось бы прокручивать, в коротком он висел посреди
+   пустоты. sticky здесь не годится — он держит элемент только пока тот
+   упирается в край потока. */
+.composer.ask{position:fixed;left:var(--s-4);right:var(--s-4);z-index:5;
+  bottom:calc(var(--tabbar) + var(--s-3) + env(safe-area-inset-bottom));
+  background:var(--surface-2);box-shadow:0 6px 20px rgba(0,0,0,.5)}
+/* Место под него, чтобы последнее сообщение не пряталось под полем. */
+body.ai{padding-bottom:calc(var(--tabbar) + 76px + env(safe-area-inset-bottom))}

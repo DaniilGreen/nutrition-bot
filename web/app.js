@@ -1082,24 +1082,30 @@
         return '<button class="chip" data-ask="' + esc(q) + '">' + esc(q) + '</button>';
       }).join('') + '</div>';
     var b = state.budget;
+    /* Бюджет наверху узкой строкой: это рамка разговора, её смотрят до
+       вопроса, а не после ответа. Внизу он отжимал поле ввода от края. */
     var budget = !b ? '' :
-      '<section class="card" style="margin-top:var(--s-3)">' +
-        '<div class="mic">Бюджет ассистента на месяц</div>' +
+      '<div class="budgetbar">' +
+        '<span class="mic">Бюджет ассистента</span>' +
         '<div class="budget"><i style="width:' + pct(b.spent_usd, b.limit_usd) + '%"></i></div>' +
-        '<div class="mic" style="margin-top:6px">$' + n(b.spent_usd, 2) + ' из $' +
-          n(b.limit_usd, 2) + (b.available ? '' : ' · не настроен ключ') + '</div></section>';
-    show('<section class="card">' +
+        '<span class="mic num">$' + n(b.spent_usd, 2) + ' из $' + n(b.limit_usd, 2) +
+        (b.available ? '' : ' · нет ключа') + '</span></div>';
+
+    /* Поле ввода последним и прижато к низу: разговор идёт снизу вверх, как
+       в любом чате, и рука не тянется через весь экран. */
+    show(budget +
+         '<section class="card">' +
            '<div class="cap">Спроси про свои данные</div>' +
            '<div class="mic" style="margin-top:6px;line-height:1.5">' +
              'Ассистент видит только твои цифры за 30 дней. Он не врач и не ставит диагнозов.' +
            '</div>' + sug + '</section>' +
          chat +
-         '<div class="composer"><input id="ask" type="text" placeholder="Вопрос">' +
+         '<div class="composer ask"><input id="ask" type="text" ' +
+           'placeholder="Спроси про свои цифры">' +
            '<button id="send" aria-label="Отправить">' +
            '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
            'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-           '<path d="M5 12h13M13 6l6 6-6 6"/></svg></button></div>' +
-         budget);
+           '<path d="M5 12h13M13 6l6 6-6 6"/></svg></button></div>');
     if (!state.budget) {
       api('/api/coach/budget').then(function (d) { state.budget = d; renderAi(); })
         .catch(function () {});
@@ -1126,6 +1132,9 @@
   }
 
   function render() {
+    /* Класс на body: только на вкладке AI ввод закреплён снизу, и только там
+       нужен запас места под ним. */
+    document.body.classList.toggle('ai', state.tab === 'ai');
     document.getElementById('nav-day').classList.toggle('hidden', state.tab !== 'day');
     document.getElementById('gear').setAttribute('aria-pressed', state.tab === 'set');
     if (state.tab === 'set') return renderSettings();
