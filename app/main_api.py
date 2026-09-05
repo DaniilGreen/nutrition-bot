@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -14,7 +15,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -112,6 +113,41 @@ async def unexpected(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(
         status_code=500,
         content={"error": {"code": "internal", "message": "Что-то сломалось. Попробуй ещё раз."}},
+    )
+
+
+def asset_version() -> str:
+    """Отпечаток статики: меняется ровно тогда, когда меняется её содержимое.
+
+    Telegram-клиент кэширует мини-апп жёстче обычного браузера и на голый
+    `/app.js` может не сходить неделями: 05.09.2026 выкатили новый экран и
+    камеру, а на телефоне остался старый — «моргает и фото нет» при полностью
+    верном файле на сервере. Одинаковый URL нечем отличить от вчерашнего,
+    поэтому URL меняем вместе с файлом.
+    """
+    digest = hashlib.sha256()
+    for name in ("app.js", "app.css"):
+        path = WEB_DIR / name
+        if path.is_file():
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:10]
+
+
+def index_html(version: str, source: str) -> str:
+    """Подставить версию в ссылки на статику. Отдельной функцией — чтобы
+    проверялось тестом: молча не подставившаяся версия выглядит как рабочая."""
+    return (source.replace('href="/app.css"', f'href="/app.css?v={version}"')
+                  .replace('src="/app.js"', f'src="/app.js?v={version}"'))
+
+
+@app.get("/", include_in_schema=False)
+async def index() -> HTMLResponse:
+    """Точка входа аппки. Сама страница НЕ кэшируется никогда — иначе версия
+    внутри неё замёрзнет вместе с ней и весь смысл отпечатка пропадёт."""
+    source = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    return HTMLResponse(
+        index_html(asset_version(), source),
+        headers={"Cache-Control": "no-store, must-revalidate"},
     )
 
 
