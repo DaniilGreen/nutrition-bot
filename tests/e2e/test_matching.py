@@ -171,6 +171,31 @@ async def test_specific_user_name_survives_curated_match() -> None:
     assert await products.all_keys() == ["gold_standard_whey"]  # дубль не создан
 
 
+async def test_чужой_бренд_не_берёт_плотность_каталожного() -> None:
+    """Модель отдала ключ каталожного продукта, но имя назвала ЧЕСТНО, своё.
+
+    Это вторая половина бага #30 и куда дороже имени: если бы приложение поверило
+    ключу, разные протеины поделили бы одну плотность и одну строку каталога —
+    исправишь одну запись, поедут все (INV-4: ключ и есть идентичность).
+    """
+    assistant, users, products = _build(
+        StubNlu(_item("Optimum Nutrition Whey Protein Double Rich Chocolate",
+                      "gold_standard_whey", 375, 76))
+    )
+    await products.create(_gs_product())
+    user = await _new_user(users)
+
+    result = await assistant.process(user, "Optimum Nutrition Whey Protein 100 г")
+
+    assert isinstance(result, MealLogged)
+    item = result.meal.items[0]
+    assert item.name_snapshot == "Optimum Nutrition Whey Protein Double Rich Chocolate"
+    # Плотность своя (375), а не каталожная (395): чужой ключ идентичность не даёт.
+    assert item.macros.kcal == 375.0
+    keys = await products.all_keys()
+    assert sorted(keys) == ["gold_standard_whey", "gold_standard_whey_2"]
+
+
 async def test_loose_user_name_replaced_by_clean_catalog_name() -> None:
     """Обратная сторона: если ввод БЕДНЕЕ каталожного имени, показываем каталожное.
 
