@@ -84,6 +84,10 @@ jobs:
           git reset --hard --quiet origin/main   # деплой = точная копия main
           docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
           docker image prune -f >/dev/null       # 10 ГБ диска: старые слои иначе забьют его
+          # Кэш сборки `image prune` не трогает, а он растёт ~120 МБ за деплой:
+          # шесть деплоев за 05.09.2026 дали 739 МБ и загнали диск в 96%.
+          # Не чистим догола — на нём держится тридцатисекундный деплой; держим потолок.
+          docker builder prune -f --keep-storage=512MB >/dev/null 2>&1 || true
           REMOTE
 
       - name: verify
