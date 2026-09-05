@@ -1,6 +1,8 @@
 """Флагманские панели §4.0/§3.3/§3.5: сверка с весами, вклады, точность."""
 from __future__ import annotations
 
+from uuid import uuid4
+
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -27,8 +29,9 @@ def client(fake_container):
     )
 
 
-def _hdr():
-    return {"X-Telegram-Init-Data": valid()}
+def _hdr(**extra):
+    # Ключ записи обязателен (§7.5): свежий на каждый запрос, если тест не задал свой.
+    return {"X-Telegram-Init-Data": valid(), "Idempotency-Key": uuid4().hex, **extra}
 
 
 def _noon(days_ago: int = 0) -> datetime:

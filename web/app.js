@@ -821,10 +821,12 @@
     var el = document.getElementById('wkg');
     var v = (el && el.value || '').trim();
     if (!v) return;
+    var wid = 'weight:' + v;
     send('/api/weight', {
-      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newKey() },
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': keyFor(wid) },
       body: JSON.stringify({ weight_kg: Number(v) })
     }).then(function (r) {
+      dropKey(wid);
       var d = r.delta_kg;
       toast('Записал ' + n(r.weight_kg, 1) + ' кг' +
             (d ? ' · ' + (d > 0 ? '+' : '') + n(d, 1) + ' кг' : ''));
@@ -1422,6 +1424,28 @@
     return String(Date.now()) + '-' + Math.random().toString(36).slice(2);
   }
 
+  /* Ключ выдаётся на ДЕЙСТВИЕ, а не на клик (§7.5). Ключ, созданный при
+     отправке, у двух кликов разный — и защита не срабатывает: так двойной тап
+     по чипу писал два приёма и удваивал калории. Держим по ключу на дело
+     («этот продукт этой граммовкой», «повтор этого приёма»); после успешной
+     записи ключ снимаем, иначе осознанная вторая порция не запишется. */
+  function keyFor(id) {
+    if (!state.keys) state.keys = {};
+    if (!state.keys[id]) state.keys[id] = newKey();
+    return state.keys[id];
+  }
+
+  function dropKey(id) {
+    if (state.keys) delete state.keys[id];
+  }
+
+  /* 409 in_flight значит «первый запрос ещё идёт» — это не сбой, и говорить о
+     нём человеку нечего: кнопка и так в состоянии «пишу». */
+  function oops(e) {
+    if (e && e.code === 'in_flight') return;
+    toast(e.message, true);
+  }
+
   function submitText() {
     var inp = document.getElementById('say');
     var text = (inp && inp.value || '').trim();
@@ -1429,8 +1453,7 @@
     state.sending = true;
     /* Ключ фиксируем на попытку, а не на запрос: если сеть отвалилась и человек
        нажал ещё раз, сервер вернёт первый ответ вместо второй записи. */
-    var key = state.retryKey || newKey();
-    state.retryKey = key;
+    var key = keyFor('text');
     inp.value = '';
     inp.blur();
     busy('Записываю…');
@@ -1439,7 +1462,7 @@
       body: JSON.stringify({ text: text, days_ago: writeDay() })
     }).then(function (r) {
       state.text = '';
-      state.retryKey = null;
+      dropKey('text');
       return handle(r);
     }).catch(function (e) {
       /* Текст НЕ теряем: пропавшая фраза — это непоставленная запись, а
@@ -1483,13 +1506,14 @@
       send('/api/meals/label?days_ago=' + writeDay(), {
         headers: {
           'Content-Type': blob.type || 'image/jpeg',
-          'Idempotency-Key': newKey()
+          'Idempotency-Key': keyFor('label')
         },
         body: blob
-      }).then(handle).catch(function (e) {
-        toast(e.message, true);
-        renderDay();
-      }).then(function () { state.sending = false; });
+      }).then(function (r) { dropKey('label'); return handle(r); })
+        .catch(function (e) {
+          oops(e);
+          renderDay();
+        }).then(function () { state.sending = false; });
     });
   }
 
@@ -1543,10 +1567,13 @@
            индикатор через пару сотен миллисекунд. Именно это и выглядело
            дёрганьем — экран дважды перерисовывался за одну запись. */
         busy('Расшифровываю…');
+        /* Ключ на запись, а не на отправку: ретрай после оборванной сети
+           должен прийти с тем же — иначе одна и та же фраза ляжет дважды. */
         send('/api/meals/voice?days_ago=' + writeDay(), {
-          headers: { 'Content-Type': blob.type, 'Idempotency-Key': newKey() },
+          headers: { 'Content-Type': blob.type, 'Idempotency-Key': keyFor('voice') },
           body: blob
-        }).then(handle).catch(function (e) { toast(e.message, true); renderDay(); });
+        }).then(function (r) { dropKey('voice'); return handle(r); })
+          .catch(function (e) { oops(e); renderDay(); });
       };
       recorder.start();
       state.recording = true;
@@ -1603,10 +1630,15 @@
     if (b.id === 'sendtext') return submitText();
     if (b.id === 'mic') return state.recording ? stopRec() : startRec();
     if (b.dataset.repeat) {
+      if (state.sending) return;
+      state.sending = true;
       busy('Записываю…');
+      var rid = 'repeat:' + b.dataset.repeat;
       return send('/api/meals/' + b.dataset.repeat + '/repeat?days_ago=' + writeDay(),
-                  { headers: { 'Idempotency-Key': newKey() } })
-        .then(handle).catch(function (err) { toast(err.message, true); renderDay(); });
+                  { headers: { 'Idempotency-Key': keyFor(rid) } })
+        .then(function (r) { dropKey(rid); return handle(r); })
+        .catch(function (err) { oops(err); renderDay(); })
+        .then(function () { state.sending = false; });
     }
     if (b.dataset.drop) {
       var did = b.dataset.drop;
@@ -1618,10 +1650,13 @@
       });
     }
     if (b.dataset.quick) {
+      if (state.sending) return;
+      state.sending = true;
       busy('Записываю…');
       var stay = state.tab === 'ai' || state.tab === 'cat';
+      var qid = 'quick:' + b.dataset.quick + ':' + b.dataset.grams;
       return send('/api/meals/quick', {
-        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newKey() },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': keyFor(qid) },
         body: JSON.stringify({ product_id: Number(b.dataset.quick),
                                grams: Number(b.dataset.grams),
                                days_ago: writeDay() })
@@ -1631,15 +1666,16 @@
         /* С вкладок AI и «Продукты» не уводим на «День»: человек читает ответ
            или листает каталог и может записать ещё. Уход туда стоил лишнего
            тапа на каждый следующий продукт и рассинхронивал подсветку вкладки. */
+        dropKey(qid);
         if (stay) {
           toast(r.meal ? 'Записал ' + n(r.meal.kcal) + ' ккал.' : 'Готово.');
           return render();
         }
         return handle(r);
       }).catch(function (err) {
-        toast(err.message, true);
+        oops(err);
         return stay ? render() : renderDay();
-      });
+      }).then(function () { state.sending = false; });
     }
     if (b.dataset.say) {
       var inp = document.getElementById('say');
@@ -1649,10 +1685,13 @@
     }
     if (b.dataset.undo) {
       var id = b.dataset.undo;
+      if (state.sending) return;
+      state.sending = true;
       busy('Отменяю…');
       return send('/api/meals/' + id, { method: 'DELETE' })
         .then(function () { state.justLogged = null; toast('Отменил.'); renderDay(); })
-        .catch(function (err) { toast(err.message, true); renderDay(); });
+        .catch(function (err) { oops(err); renderDay(); })
+        .then(function () { state.sending = false; });
     }
     /* ── каталог ─────────────────────────────────────────────────────── */
     if (b.dataset.product) {

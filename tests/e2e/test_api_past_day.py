@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+from uuid import uuid4
+
 import httpx
 import pytest
 
@@ -41,8 +43,9 @@ def client(fake_container):
     )
 
 
-def _hdr():
-    return {"X-Telegram-Init-Data": valid()}
+def _hdr(**extra):
+    # Ключ записи обязателен (§7.5): свежий на каждый запрос, если тест не задал свой.
+    return {"X-Telegram-Init-Data": valid(), "Idempotency-Key": uuid4().hex, **extra}
 
 
 async def _day(c, days_ago: int) -> dict:

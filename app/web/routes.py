@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -112,18 +114,17 @@ async def day(
 @router.post("/meals")
 async def log_meal(
     body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant, request: Request,
-    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    idem: CurrentIdem,
 ) -> dict[str, Any]:
     """Записать приём текстом (§7.2). Разбор и подсчёт — в application (INV-1)."""
+    if idem.replay is not None:
+        return idem.replay
     text = str(body.get("text") or "").strip()
     if not text:
         raise bad_request("empty_text", "Нечего записывать.")
     if len(text) > 1000:
         raise bad_request("text_too_long", "Слишком длинно — раздели на два сообщения.")
 
-    replay = _replay(request, user, idempotency_key)
-    if replay is not None:
-        return replay
     _throttle(request, user, "meals", limit=20, window=60)
 
     offset = _day_offset(body.get("days_ago"))
@@ -131,13 +132,13 @@ async def log_meal(
         user, text, input_type=body.get("input_type") or "text", day_offset=offset
     )
     out = _result_json(result, user, request, raw_input=text, day_offset=offset)
-    return _remember(request, user, idempotency_key, out)
+    return idem.remember(out)
 
 
 @router.post("/meals/quick")
 async def log_quick(
     body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant, request: Request,
-    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    idem: CurrentIdem,
 ) -> dict[str, Any]:
     """Запись тапом по «частому»: без модели, мгновенно (AC-MA-31).
 
@@ -151,14 +152,13 @@ async def log_quick(
         raise bad_request("bad_quick", "Нужны product_id и grams.") from exc
     if not 0 < grams <= 5000:
         raise bad_request("bad_grams", "Вес вне разумных пределов.")
-    replay = _replay(request, user, idempotency_key)
-    if replay is not None:
-        return replay
+    if idem.replay is not None:
+        return idem.replay
     result = await assistant.log_quick(
         user, product_id, grams, day_offset=_day_offset(body.get("days_ago"))
     )
     out = _result_json(result, user, request, raw_input="")
-    return _remember(request, user, idempotency_key, out)
+    return idem.remember(out)
 
 
 @router.post("/meals/clarify")
@@ -221,8 +221,7 @@ async def clarify(
 
 @router.post("/meals/voice")
 async def log_voice(
-    request: Request, user: CurrentUser, assistant: CurrentAssistant,
-    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request: Request, user: CurrentUser, assistant: CurrentAssistant, idem: CurrentIdem,
 ) -> dict[str, Any]:
     """Голос сырым телом, без multipart: пакета `python-multipart` в проекте нет,
     а ради одного поля тянуть зависимость незачем (§7.2)."""
@@ -236,9 +235,8 @@ async def log_voice(
     # Ключ обязателен по смыслу: голос — самый дорогой путь записи, и повтор
     # после таймаута сети писал бы второй приём. Раньше фронт ключ слал, а
     # обработчик его не принимал — защита существовала только на бумаге.
-    replay = _replay(request, user, idempotency_key)
-    if replay is not None:
-        return replay
+    if idem.replay is not None:
+        return idem.replay
     _throttle(request, user, "voice", limit=10, window=60)
     # Имя файла берём из типа: Whisper выбирает парсер по расширению, и
     # запись Safari (mp4), названная «voice.ogg», не распознавалась вовсе.
@@ -253,13 +251,12 @@ async def log_voice(
         **_result_json(result, user, request, raw_input=text, day_offset=offset),
         "transcript": text,
     }
-    return _remember(request, user, idempotency_key, out)
+    return idem.remember(out)
 
 
 @router.post("/meals/label")
 async def log_label(
-    request: Request, user: CurrentUser, assistant: CurrentAssistant,
-    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    request: Request, user: CurrentUser, assistant: CurrentAssistant, idem: CurrentIdem,
 ) -> dict[str, Any]:
     """FR-27: фото этикетки → КБЖУ/100 г → вопрос о весе порции.
 
@@ -274,9 +271,8 @@ async def log_label(
         # четырёх мегабайт, — это неужатый оригинал, и платить за его разбор
         # незачем: таблица КБЖУ читается и с меньшего.
         raise bad_request("image_too_big", "Слишком большое фото — сними ближе.")
-    replay = _replay(request, user, idempotency_key)
-    if replay is not None:
-        return replay
+    if idem.replay is not None:
+        return idem.replay
     # Vision — самый дорогой вызов в проекте, дороже голоса: лимит строже.
     _throttle(request, user, "label", limit=6, window=60)
     result = await assistant.read_label(user, image)
@@ -290,7 +286,7 @@ async def log_label(
         )
     else:
         out = _result_json(result, user, request, raw_input="этикетка")
-    return _remember(request, user, idempotency_key, out)
+    return idem.remember(out)
 
 
 def _label_json(
@@ -492,7 +488,7 @@ async def adjust_item(
 @router.post("/weight")
 async def log_weight(
     body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant, request: Request,
-    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    idem: CurrentIdem,
 ) -> dict[str, Any]:
     """Запись веса одним полем, без модели (§8.3).
 
@@ -504,9 +500,8 @@ async def log_weight(
     except (KeyError, TypeError, ValueError) as exc:
         raise bad_request("bad_weight", "Вес должен быть числом.") from exc
 
-    replay = _replay(request, user, idempotency_key)
-    if replay is not None:
-        return replay
+    if idem.replay is not None:
+        return idem.replay
     try:
         log, delta = await assistant.log_weight(user, kg)
     except ValueError as exc:
@@ -518,7 +513,7 @@ async def log_weight(
         "delta_kg": delta,
         "at": log.measured_at.astimezone(ZoneInfo(user.timezone)).isoformat(),
     }
-    return _remember(request, user, idempotency_key, out)
+    return idem.remember(out)
 
 
 @router.delete("/weight/{log_id}")
@@ -643,7 +638,7 @@ async def frequent(
 @router.post("/meals/{meal_id}/repeat")
 async def repeat(
     meal_id: int, user: CurrentUser, assistant: CurrentAssistant, request: Request,
-    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    idem: CurrentIdem,
 ) -> dict[str, Any]:
     """Повторить приём одним тапом: тот же состав, тот же вес, текущее время.
 
@@ -651,15 +646,14 @@ async def repeat(
     обязан совпасть с оригиналом до грамма. Если каталог с тех пор поправили,
     повтор всё равно повторяет то, что было съедено, а не то, что стало в базе.
     """
-    replay = _replay(request, user, idempotency_key)
-    if replay is not None:
-        return replay
+    if idem.replay is not None:
+        return idem.replay
     result = await assistant.repeat_meal(
         user, meal_id, day_offset=_day_offset(request.query_params.get("days_ago"))
     )
     if result is None:
         raise not_found("meal_not_found", "Приём не найден — возможно, его удалили.")
-    return _remember(request, user, idempotency_key, logged_json(result, user.timezone))
+    return idem.remember(logged_json(result, user.timezone))
 
 
 @router.get("/products")
@@ -998,24 +992,61 @@ def _uid(user: User) -> int:
     return user.id
 
 
-def _replay(request: Request, user: User, key: str | None) -> dict[str, Any] | None:
-    """Повтор с тем же `Idempotency-Key` возвращает первый ответ, а не пишет заново.
 
-    Двойной тап и ретрай браузера иначе дают два приёма — цифра выглядит
-    правдоподобно и молча врёт вдвое (§7.5).
+
+@dataclass
+class IdemSlot:
+    """Занятый ключ идемпотентности на время одного запроса."""
+
+    store: Any
+    user_id: int
+    key: str
+    replay: dict[str, Any] | None = None
+
+    def remember(self, response: dict[str, Any]) -> dict[str, Any]:
+        self.store.put(self.user_id, self.key, response)
+        return response
+
+
+async def idempotent(
+    request: Request,
+    user: CurrentUser,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> AsyncIterator[IdemSlot]:
+    """MA-INV-10: каждый пишущий POST идемпотентен по `Idempotency-Key` (§7.5).
+
+    Зависимостью, а не проверкой внутри обработчика: пишущих эндпоинтов шесть,
+    и «забыли повесить» здесь стоит удвоенных калорий. Так уже было — голос
+    принимал заголовок в сигнатуре и нигде его не использовал, защита
+    существовала только на бумаге.
+
+    Ключ обязателен: без него двойной тап снова пишет дважды, а молчаливое
+    «работает и так» скрывает дыру до первой удвоенной записи.
     """
-    if not key:
-        return None
-    remembered = request.app.state.idempotency.get(_uid(user), key)
-    return remembered if isinstance(remembered, dict) else None
+    if not idempotency_key:
+        raise bad_request(
+            "no_idempotency_key", "Запрос без ключа записи. Переоткрой аппку."
+        )
+    store = request.app.state.idempotency
+    uid = _uid(user)
+    state = store.claim(uid, idempotency_key)
+    if state == "in_flight":
+        # Первый запрос ещё идёт. Фронт на этот код молчит: кнопка уже «пишет».
+        raise ApiError(409, "in_flight", "Уже записываю.")
+    slot = IdemSlot(store, uid, idempotency_key)
+    if state == "replay":
+        remembered = store.get(uid, idempotency_key)
+        slot.replay = remembered if isinstance(remembered, dict) else None
+    try:
+        yield slot
+    finally:
+        # Обработчик мог упасть или отказать по валидации — ключ обязан
+        # отпуститься, иначе повторить запись нельзя до конца TTL. После
+        # `remember` вызов холостой: ключ уже снят с работы.
+        store.release(uid, idempotency_key)
 
 
-def _remember(
-    request: Request, user: User, key: str | None, response: dict[str, Any]
-) -> dict[str, Any]:
-    if key:
-        request.app.state.idempotency.put(_uid(user), key, response)
-    return response
+CurrentIdem = Annotated[IdemSlot, Depends(idempotent)]
 
 
 def _throttle(request: Request, user: User, bucket: str, *, limit: int, window: float) -> None:
