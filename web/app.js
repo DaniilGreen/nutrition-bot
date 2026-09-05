@@ -1205,7 +1205,10 @@
         '<path d="M4 7h3l1.6-2h6.8L17 7h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/>' +
         '<circle cx="12" cy="13" r="3.4"/></svg></button>' +
       '<input id="say" type="text" inputmode="text" autocomplete="off" ' +
-        'placeholder="Что съел? Или скажи голосом" value="' + esc(state.text || '') + '">' +
+        'placeholder="' + (writeDay()
+          ? esc('Что съел — ' + (state.lastDay ? title(state.lastDay) : 'тот день').toLowerCase() + '?')
+          : 'Что съел? Или скажи голосом') +
+        '" value="' + esc(state.text || '') + '">' +
       (hasText && !rec
         ? '<button id="sendtext" aria-label="Записать">' +
           '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
@@ -1222,6 +1225,12 @@
             '<rect x="9" y="3" width="6" height="11" rx="3"/>' +
             '<path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>') +
       '</button></div>';
+  }
+
+  /* Багрепорт #33: пишем в тот день, который человек видит перед собой. Вне
+     вкладки «День» смотреть не на что — там всегда сегодня. */
+  function writeDay() {
+    return state.tab === 'day' ? (state.daysAgo || 0) : 0;
   }
 
   /* Частое — одна прокручиваемая строка, без «Ещё» (§6.3). Список считает
@@ -1400,7 +1409,8 @@
     } else {
       toast(res.message || 'Не понял, что записать.', true);
     }
-    state.daysAgo = 0;
+    /* Раньше здесь стоял безусловный возврат на сегодня — и запись во вчера
+       мгновенно уводила с того дня, куда только что писали. */
     renderDay();
   }
 
@@ -1426,7 +1436,7 @@
     busy('Записываю…');
     send('/api/meals', {
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
-      body: JSON.stringify({ text: text })
+      body: JSON.stringify({ text: text, days_ago: writeDay() })
     }).then(function (r) {
       state.text = '';
       state.retryKey = null;
@@ -1470,7 +1480,7 @@
     state.sending = true;
     busy('Читаю этикетку…');
     shrink(file, function (blob) {
-      send('/api/meals/label', {
+      send('/api/meals/label?days_ago=' + writeDay(), {
         headers: {
           'Content-Type': blob.type || 'image/jpeg',
           'Idempotency-Key': newKey()
@@ -1533,7 +1543,7 @@
            индикатор через пару сотен миллисекунд. Именно это и выглядело
            дёрганьем — экран дважды перерисовывался за одну запись. */
         busy('Расшифровываю…');
-        send('/api/meals/voice', {
+        send('/api/meals/voice?days_ago=' + writeDay(), {
           headers: { 'Content-Type': blob.type, 'Idempotency-Key': newKey() },
           body: blob
         }).then(handle).catch(function (e) { toast(e.message, true); renderDay(); });
@@ -1594,7 +1604,7 @@
     if (b.id === 'mic') return state.recording ? stopRec() : startRec();
     if (b.dataset.repeat) {
       busy('Записываю…');
-      return send('/api/meals/' + b.dataset.repeat + '/repeat',
+      return send('/api/meals/' + b.dataset.repeat + '/repeat?days_ago=' + writeDay(),
                   { headers: { 'Idempotency-Key': newKey() } })
         .then(handle).catch(function (err) { toast(err.message, true); renderDay(); });
     }
@@ -1613,7 +1623,8 @@
       return send('/api/meals/quick', {
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newKey() },
         body: JSON.stringify({ product_id: Number(b.dataset.quick),
-                               grams: Number(b.dataset.grams) })
+                               grams: Number(b.dataset.grams),
+                               days_ago: writeDay() })
       }).then(function (r) {
         /* С вкладки AI не уводим на «День»: человек читает ответ и может
            записать ещё одно. Достаточно подтвердить тостом. */

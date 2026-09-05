@@ -31,6 +31,10 @@ class Draft:
     # Разные пути: перепутать их значит потерять запись (ответ «300 г» стал бы
     # именем продукта).
     kind: str = "variant"
+    # День, на который человек смотрел, когда начал запись (0 = сегодня, −1 = вчера).
+    # Хранится тут, а не спрашивается у клиента при ответе: пока человек отвечает
+    # на уточнение, он мог пролистать на другой день — и запись уехала бы не туда.
+    day_offset: int = 0
     created_at: float = field(default_factory=time.monotonic)
 
 
@@ -40,7 +44,7 @@ class DraftStore:
 
     def put(
         self, user_id: int, payload: Any, item_index: int, raw_input: str,
-        kind: str = "variant",
+        kind: str = "variant", day_offset: int = 0,
     ) -> str:
         self._sweep()
         if len(self._items) >= MAX_DRAFTS:
@@ -49,7 +53,7 @@ class DraftStore:
             oldest = min(self._items, key=lambda k: self._items[k].created_at)
             del self._items[oldest]
         token = secrets.token_urlsafe(16)
-        self._items[token] = Draft(user_id, payload, item_index, raw_input, kind)
+        self._items[token] = Draft(user_id, payload, item_index, raw_input, kind, day_offset)
         return token
 
     def take(self, token: str, user_id: int) -> Draft | None:

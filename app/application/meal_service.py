@@ -54,7 +54,8 @@ class MealService:
         self._clock = clock
 
     async def log(
-        self, user: User, parsed: ParsedMessage, *, raw_input: str, input_type: str
+        self, user: User, parsed: ParsedMessage, *, raw_input: str, input_type: str,
+        day_offset: int = 0,
     ) -> Meal:
         user_id = _require_id(user)
 
@@ -139,7 +140,9 @@ class MealService:
 
         # FR-33: «вчера»/«завтра» сдвигают ДЕНЬ приёма, время суток берём текущее (владелец: время
         # неважно). Кламп — страховка от галлюцинации LLM (день из будущего/древности).
-        offset = max(-30, min(7, parsed.day_offset))
+        # Слово в тексте старше открытого экрана (`day_offset`): человек, листающий вчерашний
+        # день и сказавший «позавчера», имел в виду позавчера, а не «ещё на день раньше».
+        offset = max(-30, min(7, parsed.day_offset or day_offset))
         meal = Meal(
             user_id=user_id,
             eaten_at=self._clock() + timedelta(days=offset),
@@ -167,7 +170,9 @@ class MealService:
         """Что человек ест чаще всего — для чипов быстрой записи. Без LLM."""
         return await self._meals.frequent_items(user_id, days=days, limit=limit)
 
-    async def repeat(self, user: User, meal_id: int) -> Meal | None:
+    async def repeat(
+        self, user: User, meal_id: int, *, day_offset: int = 0
+    ) -> Meal | None:
         """Тот же приём ещё раз: тот же вес, тот же снапшот КБЖУ, текущее время. Без LLM.
 
         Кейс владельца: снял бутылку пива с этикетки, потом выпил ещё. Копируем снапшот позиций
@@ -181,7 +186,7 @@ class MealService:
         return await self._meals.add(
             Meal(
                 user_id=user_id,
-                eaten_at=self._clock(),
+                eaten_at=self._clock() + timedelta(days=max(-30, min(7, day_offset))),
                 input_type=src.input_type,
                 raw_input=src.raw_input,
                 items=[
@@ -217,7 +222,8 @@ class MealService:
         return await self._meals.estimate_share(user_id, days=days)
 
     async def log_known(
-        self, user: User, product: Product, grams: float, *, raw_input: str
+        self, user: User, product: Product, grams: float, *, raw_input: str,
+        day_offset: int = 0,
     ) -> Meal:
         """Записать известный продукт без обращения к модели (AC-MA-31).
 
@@ -235,7 +241,7 @@ class MealService:
         )
         meal = Meal(
             user_id=_require_id(user),
-            eaten_at=self._clock(),
+            eaten_at=self._clock() + timedelta(days=max(-30, min(7, day_offset))),
             input_type="quick",
             raw_input=raw_input,
             items=[item],

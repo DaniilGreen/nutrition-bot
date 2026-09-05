@@ -51,6 +51,21 @@ from app.web.schemas import (
 router = APIRouter(dependencies=[Depends(current_user)])
 
 
+def _day_offset(value: Any) -> int:
+    """Экран, с которого пишут, → сдвиг дня (`days_ago` 1 → offset −1).
+
+    Багрепорт #33: человек листает вчерашний день, пишет туда — и запись падает
+    в сегодня. Запись обязана попадать в тот день, который человек видит перед
+    собой. Вперёд не пускаем совсем: будущего дня в аппке нет, а отрицательный
+    `days_ago` означал бы запись в завтра по невнимательности клиента.
+    """
+    try:
+        days_ago = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return -max(0, min(30, days_ago))
+
+
 @router.get("/me")
 async def me(user: CurrentUser, assistant: CurrentAssistant) -> dict[str, Any]:
     """Профиль, цель и съеденное за сегодня — всё, что нужно первому экрану (§7.2).
@@ -111,8 +126,11 @@ async def log_meal(
         return replay
     _throttle(request, user, "meals", limit=20, window=60)
 
-    result = await assistant.process(user, text, input_type=body.get("input_type") or "text")
-    out = _result_json(result, user, request, raw_input=text)
+    offset = _day_offset(body.get("days_ago"))
+    result = await assistant.process(
+        user, text, input_type=body.get("input_type") or "text", day_offset=offset
+    )
+    out = _result_json(result, user, request, raw_input=text, day_offset=offset)
     return _remember(request, user, idempotency_key, out)
 
 
@@ -136,7 +154,9 @@ async def log_quick(
     replay = _replay(request, user, idempotency_key)
     if replay is not None:
         return replay
-    result = await assistant.log_quick(user, product_id, grams)
+    result = await assistant.log_quick(
+        user, product_id, grams, day_offset=_day_offset(body.get("days_ago"))
+    )
     out = _result_json(result, user, request, raw_input="")
     return _remember(request, user, idempotency_key, out)
 
@@ -170,26 +190,33 @@ async def clarify(
             # Черновик одноразовый: не разобрали вес — кладём обратно и
             # спрашиваем ещё раз. Иначе непонятый ответ стоил бы фотографии.
             token = request.app.state.drafts.put(
-                _uid(user), draft.payload, draft.item_index, draft.raw_input, "label"
+                _uid(user), draft.payload, draft.item_index, draft.raw_input, "label",
+                draft.day_offset,
             )
             return _label_json(draft.payload, draft.item_index, token, hint=True)
         item.grams = grams
         item.unit = Unit.GRAM
         result = await assistant.continue_meal(
-            user, draft.payload, raw_input=draft.raw_input
+            user, draft.payload, raw_input=draft.raw_input, day_offset=draft.day_offset
         )
     elif draft.kind == "portion":
         # Не хватало веса. Ответ — это вес, а не имя: дописываем его к позиции
         # и продолжаем запись. Пропустить это через resolve_clarification
         # значило бы записать «300 г» как название продукта.
         result = await assistant.answer_portion(
-            user, draft.payload, draft.item_index, answer, raw_input=draft.raw_input
+            user, draft.payload, draft.item_index, answer,
+            raw_input=draft.raw_input, day_offset=draft.day_offset,
         )
     else:
         result = await assistant.resolve_clarification(
-            user, draft.payload, draft.item_index, answer, raw_input=draft.raw_input
+            user, draft.payload, draft.item_index, answer,
+            raw_input=draft.raw_input, day_offset=draft.day_offset,
         )
-    return _result_json(result, user, request, raw_input=draft.raw_input)
+    # День берётся из черновика, а не из текущего запроса: человек мог уйти на
+    # другой экран, пока отвечал, и запись уехала бы не туда, куда собирался.
+    return _result_json(
+        result, user, request, raw_input=draft.raw_input, day_offset=draft.day_offset
+    )
 
 
 @router.post("/meals/voice")
@@ -220,8 +247,12 @@ async def log_voice(
     )
     if not text:
         raise unavailable("stt_off", "Распознавание голоса недоступно.")
-    result = await assistant.process(user, text, input_type="voice")
-    out = {**_result_json(result, user, request, raw_input=text), "transcript": text}
+    offset = _day_offset(request.query_params.get("days_ago"))
+    result = await assistant.process(user, text, input_type="voice", day_offset=offset)
+    out = {
+        **_result_json(result, user, request, raw_input=text, day_offset=offset),
+        "transcript": text,
+    }
     return _remember(request, user, idempotency_key, out)
 
 
@@ -251,7 +282,8 @@ async def log_label(
     result = await assistant.read_label(user, image)
     if isinstance(result, LabelRead):
         token = request.app.state.drafts.put(
-            _uid(user), result.draft, result.item_index, "этикетка", "label"
+            _uid(user), result.draft, result.item_index, "этикетка", "label",
+            _day_offset(request.query_params.get("days_ago")),
         )
         out = _label_json(
             result.draft, result.item_index, token, atwater=result.atwater_warning
@@ -316,7 +348,7 @@ async def delete_item(
 
 
 def _result_json(
-    result: Any, user: User, request: Request, *, raw_input: str
+    result: Any, user: User, request: Request, *, raw_input: str, day_offset: int = 0
 ) -> dict[str, Any]:
     """Единственное место, где доменный результат превращается в ответ API.
 
@@ -329,7 +361,7 @@ def _result_json(
     if isinstance(result, (ClarificationNeeded, VariantClarificationNeeded)):
         kind = "variant" if isinstance(result, VariantClarificationNeeded) else "portion"
         token = request.app.state.drafts.put(
-            _uid(user), result.draft, result.item_index, raw_input, kind
+            _uid(user), result.draft, result.item_index, raw_input, kind, day_offset
         )
         return clarify_json(result, token, kind)
 
@@ -622,7 +654,9 @@ async def repeat(
     replay = _replay(request, user, idempotency_key)
     if replay is not None:
         return replay
-    result = await assistant.repeat_meal(user, meal_id)
+    result = await assistant.repeat_meal(
+        user, meal_id, day_offset=_day_offset(request.query_params.get("days_ago"))
+    )
     if result is None:
         raise not_found("meal_not_found", "Приём не найден — возможно, его удалили.")
     return _remember(request, user, idempotency_key, logged_json(result, user.timezone))

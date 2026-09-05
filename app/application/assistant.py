@@ -82,7 +82,11 @@ class Assistant:
         ]
         await self._bug.add(user_id=user.id, note=note.strip()[:2000], context=context)
 
-    async def process(self, user: User, text: str, *, input_type: str = "text") -> Result:
+    async def process(
+        self, user: User, text: str, *, input_type: str = "text", day_offset: int = 0
+    ) -> Result:
+        """`day_offset` — день, на который смотрит человек, когда пишет (0 = сегодня,
+        −1 = вчера). Это ДЕФОЛТ: слово «вчера» в самой фразе его перебивает."""
         known_keys = await self._products.all_keys()
         # Self-consistency (D-15/INV-12): k сэмплов оценки → медиана + калиброванная уверенность.
         # Заменяет фейковый ретрай при temperature=0 (был почти no-op). Адаптер сам решает k:
@@ -91,7 +95,9 @@ class Assistant:
         parsed = _consolidate(samples)
 
         if parsed.intent is Intent.MEAL and parsed.items:
-            return await self._handle_meal(user, parsed, raw_input=text, input_type=input_type)
+            return await self._handle_meal(
+                user, parsed, raw_input=text, input_type=input_type, day_offset=day_offset
+            )
 
         if parsed.intent is Intent.WEIGHT and parsed.weight_kg is not None:
             # Проверка диапазона живёт в WeightService (одна на бота и аппку).
@@ -132,7 +138,8 @@ class Assistant:
         return LabelRead(draft=draft, item_index=0, atwater_warning=warn)
 
     async def answer_portion(
-        self, user: User, draft: ParsedMessage, item_index: int, answer: str, *, raw_input: str
+        self, user: User, draft: ParsedMessage, item_index: int, answer: str, *,
+        raw_input: str, day_offset: int = 0,
     ) -> Result:
         """Ответ на «какая порция?»: размер словом или вес числом.
 
@@ -153,16 +160,22 @@ class Assistant:
             item.unit = Unit.GRAM
             item.grams = parsed.grams
             item.portion_hint = None
-        return await self._handle_meal(user, draft, raw_input=raw_input, input_type="text")
+        return await self._handle_meal(
+            user, draft, raw_input=raw_input, input_type="text", day_offset=day_offset
+        )
 
     async def continue_meal(
-        self, user: User, draft: ParsedMessage, *, raw_input: str, input_type: str = "text"
+        self, user: User, draft: ParsedMessage, *, raw_input: str, input_type: str = "text",
+        day_offset: int = 0,
     ) -> Result:
         """Продолжить запись приёма пищи после ответа на уточняющий вопрос."""
-        return await self._handle_meal(user, draft, raw_input=raw_input, input_type=input_type)
+        return await self._handle_meal(
+            user, draft, raw_input=raw_input, input_type=input_type, day_offset=day_offset
+        )
 
     async def resolve_clarification(
-        self, user: User, draft: ParsedMessage, item_index: int, new_name: str, *, raw_input: str
+        self, user: User, draft: ParsedMessage, item_index: int, new_name: str, *,
+        raw_input: str, day_offset: int = 0,
     ) -> Result:
         """D-19: ответ на уточнение → ставим уточнённое имя, ПЕРЕоцениваем плотность и продолжаем.
 
@@ -180,7 +193,9 @@ class Assistant:
             item.protein_per_100g = ni.protein_per_100g
             item.fat_per_100g = ni.fat_per_100g
             item.carb_per_100g = ni.carb_per_100g
-        return await self._handle_meal(user, draft, raw_input=raw_input, input_type="text")
+        return await self._handle_meal(
+            user, draft, raw_input=raw_input, input_type="text", day_offset=day_offset
+        )
 
     async def today(self, user: User) -> DailyStats:
         return await self._stats.daily(user)
@@ -248,12 +263,14 @@ class Assistant:
     async def delete_meal(self, user: User, meal_id: int) -> MealDeleted:
         return MealDeleted(meal=await self._meals.delete(user, meal_id))
 
-    async def repeat_meal(self, user: User, meal_id: int) -> MealLogged | None:
+    async def repeat_meal(
+        self, user: User, meal_id: int, *, day_offset: int = 0
+    ) -> MealLogged | None:
         """Повторить приём кнопкой. None — если запись уже удалили (кнопка живёт в чате вечно)."""
-        meal = await self._meals.repeat(user, meal_id)
+        meal = await self._meals.repeat(user, meal_id, day_offset=day_offset)
         if meal is None:
             return None
-        stats = await self._stats.daily(user)
+        stats = await self._stats.daily(user, days_ago=-day_offset)
         return MealLogged(meal=meal, remaining=stats.remaining)
 
     async def remove_item(self, user: User, meal_id: int, item_id: int) -> MealLogged | None:
@@ -375,15 +392,18 @@ class Assistant:
             maintenance_kcal=goal.daily_kcal,
         )
 
-    async def log_quick(self, user: User, product_id: int, grams: float) -> Result:
+    async def log_quick(
+        self, user: User, product_id: int, grams: float, *, day_offset: int = 0
+    ) -> Result:
         """Запись тапом по чипу: продукт известен, вес известен, модель не нужна."""
         product = await self._products.get_by_id(product_id)
         if product is None:
             return Unknown(reason="Такого продукта больше нет в каталоге.")
         meal = await self._meals.log_known(
-            user, product, grams, raw_input=f"{product.display_name} {grams:g} г"
+            user, product, grams, raw_input=f"{product.display_name} {grams:g} г",
+            day_offset=day_offset,
         )
-        stats = await self._stats.daily(user)
+        stats = await self._stats.daily(user, days_ago=-day_offset)
         return MealLogged(meal=meal, remaining=stats.remaining)
 
     async def get_meal(self, user: User, meal_id: int) -> Meal | None:
@@ -420,7 +440,8 @@ class Assistant:
         return await self._products.update_density(product_id, clamp_density(density))
 
     async def _handle_meal(
-        self, user: User, parsed: ParsedMessage, *, raw_input: str, input_type: str
+        self, user: User, parsed: ParsedMessage, *, raw_input: str, input_type: str,
+        day_offset: int = 0,
     ) -> Result:
         # D-19: сперва уточняем СОСТАВ (начинка/тип/жирность) — влияет и на плотность, и на размер.
         for i, item in enumerate(parsed.items):
@@ -436,10 +457,13 @@ class Assistant:
                 draft=parsed, item_index=idx, item_name=parsed.items[idx].name
             )
 
-        meal = await self._meals.log(user, parsed, raw_input=raw_input, input_type=input_type)
+        meal = await self._meals.log(
+            user, parsed, raw_input=raw_input, input_type=input_type, day_offset=day_offset
+        )
         # Остаток ТОГО дня, куда записали (при «вчера/завтра» — не сегодняшнего). offset −1 (вчера)
-        # → days_ago +1; +1 (завтра) → days_ago −1.
-        stats = await self._stats.daily(user, days_ago=-parsed.day_offset)
+        # → days_ago +1; +1 (завтра) → days_ago −1. Правило приоритета то же, что в MealService:
+        # слово в тексте старше открытого экрана — иначе остаток показали бы от чужого дня.
+        stats = await self._stats.daily(user, days_ago=-(parsed.day_offset or day_offset))
         return MealLogged(meal=meal, remaining=stats.remaining)
 
     async def _handle_correction(self, user: User, parsed: ParsedMessage) -> Result:
