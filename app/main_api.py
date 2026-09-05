@@ -7,11 +7,9 @@
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -19,6 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.assets import WEB_DIR, asset_version
 from app.config import Settings
 from app.container import Container
 from app.logging import setup_logging
@@ -31,7 +30,6 @@ log = logging.getLogger(__name__)
 # Коды для ошибок, которые бросает сам фреймворк: без них фронт получил бы
 # «error» и не смог бы отличить «не туда постучался» от «нет такого».
 _CODES = {404: "not_found", 405: "method_not_allowed", 413: "too_large"}
-WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 
 @asynccontextmanager
@@ -114,23 +112,6 @@ async def unexpected(request: Request, exc: Exception) -> JSONResponse:
         status_code=500,
         content={"error": {"code": "internal", "message": "Что-то сломалось. Попробуй ещё раз."}},
     )
-
-
-def asset_version() -> str:
-    """Отпечаток статики: меняется ровно тогда, когда меняется её содержимое.
-
-    Telegram-клиент кэширует мини-апп жёстче обычного браузера и на голый
-    `/app.js` может не сходить неделями: 05.09.2026 выкатили новый экран и
-    камеру, а на телефоне остался старый — «моргает и фото нет» при полностью
-    верном файле на сервере. Одинаковый URL нечем отличить от вчерашнего,
-    поэтому URL меняем вместе с файлом.
-    """
-    digest = hashlib.sha256()
-    for name in ("app.js", "app.css"):
-        path = WEB_DIR / name
-        if path.is_file():
-            digest.update(path.read_bytes())
-    return digest.hexdigest()[:10]
 
 
 def index_html(version: str, source: str) -> str:

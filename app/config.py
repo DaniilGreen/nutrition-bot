@@ -13,6 +13,10 @@ class Settings(BaseSettings):
 
     bot_token: str = ""
     database_url: str = "postgresql+asyncpg://burnfat:burnfat@localhost:5432/burnfat"
+    # Адрес мини-аппа. Не секрет (публичный домен), поэтому с дефолтом: без него
+    # кнопка меню осталась бы с зафиксированным вручную URL, и отпечаток статики
+    # в неё не попадал бы — то есть защита от кэша работала бы вполсилы.
+    miniapp_url: str = "https://nutrition-calorie.greenjola.win"
 
     llm_provider: str = "openai"
     openai_api_key: str = ""

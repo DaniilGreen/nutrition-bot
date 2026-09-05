@@ -10,7 +10,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.bot.handlers import router
-from app.bot.menu import setup_bot_commands
+from app.bot.menu import setup_bot_commands, setup_miniapp_button
 from app.bot.middlewares import ServicesMiddleware
 from app.bot.reminders import run_reminder_loop
 from app.config import get_settings
@@ -37,6 +37,7 @@ async def main() -> None:
     dp.include_router(router)
 
     await setup_bot_commands(bot)
+    await setup_miniapp_button(bot, settings.miniapp_url)
     await seed_curated(container.db.session_factory)
 
     reminder_task: asyncio.Task[None] | None = None
