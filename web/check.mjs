@@ -24,6 +24,7 @@ const BUILTIN = new Set([
   'JSON', 'NaN', 'Infinity', 'URLSearchParams', 'DOMParser', 'FormData',
   'Promise', 'Math', 'Date', 'Number', 'String', 'Array', 'Object', 'Blob',
   'MediaRecorder', 'AbortController', 'Error', 'RegExp', 'Map', 'Set',
+  'URL',
 ]);
 
 const declared = new Set([

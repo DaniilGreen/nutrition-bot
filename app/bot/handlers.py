@@ -84,6 +84,7 @@ from app.bot.keyboards import (
 from app.bot.states import MealStates, ProfileStates
 from app.bot.ui import gather, screens
 from app.domain.goals import Goal, goal_from_macros, goal_from_profile, rebalance, set_macro
+from app.domain.label_portion import label_grams
 from app.domain.portion_answer import parse as parse_portion
 from app.domain.timeframe import tz_from_longitude, tz_from_utc_offset
 from app.domain.value_objects import Density
@@ -1243,14 +1244,9 @@ def _first_number(text: str) -> float | None:
 def _label_grams(
     text: str, package_g: float | None, serving_g: float | None = None
 ) -> float | None:
-    """FR-27: вес из ответа на этикетку. «вся пачка»→нетто; «N порц»→N×вес порции; иначе число г."""
-    low = text.lower().strip()
-    if package_g and ("пачк" in low or "упаков" in low or "цел" in low or low in ("всё", "все")):
-        return package_g
-    n = _first_number(text)
-    if "порц" in low:  # «2 порции» = 2×вес порции (#10); без веса порции — не угадываем граммы
-        return (n or 1) * serving_g if serving_g else None
-    return n if n and n > 0 else None
+    """FR-27: вес из ответа на этикетку. Обёртка над доменом — то же правило
+    нужно мини-аппу, а копия правила в двух адаптерах разъезжается."""
+    return label_grams(text, package_g, serving_g)
 
 
 async def _clear_intro_keyboard(message: Message, bot: Bot, state: FSMContext) -> None:

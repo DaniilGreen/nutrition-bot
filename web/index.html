@@ -68,6 +68,10 @@
     </button>
   </nav>
 
+  <!-- Живёт вне #screen: тот перерисовывается целиком, и поле внутри него
+       теряло бы выбранный файл вместе со слушателем. -->
+  <input type="file" id="shot" accept="image/*" capture="environment" hidden>
+
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
   <script src="/app.js"></script>

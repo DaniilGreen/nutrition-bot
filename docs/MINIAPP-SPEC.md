@@ -1818,9 +1818,17 @@ mime: `voice.webm` / `voice.mp4` / `voice.ogg`. Потолок размера �
 | `GET /health` | Уже есть (`app/main_api.py:9`). Без initData — данные пользователя не трогает |
 | `POST /api/bug` `{note}` | **есть**: `Assistant.report_bug` (`app/application/assistant.py:65`) — багрепорт из аппки с тем же контекстом последних приёмов |
 
-Фото этикеток (`Assistant.read_label`, `app/application/assistant.py:113`) в первой версии аппки
-**не выносим**: в чате это работает, и камера Telegram там ближе. Понадобится —
-`POST /api/meals/label` ляжет ровно как голос, use-case готов.
+| `POST /api/meals/label` | **есть**: `Assistant.read_label` (`app/application/assistant.py:113`). Тело — сырой JPEG (как голос), ≤ 4 МБ. Ответ `{kind:"label", draft_id, item_name, per100, package_g, serving_g, atwater_warning, hint}`; вес отвечается через `/api/meals/clarify` с тем же `draft_id`. 400 `empty_image`/`image_too_big`, 429 `rate_limited` (6/мин — vision дороже голоса) |
+
+**Фото этикетки в аппке — ЕСТЬ (04.09.2026).** Изначально было отложено («в чате это работает,
+и камера Telegram там ближе»), но §6.7 всё это время рисовал камеру в поле ввода, и первый же
+день живого использования дал багрепорт #32 «Нет кнопки для фото и расшифровки этикетки».
+Противоречие снято в пользу §6.7: камера в композере, слева от поля. Решение и его цена —
+D-MA-9 в `docs/spec-decisions.md`.
+
+Что камера в аппке **не** делает в отличие от чата: не сохраняет снимок у продукта
+(`products.photo_file_id` — это Telegram `file_id`, а снимок с камеры телефона его не имеет),
+и не читает вес из подписи к фото (подписи в аппке нет — вес спрашивается карточкой).
 
 ---
 

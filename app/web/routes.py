@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.coach import LimitReached
+from app.application.dto import Unit
 from app.application.entities import User
 from app.application.results import (
     ClarificationNeeded,
@@ -21,6 +22,7 @@ from app.application.results import (
     DailyStats,
     ItemAdjusted,
     ItemRemoved,
+    LabelRead,
     MealLogged,
     VariantClarificationNeeded,
     WeightLogged,
@@ -29,6 +31,7 @@ from app.container import Container
 from app.domain.audio import filename_for
 from app.domain.duplicates import SAFE_SPREAD, Candidate, spread, winner
 from app.domain.goals import Goal
+from app.domain.label_portion import label_grams
 from app.domain.prefs import merge as merge_prefs
 from app.domain.prefs import sanitize
 from app.domain.value_objects import Density
@@ -157,7 +160,25 @@ async def clarify(
         # Один код на «нет такого» и «чужой»: различать их — подсказывать перебор.
         raise bad_request("draft_gone", "Уточнение устарело. Запиши приём заново.")
 
-    if draft.kind == "portion":
+    if draft.kind == "label":
+        # FR-27: ответ — вес порции, а не имя. Плотность уже прочитана с
+        # упаковки и переоценке не подлежит: пересчёт через модель заменил бы
+        # точные цифры этикетки на оценку (INV-2).
+        item = draft.payload.items[draft.item_index]
+        grams = label_grams(answer, item.unit_weight_g, item.serving_g)
+        if grams is None:
+            # Черновик одноразовый: не разобрали вес — кладём обратно и
+            # спрашиваем ещё раз. Иначе непонятый ответ стоил бы фотографии.
+            token = request.app.state.drafts.put(
+                _uid(user), draft.payload, draft.item_index, draft.raw_input, "label"
+            )
+            return _label_json(draft.payload, draft.item_index, token, hint=True)
+        item.grams = grams
+        item.unit = Unit.GRAM
+        result = await assistant.continue_meal(
+            user, draft.payload, raw_input=draft.raw_input
+        )
+    elif draft.kind == "portion":
         # Не хватало веса. Ответ — это вес, а не имя: дописываем его к позиции
         # и продолжаем запись. Пропустить это через resolve_clarification
         # значило бы записать «300 г» как название продукта.
@@ -202,6 +223,66 @@ async def log_voice(
     result = await assistant.process(user, text, input_type="voice")
     out = {**_result_json(result, user, request, raw_input=text), "transcript": text}
     return _remember(request, user, idempotency_key, out)
+
+
+@router.post("/meals/label")
+async def log_label(
+    request: Request, user: CurrentUser, assistant: CurrentAssistant,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict[str, Any]:
+    """FR-27: фото этикетки → КБЖУ/100 г → вопрос о весе порции.
+
+    Тело сырое, как у голоса: multipart ради одного поля потребовал бы
+    `python-multipart`, а зависимости в этом проекте платные (§7.2).
+    """
+    image = await request.body()
+    if not image:
+        raise bad_request("empty_image", "Фото пустое.")
+    if len(image) > 4_000_000:
+        # Клиент ужимает снимок до 1280 px перед отправкой; всё, что больше
+        # четырёх мегабайт, — это неужатый оригинал, и платить за его разбор
+        # незачем: таблица КБЖУ читается и с меньшего.
+        raise bad_request("image_too_big", "Слишком большое фото — сними ближе.")
+    replay = _replay(request, user, idempotency_key)
+    if replay is not None:
+        return replay
+    # Vision — самый дорогой вызов в проекте, дороже голоса: лимит строже.
+    _throttle(request, user, "label", limit=6, window=60)
+    result = await assistant.read_label(user, image)
+    if isinstance(result, LabelRead):
+        token = request.app.state.drafts.put(
+            _uid(user), result.draft, result.item_index, "этикетка", "label"
+        )
+        out = _label_json(
+            result.draft, result.item_index, token, atwater=result.atwater_warning
+        )
+    else:
+        out = _result_json(result, user, request, raw_input="этикетка")
+    return _remember(request, user, idempotency_key, out)
+
+
+def _label_json(
+    draft: Any, index: int, token: str, *, atwater: bool = False, hint: bool = False
+) -> dict[str, Any]:
+    """Карточка этикетки: что прочитали и чего ещё ждём."""
+    item = draft.items[index]
+    return {
+        "kind": "label",
+        "draft_id": token,
+        "item_name": item.name,
+        "per100": {
+            "kcal": round(item.kcal_per_100g, 1),
+            "protein_g": round(item.protein_per_100g, 1),
+            "fat_g": round(item.fat_per_100g, 1),
+            "carb_g": round(item.carb_per_100g, 1),
+        },
+        "package_g": item.unit_weight_g,
+        "serving_g": item.serving_g,
+        # FR-27: Б/Ж/У не сходятся с калориями — вероятно, цифру прочитали
+        # неверно. Молчать об этом значит запинить неверную плотность навсегда.
+        "atwater_warning": atwater,
+        "hint": hint,
+    }
 
 
 @router.delete("/meals/{meal_id}")

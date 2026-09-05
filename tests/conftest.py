@@ -72,6 +72,8 @@ class FakeContainer:
     # Подменяется в тестах записи: разные сценарии требуют разных ответов NLU.
     nlu: object = None
     stt: object = None
+    # Vision (фото этикеток, FR-27): None = «ключа нет», ровно как в проде.
+    vision: object = None
     # Порт ассистента: None означает «ключа нет», ровно как в проде.
     coach_port: object = None
     spend: object = None
@@ -107,7 +109,7 @@ class FakeContainer:
         )
         assistant = Assistant(
             self.nlu or StubNlu(_NOTHING),
-            self.products, meal, weight, stats, self.stt, self.bugs, None,
+            self.products, meal, weight, stats, self.stt, self.bugs, self.vision,
         )
         return assistant, self.users
 

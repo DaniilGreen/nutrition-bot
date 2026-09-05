@@ -403,6 +403,7 @@
     var extra = '';
     if (state.justLogged) extra = justCard(state.justLogged);
     else if (state.clarify) extra = clarifyCard(state.clarify);
+    else if (state.label) extra = labelCard(state.label);
     return hero(d) + composer() + chips() + extra + feed(d);
   }
 
@@ -1198,6 +1199,11 @@
       setTimeout(function () { if (!state.recording) startRec(); }, 350);
     }
     return '<div class="composer" id="composer">' +
+      '<button id="cam" class="ghost" aria-label="Сфотографировать этикетку">' +
+        '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+        'stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<path d="M4 7h3l1.6-2h6.8L17 7h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/>' +
+        '<circle cx="12" cy="13" r="3.4"/></svg></button>' +
       '<input id="say" type="text" inputmode="text" autocomplete="off" ' +
         'placeholder="Что съел? Или скажи голосом" value="' + esc(state.text || '') + '">' +
       (hasText && !rec
@@ -1268,6 +1274,52 @@
       '</section>';
   }
 
+  /* FR-27: прочитали упаковку — показываем ЧТО прочитали и ждём вес. Цифры
+     с этикетки точные, но только на 100 г: сколько съедено — знает человек.
+     Показать плотность до ответа обязательно, иначе неверно прочитанная
+     таблица запинится навсегда (INV-2) и молча испортит все будущие записи. */
+  function labelCard(c) {
+    var p = c.per100;
+    var opts = [];
+    if (c.serving_g) opts.push(['1 порция', n(c.serving_g) + ' г']);
+    if (c.package_g) opts.push(['вся пачка', n(c.package_g) + ' г']);
+    var buttons = opts.map(function (o) {
+      return '<button data-answer="' + esc(o[0]) + '">' + esc(o[0]) +
+        ' <span class="g">· ' + o[1] + '</span></button>';
+    }).join('');
+    return '<section class="card just" style="margin-top:var(--s-3)">' +
+      '<div class="ttl">С этикетки: ' + esc(c.item_name) + '</div>' +
+      '<div class="mic" style="margin-top:4px">на 100 г — ' + n(p.kcal) + ' ккал · Б ' +
+        n(p.protein_g) + ' · Ж ' + n(p.fat_g) + ' · У ' + n(p.carb_g) + '</div>' +
+      (c.atwater_warning
+        ? '<div class="mic" style="color:var(--alert);margin-top:6px;line-height:1.5">' +
+          'Белки, жиры и углеводы не сходятся с калориями — проверь цифры на упаковке, ' +
+          'возможно снимок прочитан неточно.</div>'
+        : '') +
+      (c.hint
+        ? '<div class="mic" style="color:var(--alert);margin-top:6px">' +
+          'Не разобрал вес. Напиши число или нажми кнопку.</div>'
+        : '') +
+      '<div class="ttl" style="margin-top:var(--s-3);font-size:var(--f-body-s)">' +
+        'Сколько съел?</div>' +
+      (buttons ? '<div class="opts">' + buttons + '</div>' : '') +
+      '<div class="composer" style="margin-top:var(--s-3)">' +
+        '<input id="grams" type="number" inputmode="numeric" min="1" max="5000" ' +
+          'placeholder="граммами, напр. 250" ' +
+          'style="flex-grow:1;background:none;border:0;color:var(--text);' +
+          'font:inherit;outline:none;min-width:0">' +
+        '<button data-grams="1" aria-label="Записать">' +
+          '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" ' +
+          'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+          'stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/>' +
+          '</svg></button>' +
+      '</div>' +
+      '<div class="opts" style="margin-top:var(--s-2)">' +
+        '<button data-answer="" data-cancel="1" ' +
+        'style="border-color:var(--surface-3);background:var(--surface-2)">Отмена</button>' +
+      '</div></section>';
+  }
+
   function clarifyCard(c) {
     var cancel = '<button data-answer="" data-cancel="1" ' +
       'style="border-color:var(--surface-3);background:var(--surface-2)">Отмена</button>';
@@ -1307,7 +1359,10 @@
   }
 
   function sendAnswer(answer) {
-    var c = state.clarify;
+    /* Один путь ответа на два вопроса: «уточни, что это» и «сколько съел с
+       этикетки». Различает их сервер по виду черновика — клиент про плотности
+       не знает и знать не должен. */
+    var c = state.clarify || state.label;
     if (!c) return;
     busy('Записываю…');
     return send('/api/meals/clarify', {
@@ -1318,12 +1373,15 @@
 
   function handle(res) {
     state.clarify = null;
+    state.label = null;
     state.justLogged = null;
     if (res.kind === 'logged') {
       state.justLogged = res.meal;
       if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
     } else if (res.kind === 'clarify') {
       state.clarify = res;
+    } else if (res.kind === 'label') {
+      state.label = res;
     } else if (res.kind === 'weight') {
       var d = res.delta_kg;
       toast('Вес ' + n(res.weight_kg, 1) + ' кг' +
@@ -1380,6 +1438,49 @@
       toast(e.message + ' Текст сохранён.', true);
       renderDay();
     }).then(function () { state.sending = false; });
+  }
+
+  /* ── этикетка ────────────────────────────────────────────────────────── */
+
+  /* Снимок ужимаем до 1280 px и в JPEG перед отправкой. Современный телефон
+     отдаёт 4–8 МБ; таблица КБЖУ читается и с ужатого, а мегабайты на мобильном
+     интернете — это секунды ожидания и оборванные загрузки. Не получилось
+     ужать (нестандартный формат, нет canvas) — шлём как есть: лучше дорого,
+     чем никак. */
+  function shrink(file, cb) {
+    if (!window.URL || !window.URL.createObjectURL) return cb(file);
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    img.onload = function () {
+      var k = Math.min(1, 1280 / Math.max(img.width, img.height));
+      var c = document.createElement('canvas');
+      c.width = Math.round(img.width * k);
+      c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      if (!c.toBlob) return cb(file);
+      c.toBlob(function (b) { cb(b && b.size ? b : file); }, 'image/jpeg', 0.82);
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); cb(file); };
+    img.src = url;
+  }
+
+  function sendLabel(file) {
+    if (state.sending) return;
+    state.sending = true;
+    busy('Читаю этикетку…');
+    shrink(file, function (blob) {
+      send('/api/meals/label', {
+        headers: {
+          'Content-Type': blob.type || 'image/jpeg',
+          'Idempotency-Key': newKey()
+        },
+        body: blob
+      }).then(handle).catch(function (e) {
+        toast(e.message, true);
+        renderDay();
+      }).then(function () { state.sending = false; });
+    });
   }
 
   /* ── голос ───────────────────────────────────────────────────────────── */
@@ -1483,6 +1584,11 @@
     if (b.dataset.meal) {
       state.open[b.dataset.meal] = !state.open[b.dataset.meal];
       return repaintDay();
+    }
+    if (b.id === 'cam') {
+      var shot = document.getElementById('shot');
+      if (shot) { shot.value = ''; shot.click(); }
+      return;
     }
     if (b.id === 'sendtext') return submitText();
     if (b.id === 'mic') return state.recording ? stopRec() : startRec();
@@ -1618,7 +1724,10 @@
     }
 
     if (b.hasAttribute('data-answer')) {
-      if (b.dataset.cancel) { state.clarify = null; return renderDay(); }
+      if (b.dataset.cancel) {
+        state.clarify = null; state.label = null;
+        return repaintDay();
+      }
       return sendAnswer(b.dataset.answer);
     }
   });
@@ -1743,6 +1852,13 @@
       clearTimeout(searchTimer);
       searchTimer = setTimeout(renderCatalog, 300);
     }
+  });
+
+  /* Слушатель на скрытом поле, а не на кнопке: кнопка живёт внутри #screen и
+     пересоздаётся на каждой перерисовке, поле — снаружи и переживает их. */
+  document.getElementById('shot').addEventListener('change', function (e) {
+    var f = e.target.files && e.target.files[0];
+    if (f) sendLabel(f);
   });
 
   document.getElementById('gear').addEventListener('click', function () {
