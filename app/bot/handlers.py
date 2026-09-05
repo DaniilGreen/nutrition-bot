@@ -714,7 +714,11 @@ async def on_photo(
     state: FSMContext,
 ) -> None:
     """Фото = этикетка (FR-27): читаем КБЖУ → спрашиваем вес порции. (Фото готовой еды пока нет.)"""
-    if await _busy_with_flow(message, state):  # не затираем незавершённый черновик фото
+    # Новая этикетка отменяет вопрос про вес предыдущей (багрепорт #31); прочие
+    # незавершённые шаги по-прежнему держат оборону.
+    if await _busy_with_flow(
+        message, state, supersedes=MealStates.awaiting_label_grams.state
+    ):
         return
     await state.clear()
     if not message.photo:
@@ -1259,9 +1263,22 @@ async def _clear_intro_keyboard(message: Message, bot: Bot, state: FSMContext) -
             )
 
 
-async def _busy_with_flow(message: Message, state: FSMContext) -> bool:
-    """True, если идёт незавершённый вопрос/визард — голос/фото не должны затирать черновик."""
-    if await state.get_state() is None:
+async def _busy_with_flow(
+    message: Message, state: FSMContext, *, supersedes: str | None = None
+) -> bool:
+    """True, если идёт незавершённый вопрос/визард — голос/фото не должны затирать черновик.
+
+    `supersedes` — состояние, которое новое сообщение вправе отменить само собой.
+    Багрепорт #31: человек прислал ВТОРУЮ этикетку, не ответив про вес первой, и
+    бот раз за разом требовал ответить про первую. Новое фото этикетки — это и есть
+    отказ от предыдущей: держать его в заложниках у вопроса, на который человек
+    уже передумал отвечать, значит запереть его без выхода.
+    """
+    current = await state.get_state()
+    if current is None:
+        return False
+    if supersedes is not None and current == supersedes:
+        await state.clear()
         return False
     await message.answer(
         "⏳ Сейчас жду ответ на прошлый шаг — ответь текстом или кнопкой "
