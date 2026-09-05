@@ -1887,8 +1887,32 @@
 
   /* ── старт ───────────────────────────────────────────────────────────── */
 
+  /* Верхний отступ считает клиент, а не мы: у выреза устройства и у панели
+     Telegram («Закрыть», «…») разные величины, и складывать их надо обе —
+     иначе шапка уезжает под часы. Величины появились в Bot API 8.0; на клиенте
+     постарше их просто нет, и CSS остаётся на env(safe-area-inset-top). */
+  function applyTopInset() {
+    var device = (tg.safeAreaInset || {}).top || 0;
+    var chrome = (tg.contentSafeAreaInset || {}).top || 0;
+    var top = device + chrome;
+    /* Ноль не ставим: перебить им env() значит вернуть тот же наезд на клиенте,
+       который про эти величины не знает. */
+    if (top > 0) {
+      document.documentElement.style.setProperty('--top-inset', top + 'px');
+    }
+  }
+
   tg.ready();
   tg.expand();
+  applyTopInset();
+  if (tg.onEvent) {
+    /* Величины меняются на повороте и при переходе в полный экран. */
+    try {
+      tg.onEvent('safeAreaChanged', applyTopInset);
+      tg.onEvent('contentSafeAreaChanged', applyTopInset);
+      tg.onEvent('viewportChanged', applyTopInset);
+    } catch (e) { /* старый клиент не знает этих событий */ }
+  }
   loadFrequent();
   /* Настройки нужны до первой отрисовки: иначе панель мигнёт видом по умолчанию
      и только потом переключится на выбранный. */
