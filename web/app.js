@@ -1206,7 +1206,7 @@
         '<circle cx="12" cy="13" r="3.4"/></svg></button>' +
       '<input id="say" type="text" inputmode="text" autocomplete="off" ' +
         'placeholder="' + (writeDay()
-          ? esc('Что съел — ' + (state.lastDay ? title(state.lastDay) : 'тот день').toLowerCase() + '?')
+          ? esc('Что съел ' + (state.lastDay ? title(state.lastDay).toLowerCase() : 'в тот день') + '?')
           : 'Что съел? Или скажи голосом') +
         '" value="' + esc(state.text || '') + '">' +
       (hasText && !rec
