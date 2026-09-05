@@ -102,6 +102,9 @@ nav button[aria-current="page"]{color:var(--accent)}
 .state.err{box-shadow:inset 3px 0 0 var(--alert);text-align:left}
 .skel{background:var(--surface-3);border-radius:6px;animation:pulse 1.4s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:.45}50%{opacity:.8}}
+/* Занятость экрана без композера: гасим, но не стираем. Скелет вместо готовой
+   разметки схлопывал высоту страницы и подбрасывал прокрутку. */
+#screen.working{opacity:.5;pointer-events:none;transition:opacity .12s}
 @media (prefers-reduced-motion:reduce){.skel{animation:none}.track>i{transition:none}}
 
 /* ── поле ввода: посередине экрана, между панелью и лентой (§6.3) ────── */

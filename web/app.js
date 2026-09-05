@@ -104,7 +104,7 @@
     if (window.confirm(text)) then();
   }
 
-  function show(html) { root.innerHTML = html; }
+  function show(html) { root.classList.remove('working'); root.innerHTML = html; }
 
   /* §6.2: поле ввода активно сразу, ввод не ждёт загрузки. Раньше скелет
      затирал весь экран вместе с композером — и записать во время загрузки
@@ -113,8 +113,12 @@
      выглядел как падение — панель, лента и чипы исчезали на несколько секунд
      без единого слова. Меняем только поле ввода, всё остальное на месте. */
   function busy(text) {
-    var c = document.querySelector('.composer');
-    if (!c) return;
+    /* Строго композер дня: класс .composer носят ещё поле ассистента и
+       редактор граммовки, и затирание первого попавшегося ломало чужой ввод. */
+    var c = document.getElementById('composer');
+    /* Экран без композера (каталог, дубли) гасим прозрачностью, а не скелетом:
+       разметка остаётся на месте, высота не прыгает, клики не проходят. */
+    if (!c) { root.classList.add('working'); return; }
     c.className = 'composer';
     c.innerHTML =
       '<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>' +
@@ -359,7 +363,7 @@
   function dropItem(mealId, itemId) {
     ask('Убрать эту позицию из приёма?', function () {
       state.editItem = null;
-      loading();
+      busy('Убираю…');
       send('/api/meals/' + mealId + '/items/' + itemId, { method: 'DELETE' })
         .then(function (r) {
           toast(r.meal ? 'Убрал позицию.' : 'Позиций не осталось — приём удалён.');
@@ -374,7 +378,7 @@
     var v = (el && el.value || '').trim();
     if (!v) return;
     state.editItem = null;
-    loading();
+    busy('Сохраняю…');
     send('/api/meals/' + mealId + '/items/' + itemId, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -395,23 +399,46 @@
     return Number(parts[2]) + ' ' + months[Number(parts[1]) - 1];
   }
 
+  function dayHtml(d) {
+    var extra = '';
+    if (state.justLogged) extra = justCard(state.justLogged);
+    else if (state.clarify) extra = clarifyCard(state.clarify);
+    return hero(d) + composer() + chips() + extra + feed(d);
+  }
+
+  function paintDay(d) {
+    state.lastDay = d;
+    state.shownDay = state.daysAgo;
+    document.getElementById('title').textContent = title(d);
+    document.getElementById('nav-day').classList.toggle('hidden', false);
+    document.getElementById('fwd').disabled = state.daysAgo === 0;
+    show(dayHtml(d));
+    var inp = document.getElementById('say');
+    if (inp && state.keepFocus) { inp.focus(); state.keepFocus = false; }
+    armJustTimer();
+  }
+
+  /* Раскрыть приём, открыть правку веса, сменить порядок — это раскладка
+     экрана, а не новые цифры. Рисуем из уже полученного дня: запрос ради
+     оформления возвращал те же числа и стоил мигания на весь экран. */
+  function repaintDay() {
+    if (!state.lastDay || state.shownDay !== state.daysAgo) return renderDay();
+    show(dayHtml(state.lastDay));
+    armJustTimer();
+  }
+
+  /* Скелет — только когда показывать нечего: холодный старт или переход на
+     другой день. Обновление того же дня идёт поверх живого экрана. Раньше
+     любой чип гасил панель, ленту и чипы, высота схлопывалась с ленты до
+     одной карточки — экран моргал и прыгал. */
   function renderDay() {
-    loadingDay();
-    api('/api/day?days_ago=' + state.daysAgo)
-      .then(function (d) {
-        state.lastDay = d;
-        document.getElementById('title').textContent = title(d);
-        document.getElementById('nav-day').classList.toggle('hidden', false);
-        document.getElementById('fwd').disabled = state.daysAgo === 0;
-        var extra = '';
-        if (state.justLogged) extra = justCard(state.justLogged);
-        else if (state.clarify) extra = clarifyCard(state.clarify);
-        show(hero(d) + composer() + chips() + extra + feed(d));
-        var inp = document.getElementById('say');
-        if (inp && state.keepFocus) { inp.focus(); state.keepFocus = false; }
-        armJustTimer();
-      })
-      .catch(failure);
+    var onScreen = !!document.getElementById('composer');
+    var fresh = state.lastDay && state.shownDay === state.daysAgo;
+    if (!onScreen || !fresh) {
+      if (fresh) show(dayHtml(state.lastDay));
+      else loadingDay();
+    }
+    api('/api/day?days_ago=' + state.daysAgo).then(paintDay).catch(failure);
   }
 
   /* MA-INV-22: карточка «Записал» живёт 5 секунд, потом уходит сама. Правка
@@ -421,13 +448,23 @@
      Таймер снимается при каждой перерисовке: без этого два подряд приёма
      оставляли два таймера, и второй гасил карточку раньше срока. */
   function armJustTimer() {
+    if (!state.justLogged) {
+      clearTimeout(state.justTimer);
+      state.justArmed = null;
+      return;
+    }
+    /* Пять секунд считаются от записи, а не от последней перерисовки: раньше
+       любое касание экрана заводило таймер заново и карточка не уходила
+       вовсе — ровно то, на что жаловались («через пять сек не пропадает»). */
+    if (state.justArmed === state.justLogged.id) return;
     clearTimeout(state.justTimer);
-    if (!state.justLogged) return;
     var shown = state.justLogged.id;
+    state.justArmed = shown;
     state.justTimer = setTimeout(function () {
+      state.justArmed = null;
       if (state.justLogged && state.justLogged.id === shown && state.tab === 'day') {
         state.justLogged = null;
-        renderDay();
+        repaintDay();
       }
     }, 5000);
   }
@@ -1160,7 +1197,7 @@
       state.micAutoDone = true;
       setTimeout(function () { if (!state.recording) startRec(); }, 350);
     }
-    return '<div class="composer">' +
+    return '<div class="composer" id="composer">' +
       '<input id="say" type="text" inputmode="text" autocomplete="off" ' +
         'placeholder="Что съел? Или скажи голосом" value="' + esc(state.text || '') + '">' +
       (hasText && !rec
@@ -1272,7 +1309,7 @@
   function sendAnswer(answer) {
     var c = state.clarify;
     if (!c) return;
-    loading();
+    busy('Записываю…');
     return send('/api/meals/clarify', {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ draft_id: c.draft_id, answer: answer })
@@ -1437,7 +1474,7 @@
     if (row && !e.target.closest('.composer')) {
       var id = Number(row.dataset.item);
       state.editItem = state.editItem === id ? null : id;
-      return renderDay();
+      return repaintDay();
     }
 
     var b = e.target.closest('button');
@@ -1445,12 +1482,12 @@
 
     if (b.dataset.meal) {
       state.open[b.dataset.meal] = !state.open[b.dataset.meal];
-      return render();
+      return repaintDay();
     }
     if (b.id === 'sendtext') return submitText();
     if (b.id === 'mic') return state.recording ? stopRec() : startRec();
     if (b.dataset.repeat) {
-      loading();
+      busy('Записываю…');
       return send('/api/meals/' + b.dataset.repeat + '/repeat',
                   { headers: { 'Idempotency-Key': newKey() } })
         .then(handle).catch(function (err) { toast(err.message, true); renderDay(); });
@@ -1458,14 +1495,14 @@
     if (b.dataset.drop) {
       var did = b.dataset.drop;
       return ask('Удалить этот приём?', function () {
-        loading();
+        busy('Удаляю…');
         send('/api/meals/' + did, { method: 'DELETE' })
           .then(function () { delete state.open[did]; toast('Удалил.'); renderDay(); })
           .catch(function (err) { toast(err.message, true); renderDay(); });
       });
     }
     if (b.dataset.quick) {
-      loading();
+      busy('Записываю…');
       var stay = state.tab === 'ai' || state.tab === 'cat';
       return send('/api/meals/quick', {
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newKey() },
@@ -1495,7 +1532,7 @@
     }
     if (b.dataset.undo) {
       var id = b.dataset.undo;
-      loading();
+      busy('Отменяю…');
       return send('/api/meals/' + id, { method: 'DELETE' })
         .then(function () { state.justLogged = null; toast('Отменил.'); renderDay(); })
         .catch(function (err) { toast(err.message, true); renderDay(); });
@@ -1539,7 +1576,7 @@
     if (b.id === 'wsave') return saveWeight();
     if (b.dataset.order) {
       state.prefs = Object.assign({}, state.prefs || {}, { feed_order: b.dataset.order });
-      renderDay();
+      repaintDay();
       /* Порядок запоминаем, но экран не ждёт ответа сервера: это оформление,
          и мигать из-за него нечестно. */
       send('/api/settings/prefs', {
@@ -1620,7 +1657,7 @@
       fat_per_100g: Number(document.getElementById('pf').value),
       carb_per_100g: Number(document.getElementById('pc').value)
     };
-    loading();
+    busy('Сохраняю…');
     send('/api/products/' + state.cat.product, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -1645,7 +1682,7 @@
         ' в выбранную?' + (affects ? ' Затронет ' + affects + ' позиц' +
         (affects === 1 ? 'ию' : 'ий') + ' истории.' : '') + ' Отменить будет нельзя.',
       function () {
-        loading();
+        busy('Объединяю…');
         send('/api/products/merge', {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ winner_id: chosen, loser_ids: losers })
@@ -1687,7 +1724,7 @@
       /* Перерисовываем композер только на переходе «пусто ↔ не пусто»:
          на каждом символе это выбивало бы курсор. */
       if (was !== !!state.text.trim()) {
-        var c = document.querySelector('.composer');
+        var c = document.getElementById('composer');
         if (c) {
           c.outerHTML = composer();
           var i = document.getElementById('say');
