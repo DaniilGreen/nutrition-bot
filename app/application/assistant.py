@@ -17,6 +17,7 @@ from app.application.results import (
     ClarificationNeeded,
     CorrectionFailed,
     DailyStats,
+    DayPace,
     DayView,
     History,
     ItemAdjusted,
@@ -307,6 +308,19 @@ class Assistant:
     ) -> list[tuple[int | None, str, float, int]]:
         """Чаще всего съеденное — для чипов быстрой записи (§6.3)."""
         return await self._meals.frequent_items(_require_id(user), days=days, limit=limit)
+
+    async def day_pace(self, user: User) -> DayPace:
+        """§6.20: темп сегодняшнего дня против личной нормы к этому часу."""
+        return await self._stats.day_pace(user)
+
+    async def evening_frequent(
+        self, user: User, *, since_hour: int, days: int = 30, limit: int = 4
+    ) -> list[tuple[int | None, str, float, int]]:
+        """Типичная еда после указанного часа — чипы карточки добора (§6.20)."""
+        return await self._meals.evening_items(
+            _require_id(user), days=days, limit=limit,
+            tz=user.timezone, since_hour=since_hour,
+        )
 
     async def catalog_page(
         self, user: User, *, offset: int = 0, limit: int = 20, query: str | None = None

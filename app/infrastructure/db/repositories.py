@@ -388,6 +388,55 @@ class SqlMealRepo:
             (pid, name, float(grams or 0), int(times)) for pid, name, grams, times in res.all()
         ]
 
+    async def hourly_kcal(
+        self, user_id: int, *, days: int, tz: str
+    ) -> list[tuple[str, int, float]]:
+        """§6.20: калории по местным дням и часам — сырьё для нормы темпа дня."""
+        since = datetime.now(UTC) - timedelta(days=days)
+        local = func.timezone(tz, MealORM.eaten_at)
+        day = func.to_char(local, "YYYY-MM-DD").label("day")
+        hour = func.extract("hour", local).label("hour")
+        res = await self._s.execute(
+            select(day, hour, func.sum(MealORM.total_kcal).label("kcal"))
+            .where(MealORM.user_id == user_id, MealORM.eaten_at >= since)
+            .group_by(day, hour)
+            .order_by(day, hour)
+        )
+        return [(str(d), int(h), float(k or 0)) for d, h, k in res.all()]
+
+    async def evening_items(
+        self, user_id: int, *, days: int, limit: int, tz: str, since_hour: int
+    ) -> list[tuple[int | None, str, float, int]]:
+        """§6.20: типичная еда после указанного часа — чипы карточки добора."""
+        since = datetime.now(UTC) - timedelta(days=days)
+        local_hour = func.extract("hour", func.timezone(tz, MealORM.eaten_at))
+        res = await self._s.execute(
+            select(
+                MealItemORM.product_id,
+                func.max(MealItemORM.name_snapshot).label("name"),
+                func.percentile_cont(0.5)
+                .within_group(MealItemORM.grams)
+                .label("median_grams"),
+                func.count().label("times"),
+            )
+            .join(MealORM, MealORM.id == MealItemORM.meal_id)
+            .where(
+                MealORM.user_id == user_id,
+                MealORM.eaten_at >= since,
+                local_hour >= since_hour,
+                # Без продукта чип пишется через текст и модель — в быстрой
+                # подсказке это уже не «одно касание», поэтому не предлагаем.
+                MealItemORM.product_id.is_not(None),
+                MealItemORM.grams > 0,
+            )
+            .group_by(MealItemORM.product_id)
+            .order_by(func.count().desc())
+            .limit(limit)
+        )
+        return [
+            (pid, name, float(grams or 0), int(times)) for pid, name, grams, times in res.all()
+        ]
+
     async def add(self, meal: Meal) -> Meal:
         orm = MealORM(
             user_id=meal.user_id,

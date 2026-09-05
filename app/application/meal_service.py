@@ -170,6 +170,14 @@ class MealService:
         """Что человек ест чаще всего — для чипов быстрой записи. Без LLM."""
         return await self._meals.frequent_items(user_id, days=days, limit=limit)
 
+    async def evening_items(
+        self, user_id: int, *, days: int, limit: int, tz: str, since_hour: int
+    ) -> list[tuple[int | None, str, float, int]]:
+        """Типичная еда после указанного часа — чипы карточки добора (§6.20)."""
+        return await self._meals.evening_items(
+            user_id, days=days, limit=limit, tz=tz, since_hour=since_hour
+        )
+
     async def repeat(
         self, user: User, meal_id: int, *, day_offset: int = 0
     ) -> Meal | None:

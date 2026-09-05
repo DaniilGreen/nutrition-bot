@@ -134,6 +134,28 @@ class MealRepo(Protocol):
         """
         ...
 
+    async def hourly_kcal(
+        self, user_id: int, *, days: int, tz: str
+    ) -> list[tuple[str, int, float]]:
+        """Калории по дням и часам за окно: (местная дата, местный час, ккал).
+
+        Часовой пояс считает БАЗА, а не питон: «день» и «час» здесь местные, и
+        собирать их сдвигом на клиенте значит промахнуться на переходе суток —
+        ровно там, где живёт вся эта функция (§6.20).
+        """
+        ...
+
+    async def evening_items(
+        self, user_id: int, *, days: int, limit: int, tz: str, since_hour: int
+    ) -> list[tuple[int | None, str, float, int]]:
+        """Что человек ест ПОСЛЕ указанного часа: (product_id, имя, граммовка, раз).
+
+        Отдельно от `frequent_items`: общий список частого уже висит под полем
+        ввода, и повторять его в карточке добора незачем — там нужна именно
+        вечерняя еда, которой в дневнике и не хватает.
+        """
+        ...
+
     async def list_between(
         self, user_id: int, start: datetime, end: datetime
     ) -> list[Meal]: ...

@@ -6,9 +6,15 @@ from zoneinfo import ZoneInfo
 
 from app.application.entities import Meal, User
 from app.application.ports import MealRepo, UserRepo
-from app.application.results import DailyStats, WeeklyStats
+from app.application.results import DailyStats, DayPace, WeeklyStats
 from app.clock import Clock, utcnow
 from app.domain.goals import Goal, remaining
+from app.domain.pace import (
+    behind,
+    curve_points,
+    norm_curve,
+    quiet_enough,
+)
 from app.domain.timeframe import day_bounds_utc, week_bounds_utc
 from app.domain.value_objects import Macros, sum_macros
 
@@ -44,6 +50,70 @@ class StatsService:
         return DailyStats(
             remaining=remaining(consumed, goal), meals_count=len(meals), meals=meals,
             timezone=user.timezone,
+        )
+
+    async def day_pace(self, user: User, *, window_days: int = 30) -> DayPace:
+        """§6.20: сегодняшний темп против личной нормы к этому часу.
+
+        Сервис только собирает данные и отдаёт решение домену: вся арифметика
+        нормы и порогов — в `app/domain/pace.py`, чтобы проверяться тестом,
+        а не глазами на проде.
+        """
+        user_id = _require_id(user)
+        zone = ZoneInfo(user.timezone)
+        now_local = self._clock().astimezone(zone)
+        today = now_local.date().isoformat()
+
+        rows = await self._meals.hourly_kcal(user_id, days=window_days, tz=user.timezone)
+        by_day: dict[str, list[tuple[int, float]]] = {}
+        for day_str, hour, kcal in rows:
+            by_day.setdefault(day_str, []).append((hour, kcal))
+
+        goal = await self._users.get_goal(user_id) or self._default_goal
+        # Сегодняшний день из нормы исключаем: он ещё идёт и заведомо неполон,
+        # а попав в выборку, тянул бы планку вниз ровно тогда, когда она нужна.
+        past = [meals for day_str, meals in by_day.items() if day_str != today]
+        pace = norm_curve(past, goal.daily_kcal)
+
+        today_meals = by_day.get(today, [])
+        today_kcal = sum(kcal for _, kcal in today_meals)
+        hour = now_local.hour
+        norm_kcal = pace.norm[hour] if pace.norm else 0.0
+
+        # Точное время последней записи, а не час из сводки: между 15:50 и 16:10
+        # двадцать минут, а по часам получалось бы семьдесят — и карточка
+        # выскакивала бы человеку под руку, пока он ещё пишет.
+        recent = await self._meals.list_recent(user_id, 1)
+        last = recent[0].eaten_at.astimezone(zone) if recent else None
+        # Вчерашняя запись про сегодняшний день ничего не говорит: и тишину от неё
+        # считать нельзя, и показывать её как «последнюю» было бы враньём.
+        if last is not None and last.date() != now_local.date():
+            last = None
+        minutes_since = (now_local - last).total_seconds() / 60 if last else None
+
+        show = behind(pace, hour, today_kcal) and quiet_enough(minutes_since)
+        if not show:
+            return DayPace(
+                show=False, hour=hour, norm_kcal=round(norm_kcal, 1),
+                today_kcal=round(today_kcal, 1), days_used=pace.days_used,
+            )
+
+        first = min((h for h, _ in today_meals), default=hour)
+        # Кривая начинается с часа, в который человек ОБЫЧНО начинает есть, даже
+        # если сегодня он ещё не ел: иначе в пустой день график вырождается в точку.
+        norm_first = next((h for h, v in enumerate(pace.norm) if v > 0), first)
+        start = min(first, norm_first)
+        today_cum, run = [], 0.0
+        per_hour = dict(today_meals)
+        for h in range(start, hour + 1):
+            run += per_hour.get(h, 0.0)
+            today_cum.append((h, round(run, 1)))
+        return DayPace(
+            show=True, hour=hour, norm_kcal=round(norm_kcal, 1),
+            today_kcal=round(today_kcal, 1), days_used=pace.days_used,
+            last_at=last.strftime("%H:%M") if last is not None else None,
+            norm_points=curve_points(pace.norm, start, hour),
+            today_points=today_cum,
         )
 
     async def day_meals(self, user: User, days_ago: int = 0) -> list[Meal]:

@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.assistant import Assistant
 from app.application.coach import LimitReached
 from app.application.dto import Unit
 from app.application.entities import User
@@ -109,6 +110,33 @@ async def day(
         "goal": goal_json(goal),
         "totals": remaining_json(remaining),
         "meals": [meal_json(m, user.timezone) for m in view.meals],
+        # §6.20: полем здесь, а не отдельным эндпоинтом — экран «День» сведён
+        # к одному запросу на старте, и второй вернул бы мигание (MA-INV-32).
+        "pace": await _pace_json(user, assistant) if days_ago == 0 else None,
+    }
+
+
+async def _pace_json(user: User, assistant: Assistant) -> dict[str, Any] | None:
+    """Карточка добора дня. None — спрашивать не о чем (§6.20, MA-INV-37)."""
+    pace = await assistant.day_pace(user)
+    if not pace.show:
+        return None
+    # Чипы — еда ПОСЛЕ текущего часа: общий список частого уже под полем ввода,
+    # а здесь нужна именно та еда, которой в дневнике и не хватает.
+    rows = await assistant.evening_frequent(user, since_hour=pace.hour)
+    return {
+        "hour": pace.hour,
+        "norm_kcal": pace.norm_kcal,
+        "today_kcal": pace.today_kcal,
+        "gap_kcal": round(pace.norm_kcal - pace.today_kcal, 1),
+        "last_at": pace.last_at,
+        "days_used": pace.days_used,
+        "norm_points": [list(p) for p in pace.norm_points],
+        "today_points": [list(p) for p in pace.today_points],
+        "chips": [
+            {"product_id": pid, "name": name, "grams": round(grams, 1)}
+            for pid, name, grams, _times in rows
+        ],
     }
 
 @router.post("/meals")

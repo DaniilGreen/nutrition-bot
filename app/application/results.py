@@ -57,6 +57,25 @@ class WeightTrend:
 
 
 @dataclass
+class DayPace:
+    """§6.20: сегодняшний темп против личной нормы к этому часу.
+
+    `show=False` означает «спрашивать не о чем или не о чем спрашивать ещё»:
+    нормы не набралось (MA-INV-37), день идёт нормально или человек только
+    что записывал. Причину наружу не отдаём — интерфейсу нужно решение.
+    """
+
+    show: bool
+    hour: int
+    norm_kcal: float
+    today_kcal: float
+    days_used: int
+    last_at: str | None = None
+    norm_points: list[tuple[int, float]] = field(default_factory=list)
+    today_points: list[tuple[int, float]] = field(default_factory=list)
+
+
+@dataclass
 class DailyStats:
     remaining: Remaining
     meals_count: int

@@ -404,7 +404,8 @@
     if (state.justLogged) extra = justCard(state.justLogged);
     else if (state.clarify) extra = clarifyCard(state.clarify);
     else if (state.label) extra = labelCard(state.label);
-    return hero(d) + composer() + chips() + extra + feed(d);
+    var pace = d.pace && !paceMuted(d) ? paceCard(d.pace) : '';
+    return hero(d) + composer() + chips() + pace + extra + feed(d);
   }
 
   function paintDay(d) {
@@ -1285,6 +1286,81 @@
       '</section>';
   }
 
+  /* §6.20 «Добор дня». Дневник теряет не дни целиком, а вторую половину дня:
+     полный день идёт до 20:24, брошенный обрывается в 15:20. Карточка сравнивает
+     сегодняшний темп с ЛИЧНОЙ нормой к этому же часу.
+
+     MA-INV-38: говорим цифрами человека, а не оценкой человека. Ни «мало», ни
+     «забыл», ни «недозаписал» — только «обычно столько, сейчас столько». */
+
+  function hh(h) { return (h < 10 ? '0' : '') + h + ':00'; }
+
+  /* Ключ отказа — на дату: «ничего не ел» верно ровно для одного дня.
+     ponytail: localStorage, то есть на устройство. Потолок известен и записан
+     в спеке — серверная отметка это уже «День закрыт», отдельная функция. */
+  function paceOffKey(d) { return 'pace-off:' + d.day; }
+
+  function paceMuted(d) {
+    try { return localStorage.getItem(paceOffKey(d)) === '1'; }
+    catch (e) { return false; }   /* приватный режим — просто показываем */
+  }
+
+  function mutePace(d) {
+    try { localStorage.setItem(paceOffKey(d), '1'); } catch (e) { /* переживём */ }
+  }
+
+  /* Две накопленные кривые: серая — обычный день, жёлтая — сегодняшний.
+     Инлайн-SVG, как остальные графики аппки: сборщика в проекте нет (§5.7). */
+  function paceSvg(p) {
+    var all = (p.norm_points || []).concat(p.today_points || []);
+    if (all.length < 2) return '';
+    var W = 240, H = 58, pad = 8;
+    var lo = all[0][0], hi = all[0][0], max = 1;
+    all.forEach(function (q) {
+      if (q[0] < lo) lo = q[0];
+      if (q[0] > hi) hi = q[0];
+      if (q[1] > max) max = q[1];
+    });
+    var x = function (h) { return hi === lo ? W / 2 : pad + (h - lo) / (hi - lo) * (W - pad * 2); };
+    var y = function (v) { return H - 6 - (v / max) * (H - 18); };
+    var line = function (pts) {
+      return pts.map(function (q) { return n(x(q[0]), 1) + ',' + n(y(q[1]), 1); }).join(' ');
+    };
+    var last = (p.today_points || [])[(p.today_points || []).length - 1];
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" ' +
+      'aria-label="Обычный набор калорий по часам против сегодняшнего" ' +
+      'style="display:block;width:100%;height:auto;margin-top:8px">' +
+      '<line x1="' + pad + '" y1="' + (H - 5) + '" x2="' + (W - pad) + '" y2="' + (H - 5) +
+        '" stroke="var(--separator)" stroke-width="1"/>' +
+      '<polyline points="' + line(p.norm_points) + '" fill="none" ' +
+        'stroke="var(--bar)" stroke-width="1.6" stroke-linecap="round"/>' +
+      '<polyline points="' + line(p.today_points) + '" fill="none" ' +
+        'stroke="var(--warn)" stroke-width="2" stroke-linecap="round"/>' +
+      (last ? '<circle cx="' + n(x(last[0]), 1) + '" cy="' + n(y(last[1]), 1) +
+        '" r="2.8" fill="var(--warn)"/>' : '') +
+      '</svg>';
+  }
+
+  function paceCard(p) {
+    var chips = (p.chips || []).map(function (i) {
+      return '<button class="chip" data-quick="' + i.product_id +
+        '" data-grams="' + i.grams + '">' + esc(i.name) +
+        ' <span class="g">· ' + n(i.grams) + ' г</span></button>';
+    }).join('');
+    var when = p.last_at
+      ? 'Последняя запись в ' + esc(p.last_at) + '. Что было после?'
+      : 'Сегодня записей ещё нет. Что уже было?';
+    return '<section class="card pace" style="margin-top:var(--s-3)">' +
+      '<div class="mic">К ' + hh(p.hour) + ' у тебя обычно ' + n(p.norm_kcal) + '</div>' +
+      '<div class="num" style="font-size:var(--f-t1);font-weight:700;color:var(--warn);' +
+        'line-height:1.1">' + n(p.today_kcal) + '</div>' +
+      paceSvg(p) +
+      '<div class="mic" style="margin-top:6px;line-height:1.5">' + when + '</div>' +
+      '<div class="chips">' + chips +
+        '<button class="chip off" data-pace-off="1">Ничего не ел</button></div>' +
+      '</section>';
+  }
+
   /* FR-27: прочитали упаковку — показываем ЧТО прочитали и ждём вес. Цифры
      с этикетки точные, но только на 100 г: сколько съедено — знает человек.
      Показать плотность до ответа обязательно, иначе неверно прочитанная
@@ -1620,6 +1696,12 @@
 
     if (b.dataset.meal) {
       state.open[b.dataset.meal] = !state.open[b.dataset.meal];
+      return repaintDay();
+    }
+    if (b.dataset.paceOff) {
+      if (state.lastDay) mutePace(state.lastDay);
+      /* Из данных карточку не выбрасываем: сервер отдаст её снова при следующем
+         запросе дня, а решение «сегодня не спрашивать» живёт на клиенте. */
       return repaintDay();
     }
     if (b.id === 'cam') {

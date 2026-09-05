@@ -247,6 +247,54 @@ class InMemoryMealRepo:
         rows.sort(key=lambda r: (-r[3], r[1]))
         return rows[:limit]
 
+    async def hourly_kcal(
+        self, user_id: int, *, days: int, tz: str
+    ) -> list[tuple[str, int, float]]:
+        from collections import defaultdict
+        from datetime import timedelta
+        from zoneinfo import ZoneInfo
+
+        since = datetime.now(UTC) - timedelta(days=days)
+        zone = ZoneInfo(tz)
+        buckets: dict[tuple[str, int], float] = defaultdict(float)
+        for m in self._meals:
+            if m.user_id != user_id or m.eaten_at < since:
+                continue
+            local = m.eaten_at.astimezone(zone)
+            buckets[(local.date().isoformat(), local.hour)] += m.totals.kcal
+        return sorted((d, h, k) for (d, h), k in buckets.items())
+
+    async def evening_items(
+        self, user_id: int, *, days: int, limit: int, tz: str, since_hour: int
+    ) -> list[tuple[int | None, str, float, int]]:
+        from collections import defaultdict
+        from datetime import timedelta
+        from zoneinfo import ZoneInfo
+
+        since = datetime.now(UTC) - timedelta(days=days)
+        zone = ZoneInfo(tz)
+        buckets: dict[int, list[float]] = defaultdict(list)
+        names: dict[int, str] = {}
+        for m in self._meals:
+            if m.user_id != user_id or m.eaten_at < since:
+                continue
+            if m.eaten_at.astimezone(zone).hour < since_hour:
+                continue
+            for it in m.items:
+                if it.product_id is None or it.grams <= 0:
+                    continue
+                buckets[it.product_id].append(it.grams)
+                names[it.product_id] = it.name_snapshot
+        rows = []
+        for pid, grams in buckets.items():
+            grams.sort()
+            median = grams[len(grams) // 2] if len(grams) % 2 else (
+                (grams[len(grams) // 2 - 1] + grams[len(grams) // 2]) / 2
+            )
+            rows.append((pid, names[pid], float(median), len(grams)))
+        rows.sort(key=lambda r: (-r[3], r[1]))
+        return rows[:limit]
+
     async def list_recent(self, user_id: int, limit: int) -> list[Meal]:
         xs = [m for m in self._meals if m.user_id == user_id]
         xs.sort(key=lambda m: m.eaten_at, reverse=True)
