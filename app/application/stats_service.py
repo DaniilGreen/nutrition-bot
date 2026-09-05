@@ -97,7 +97,7 @@ class StatsService:
             last = None
         minutes_since = (now_local - last).total_seconds() / 60 if last else None
 
-        show = behind(pace, hour, today_kcal) and quiet_enough(minutes_since)
+        show = behind(pace, hour, today_kcal, goal.daily_kcal) and quiet_enough(minutes_since)
         if not show:
             return DayPace(
                 show=False, hour=hour, norm_kcal=round(norm_kcal, 1),
