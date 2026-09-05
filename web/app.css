@@ -41,7 +41,10 @@ body{
      величин, и обе нужны: вырез устройства и высота собственной панели
      Telegram. `--top-inset` ставит скрипт из значений клиента; env() —
      запасной путь для клиентов постарше, которые их не сообщают. */
-  padding-top:calc(var(--s-4) + var(--top-inset, env(safe-area-inset-top, 0px)));
+  /* Над заголовком меньше воздуха, чем по бокам: сверху уже стоит собственная
+     шапка Telegram, и полный --s-4 поверх неё читался как провал. Внизу
+     отступ остаётся полным — там ничего чужого нет. */
+  padding-top:calc(var(--s-2) + var(--top-inset, env(safe-area-inset-top, 0px)));
 }
 .num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
 .mic{font-size:var(--f-micro);color:var(--text-muted)}

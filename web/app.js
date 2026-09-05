@@ -1891,15 +1891,22 @@
      Telegram («Закрыть», «…») разные величины, и складывать их надо обе —
      иначе шапка уезжает под часы. Величины появились в Bot API 8.0; на клиенте
      постарше их просто нет, и CSS остаётся на env(safe-area-inset-top). */
+  /* Молчание клиента и его ноль — РАЗНЫЕ ответы, и путать их дорого.
+     null — клиент до Bot API 8.0 величин не знает, остаёмся на env().
+     0 — клиент знает и говорит «отступ не нужен»: так открывается обычный, не
+     полноэкранный режим, где Telegram сам поставил контент под свою шапку.
+     Ноль, принятый за молчание, кладёт поверх env(safe-area-inset-top) — и под
+     шапкой Telegram появляется вторая пустая полоса в высоту выреза.
+     Чистая функция: её поведение проверяет `node web/check.mjs`. */
+  function topInset(device, chrome) {
+    if (!device && !chrome) return null;
+    return ((device || {}).top || 0) + ((chrome || {}).top || 0);
+  }
+
   function applyTopInset() {
-    var device = (tg.safeAreaInset || {}).top || 0;
-    var chrome = (tg.contentSafeAreaInset || {}).top || 0;
-    var top = device + chrome;
-    /* Ноль не ставим: перебить им env() значит вернуть тот же наезд на клиенте,
-       который про эти величины не знает. */
-    if (top > 0) {
-      document.documentElement.style.setProperty('--top-inset', top + 'px');
-    }
+    var top = topInset(tg.safeAreaInset, tg.contentSafeAreaInset);
+    if (top === null) return;
+    document.documentElement.style.setProperty('--top-inset', top + 'px');
   }
 
   tg.ready();
