@@ -89,14 +89,27 @@ async def test_расход_копится_между_запросами(client,
     assert second["spent_usd"] > first["spent_usd"]
 
 
-async def test_модель_получает_посчитанные_цифры_а_не_сырьё(client, fake_container):
-    """INV-1: модель объясняет числа, а не считает их."""
+async def test_модель_получает_фон_и_инструменты(client, fake_container):
+    """INV-1: модель объясняет числа, а не считает их.
+
+    §6.21: стартовая строка — только фон (цель и полнота), а подробности модель
+    берёт инструментами. Раньше здесь лежала таблица по дням, и живой прогон
+    08.09.2026 показал, чем это кончается: модель читала таблицу, решала, что
+    данных достаточно, и отвечала «доступа к твоим продуктам у меня нет».
+    """
     port = StubCoach()
     fake_container.coach_port = port
     fake_container.spend = InMemorySpendRepo()
     async with client as c:
         await c.post("/api/coach", json={"question": "как дела"}, headers=_hdr())
-    assert "Цель:" in port.seen_facts or "Записей за 30 дней нет." in port.seen_facts
+
+    assert "Цель на день:" in port.seen_facts
+    # Фон остаётся коротким: длинная сводка вытесняет инструменты.
+    assert len(port.seen_facts.splitlines()) <= 6, port.seen_facts
+    # И инструменты до порта доехали — иначе смотреть модели нечем.
+    assert port.seen_data is not None
+    for tool in ("day_totals", "meals_on", "top_products", "weight_log"):
+        assert hasattr(port.seen_data, tool), tool
 
 
 @pytest.mark.parametrize("body", [{}, {"question": ""}, {"question": "  "}])
