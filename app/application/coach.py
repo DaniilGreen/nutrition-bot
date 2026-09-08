@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -19,6 +20,19 @@ from app.application.ports import MealRepo, SpendRepo, WeightRepo
 from app.application.stats_service import StatsService
 from app.domain.mentions import Candidate, mentioned
 from app.domain.spend import Usage, month_limit_reached
+
+
+@dataclass
+class CoachChunk:
+    """Событие потока (§6.21.1). Один тип на все виды: разбирать во фронте
+    пять форм дороже, чем нести пару пустых полей."""
+
+    kind: str                       # delta | tool | reset | end | error
+    text: str = ""                  # для delta — кусок ответа, для tool — имя
+    usage: Usage | None = None
+    spent_usd: float = 0.0
+    limit_usd: float = 0.0
+    actions: list[Candidate] = field(default_factory=list)
 
 
 class CoachPort(Protocol):
@@ -32,6 +46,13 @@ class CoachPort(Protocol):
     async def ask(
         self, question: str, facts: str, data: Any | None = None
     ) -> tuple[str, Usage]: ...
+
+    def stream(
+        self, question: str, facts: str, data: Any | None = None
+    ) -> AsyncIterator[CoachChunk]:
+        """То же самое, но кусками. Адаптер отдаёт delta/tool/reset и в конце
+        один chunk с `usage` — расход по ВСЕМ раундам (MA-INV-40)."""
+        ...
 
 
 @dataclass
@@ -98,6 +119,53 @@ class Coach:
             text=text,
             spent_usd=spent + usage.cost_usd,
             limit_usd=self._limit,
+            actions=await self._actions(user, text),
+        )
+
+    async def ensure_budget(self) -> float:
+        """Проверка лимита ДО первого байта потока (MA-INV-41).
+
+        В потоке отказ уже не отдать нормальным кодом: заголовки ушли. Поэтому
+        проверяем здесь, из обработчика, пока ответ ещё можно не начинать.
+        """
+        spent = await self._spend.spent_this_month(purpose="coach")
+        if month_limit_reached(spent, self._limit):
+            raise LimitReached
+        return spent
+
+    async def ask_stream(self, user: User, question: str) -> AsyncIterator[CoachChunk]:
+        """Тот же ответ, но кусками (§6.21.1)."""
+        spent = await self.ensure_budget()
+        facts = await self._facts(user)
+        data = (
+            CoachData(user, self._stats, self._meals, self._weights)
+            if self._meals is not None and self._weights is not None
+            else None
+        )
+        parts: list[str] = []
+        usage: Usage | None = None
+        async for chunk in self._port.stream(question, facts, data):
+            if chunk.kind == "delta":
+                parts.append(chunk.text)
+            elif chunk.kind == "reset":
+                # Модель написала преамбулу и передумала — напечатанное отменяем,
+                # иначе оно зависнет над настоящим ответом.
+                parts.clear()
+            elif chunk.kind == "end":
+                usage = chunk.usage
+                continue          # свой end соберём ниже, с расходом и кнопками
+            yield chunk
+
+        text = "".join(parts).strip()
+        if usage is not None:
+            await self._spend.add(
+                user_id=user.id, model=usage.model, purpose="coach",
+                input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
+                cost_usd=usage.cost_usd,
+            )
+            spent += usage.cost_usd
+        yield CoachChunk(
+            kind="end", text=text, spent_usd=spent, limit_usd=self._limit,
             actions=await self._actions(user, text),
         )
 

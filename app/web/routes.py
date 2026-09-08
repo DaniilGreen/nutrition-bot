@@ -7,12 +7,15 @@
 """
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Header, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.assistant import Assistant
@@ -50,6 +53,8 @@ from app.web.schemas import (
     remaining_json,
     user_json,
 )
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(current_user)])
 
@@ -874,6 +879,84 @@ async def coach(
         # иначе он разъедется между ботом и аппкой.
         "disclaimer": "Это не медицинский совет. Считает по твоим записям за 30 дней.",
     }
+
+
+@router.post("/coach/stream")
+async def coach_stream(
+    body: dict[str, Any], user: CurrentUser, request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> StreamingResponse:
+    """Тот же вопрос, но ответ приходит кусками (§6.21.1).
+
+    MA-INV-41: всё, что может отказать, проверяется ДО первого байта — после
+    отправки заголовков статус уже не поменять, и отказ пришлось бы слать
+    событием, а фронт разбирал бы две формы одной ошибки.
+    """
+    question = str(body.get("question") or "").strip()
+    if not question:
+        raise bad_request("empty_question", "Пустой вопрос.")
+    if len(question) > 500:
+        raise bad_request("question_too_long", "Слишком длинный вопрос.")
+    _throttle(request, user, "coach", limit=6, window=60)
+
+    container: Container = request.app.state.container
+    check = container.coach_for(session)
+    if check is None:
+        raise unavailable("coach_off", "Ассистент недоступен: не настроен ключ.")
+    try:
+        await check.ensure_budget()
+    except LimitReached as exc:
+        raise ApiError(
+            429, "coach_limit",
+            "Бюджет ассистента на этот месяц исчерпан. Он вернётся первого числа.",
+        ) from exc
+
+    async def events() -> AsyncIterator[str]:
+        # MA-INV-42: своя сессия. Тело стрима отдаётся уже после возврата
+        # обработчика, а инструменты ходят в БД посреди потока — закрытая
+        # сессия убила бы ответ на середине.
+        async with container.db.session_factory() as own:
+            service = container.coach_for(own)
+            if service is None:  # ключ пропал между проверкой и потоком
+                yield _sse({"kind": "error", "code": "coach_off",
+                            "message": "Ассистент недоступен."})
+                return
+            try:
+                async for chunk in service.ask_stream(user, question):
+                    yield _sse(_chunk_json(chunk))
+                await own.commit()
+            except Exception:
+                log.exception("поток ассистента оборвался")
+                # Заголовки давно ушли: отказ отдаём событием, а не кодом.
+                yield _sse({"kind": "error", "code": "stream_failed",
+                            "message": "Ответ оборвался. Попробуй ещё раз."})
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        # Caddy соседа буферизует ответы по умолчанию: без этого поток доедет
+        # до человека одним куском в конце, то есть стриминга не будет вовсе.
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
+def _sse(payload: dict[str, Any]) -> str:
+    return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+
+def _chunk_json(chunk: Any) -> dict[str, Any]:
+    if chunk.kind == "end":
+        return {
+            "kind": "end",
+            "text": chunk.text,
+            "spent_usd": round(chunk.spent_usd, 4),
+            "limit_usd": chunk.limit_usd,
+            "actions": [
+                {"product_id": a.product_id, "name": a.name, "grams": round(a.grams, 1)}
+                for a in chunk.actions
+            ],
+        }
+    return {"kind": chunk.kind, "text": chunk.text}
 
 
 @router.get("/coach/budget")

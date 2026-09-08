@@ -1115,7 +1115,13 @@
           '" data-grams="' + a.grams + '">Записать ' + esc(a.name) +
           ' <span class="g">· ' + n(a.grams) + ' г</span></button>';
       }).join('');
-      return '<div class="bubble ' + (m.me ? 'me' : 'ai') + '">' + esc(m.text) + '</div>' +
+      var busy = m.busy
+        ? '<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>' +
+          '<span class="mic" style="margin-left:6px">' + esc(m.busy) + '</span>'
+        : '';
+      return '<div class="bubble ' + (m.me ? 'me' : 'ai') + '"' +
+          (m.busy ? ' aria-busy="true"' : '') + '>' +
+          esc(m.text) + busy + '</div>' +
         (acts ? '<div class="chips" style="margin:6px 0 var(--s-3)">' + acts + '</div>' : '');
     }).join('');
     var sug = state.chat && state.chat.length ? '' :
@@ -1139,7 +1145,7 @@
            '<div class="cardhead"><span class="cap">Спроси про свои данные</span>' +
              budget + '</div>' +
            '<div class="mic" style="margin-top:6px;line-height:1.5">' +
-             'Ассистент видит только твои цифры за 30 дней. Он не врач и не ставит диагнозов.' +
+             'Ассистент смотрит твои записи сам: приёмы, продукты, вес. Он не врач и не ставит диагнозов.' +
            '</div>' + sug + '</section>' +
          chat +
          '<div class="composer ask"><input id="ask" type="text" ' +
@@ -1154,23 +1160,110 @@
     }
   }
 
+  /* §6.21.1: индикатор — это сам поток. Пока ассистент ходит за данными,
+     говорим словами, КУДА он полез: «жди» не сообщает ничего, а это сообщает. */
+  var TOOL_SAYS = {
+    day_totals: 'смотрю дни',
+    meals_on: 'смотрю приёмы',
+    top_products: 'смотрю продукты',
+    weight_log: 'смотрю вес'
+  };
+
   function askCoach(text) {
     if (!text || state.asking) return;
     state.asking = true;
     state.chat = (state.chat || []).concat([{ me: true, text: text }]);
+    /* Пузырь ответа заводим сразу пустым: в него потечёт текст, и он же
+       держит строку состояния. Иначе экран стоит пустым до первого куска. */
+    var bubble = { me: false, text: '', busy: 'думаю', actions: [] };
+    state.chat.push(bubble);
     renderAi();
-    send('/api/coach', {
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: text })
-    }).then(function (d) {
-      state.chat.push({ me: false, text: d.text, actions: d.actions || [] });
-      state.disclaimer = d.disclaimer || state.disclaimer;
-      state.budget = { spent_usd: d.spent_usd, limit_usd: d.limit_usd, available: true };
+
+    var done = function (err) {
+      bubble.busy = null;
+      if (err) bubble.text = bubble.text || err;
+      state.asking = false;
       renderAi();
-    }).catch(function (e) {
-      state.chat.push({ me: false, text: e.message });
-      renderAi();
-    }).then(function () { state.asking = false; });
+    };
+
+    streamCoach(text, bubble, function () { renderAi(); })
+      .then(function (ok) {
+        if (ok) return done(null);
+        /* Поток не сложился — повторяем обычным запросом. Ассистент, который
+           на старом клиенте показывает пустоту, хуже медленного (§6.21.1). */
+        bubble.text = '';
+        bubble.busy = 'думаю';
+        renderAi();
+        return send('/api/coach', {
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: text })
+        }).then(function (d) {
+          bubble.text = d.text;
+          bubble.actions = d.actions || [];
+          state.budget = { spent_usd: d.spent_usd, limit_usd: d.limit_usd, available: true };
+          done(null);
+        });
+      })
+      .catch(function (e) { done(e.message); });
+  }
+
+  /* Чтение SSE. Возвращает true, если поток дошёл до конца; false — если этот
+     клиент потоков не умеет и надо идти запасным путём. */
+  function streamCoach(question, bubble, onTick) {
+    if (!window.fetch || !window.TextDecoder) return Promise.resolve(false);
+    return fetch('/api/coach/stream', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Telegram-Init-Data': tg.initData
+      },
+      body: JSON.stringify({ question: question })
+    }).then(function (r) {
+      if (!r.ok) {
+        return r.json().catch(function () { return {}; }).then(function (body) {
+          var err = body.error || {};
+          var e = new Error(err.message || 'Сервер ответил ' + r.status);
+          e.code = err.code;
+          throw e;
+        });
+      }
+      if (!r.body || !r.body.getReader) return false;   // старый WebView
+      var reader = r.body.getReader();
+      var decoder = new TextDecoder();
+      var buf = '';
+      var finished = false;
+
+      var pump = function () {
+        return reader.read().then(function (res) {
+          if (res.done) return finished;
+          buf += decoder.decode(res.value, { stream: true });
+          var parts = buf.split('\n\n');
+          buf = parts.pop();
+          parts.forEach(function (block) {
+            var line = block.replace(/^data: /, '').trim();
+            if (!line) return;
+            var ev;
+            try { ev = JSON.parse(line); } catch (e) { return; }
+            if (ev.kind === 'delta') bubble.text += ev.text;
+            else if (ev.kind === 'reset') bubble.text = '';
+            else if (ev.kind === 'tool') bubble.busy = TOOL_SAYS[ev.text] || 'смотрю данные';
+            else if (ev.kind === 'error') { bubble.text = ev.message; finished = true; }
+            else if (ev.kind === 'end') {
+              bubble.text = ev.text || bubble.text;
+              bubble.actions = ev.actions || [];
+              state.budget = {
+                spent_usd: ev.spent_usd, limit_usd: ev.limit_usd, available: true
+              };
+              finished = true;
+            }
+            if (ev.kind === 'delta' || ev.kind === 'reset') bubble.busy = null;
+            onTick();
+          });
+          return pump();
+        });
+      };
+      return pump();
+    });
   }
 
   function render() {

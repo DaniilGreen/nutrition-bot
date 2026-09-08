@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any, Protocol
 
 from openai import AsyncOpenAI
 
+from app.application.coach import CoachChunk
 from app.domain.spend import Usage
 
 log = logging.getLogger(__name__)
@@ -158,6 +161,95 @@ class OpenAiCoach:
 
         usage = Usage(model=self._model, input_tokens=tokens_in, output_tokens=tokens_out)
         return text or "Не нашёл, что ответить по этим данным.", usage
+
+
+    async def stream(
+        self, question: str, facts: str, data: CoachData | None = None
+    ) -> AsyncIterator[CoachChunk]:
+        """Тот же цикл, но текст отдаётся по мере генерации (§6.21.1).
+
+        Куски текста отдаём сразу, не дожидаясь конца раунда. Если раунд всё же
+        закончился вызовом инструмента, шлём `reset`: модель написала преамбулу
+        и передумала, и эта преамбула не должна висеть над настоящим ответом.
+        """
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": f"Мои данные:\n{facts}\n\nВопрос: {question}"},
+        ]
+        tokens_in = tokens_out = 0
+
+        for round_no in range(MAX_ROUNDS):
+            last = round_no == MAX_ROUNDS - 1
+            kwargs: dict[str, Any] = {
+                "model": self._model,
+                "messages": messages,
+                "stream": True,
+                # Без этого в потоке расхода нет вовсе, и лимит перестаёт считать.
+                "stream_options": {"include_usage": True},
+            }
+            if data is not None and not last:
+                kwargs["tools"] = TOOLS
+
+            said: list[str] = []
+            calls: dict[int, dict[str, str]] = {}
+            async for event in await self._client.chat.completions.create(**kwargs):
+                u = getattr(event, "usage", None)
+                if u is not None:
+                    tokens_in += int(getattr(u, "prompt_tokens", 0) or 0)
+                    tokens_out += int(getattr(u, "completion_tokens", 0) or 0)
+                if not getattr(event, "choices", None):
+                    continue
+                delta = event.choices[0].delta
+                piece = getattr(delta, "content", None)
+                if piece:
+                    said.append(piece)
+                    yield CoachChunk(kind="delta", text=piece)
+                for tc in getattr(delta, "tool_calls", None) or []:
+                    # Вызов приходит по кускам и собирается по индексу: имя и
+                    # аргументы могут приехать разными событиями.
+                    slot = calls.setdefault(tc.index, {"id": "", "name": "", "args": ""})
+                    if getattr(tc, "id", None):
+                        slot["id"] = tc.id
+                    fn = getattr(tc, "function", None)
+                    if fn is not None:
+                        slot["name"] += fn.name or ""
+                        slot["args"] += fn.arguments or ""
+
+            if not calls:
+                break
+
+            if said:
+                yield CoachChunk(kind="reset")
+            content = "".join(said)
+            messages.append({
+                "role": "assistant",
+                "content": content or None,
+                "tool_calls": [
+                    {"id": c["id"], "type": "function",
+                     "function": {"name": c["name"], "arguments": c["args"]}}
+                    for c in calls.values()
+                ],
+            })
+            for slot in calls.values():
+                yield CoachChunk(kind="tool", text=slot["name"])
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": slot["id"],
+                    "content": await _run(data, _slot_call(slot)),
+                })
+
+        yield CoachChunk(
+            kind="end",
+            usage=Usage(self._model, input_tokens=tokens_in, output_tokens=tokens_out),
+        )
+
+
+def _slot_call(slot: dict[str, str]) -> Any:
+    """Собранный из кусков вызов в той же форме, что у нестримового ответа."""
+    return SimpleNamespace(
+        id=slot["id"],
+        function=SimpleNamespace(name=slot["name"], arguments=slot["args"]),
+    )
 
 
 def _call_json(call: Any) -> dict[str, Any]:
