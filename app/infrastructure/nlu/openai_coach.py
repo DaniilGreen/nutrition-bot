@@ -161,7 +161,13 @@ class OpenAiCoach:
 
             msg = resp.choices[0].message
             text = (msg.content or "").strip()
-            calls = list(getattr(msg, "tool_calls", None) or [])
+            # Фильтр по типу — из finance-bot. В SDK `tool_calls` это union, и
+            # поле `function` есть только у функциональных вызовов; чужой вариант
+            # мы не заказывали и молча пропускаем, а не падаем на нём.
+            calls = [
+                c for c in (getattr(msg, "tool_calls", None) or [])
+                if getattr(c, "type", "function") == "function"
+            ]
             if not calls:
                 break
 
@@ -222,6 +228,8 @@ class OpenAiCoach:
                     said.append(piece)
                     yield CoachChunk(kind="delta", text=piece)
                 for tc in getattr(delta, "tool_calls", None) or []:
+                    if getattr(tc, "type", "function") not in ("function", None):
+                        continue
                     # Вызов приходит по кускам и собирается по индексу: имя и
                     # аргументы могут приехать разными событиями.
                     slot = calls.setdefault(tc.index, {"id": "", "name": "", "args": ""})

@@ -190,3 +190,18 @@ async def test_инструмент_доверия_к_цифрам_доступ�
     tool_msg = [m for m in client.calls[1]["messages"] if m.get("role") == "tool"][0]
     assert "фо бо" in tool_msg["content"]
     assert text.startswith("Твоим цифрам")
+
+
+async def test_нефункциональный_вызов_пропускается():
+    """Взято из finance-bot: в SDK `tool_calls` — union, и поле `function` есть
+    только у функциональных вызовов. Чужой вариант мы не заказывали — молча
+    пропускаем, а не падаем на отсутствующем поле."""
+    alien = SimpleNamespace(id="c9", type="custom", custom=SimpleNamespace(input="?"))
+    client = FakeClient([
+        _resp(calls=[alien, _call("day_totals", {"days": 7})], tin=100, tout=10),
+        _resp(content="Ответил.", tin=200, tout=20),
+    ])
+    data = FakeData()
+    text, _ = await OpenAiCoach(client, "gpt-5.1").ask("q", "фон", data)
+    assert data.seen == [("day_totals", (7,))]
+    assert text == "Ответил."
