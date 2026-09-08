@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Sequence
 
 from openai import AsyncOpenAI
@@ -17,14 +18,52 @@ from app.infrastructure.nlu.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.infrastructure.nlu.schema import NluResult
 from app.infrastructure.openai_compat import temperature_for
 
+# AI-PRINCIPLES §1: сеть моргает, и разбор еды не должен от этого теряться.
+# Ретраим всё одинаково — разбираться, что именно отвалилось, дороже, чем повторить.
+RETRIES = 2
+BACKOFF_S = 1.0
+TIMEOUT_S = 30.0
+
+
+log = logging.getLogger(__name__)
+
 
 class OpenAiNlu:
-    def __init__(self, client: AsyncOpenAI, model: str, sample_k: int = 5) -> None:
+    def __init__(
+        self,
+        client: AsyncOpenAI,
+        model: str,
+        sample_k: int = 5,
+        meter: object | None = None,
+        timeout: float = TIMEOUT_S,
+    ) -> None:
         self._client = client
         self._model = model
         self._k = max(1, sample_k)
+        # AI-PRINCIPLES §2: разбор — ОСНОВНАЯ статья трат (пять вызовов на приём
+        # с оценкой), и до 08.09.2026 она не считалась вовсе. Счётчик со своим
+        # интерфейсом, а не SpendRepo: адаптеру про транзакции знать незачем.
+        self._meter = meter
+        self._timeout = timeout
 
     async def _parse_at(
+        self, text: str, known_keys: Sequence[str], temperature: float
+    ) -> ParsedMessage:
+        last: Exception | None = None
+        for attempt in range(1 + RETRIES):
+            if attempt:
+                await asyncio.sleep(BACKOFF_S * attempt)
+            try:
+                return await self._parse_once(text, known_keys, temperature)
+            except Exception as exc:  # noqa: BLE001 — таймаут/сеть/429 ретраим одинаково
+                last = exc
+                log.warning("разбор не удался, попытка %d из %d: %s",
+                            attempt + 1, 1 + RETRIES, exc)
+        assert last is not None
+        # Наверх, а не молча: вызывающий сохранит сырой ввод и предложит повтор.
+        raise last
+
+    async def _parse_once(
         self, text: str, known_keys: Sequence[str], temperature: float
     ) -> ParsedMessage:
         completion = await self._client.beta.chat.completions.parse(
@@ -36,11 +75,28 @@ class OpenAiNlu:
             response_format=NluResult,
             # gpt-5.x отвергает явную temperature (400) — там параметр не шлём вовсе
             temperature=temperature_for(self._model, temperature),
+            timeout=self._timeout,
         )
+        await self._meter_usage(completion)
         parsed = completion.choices[0].message.parsed
         if parsed is None:
             return ParsedMessage(intent=Intent.UNKNOWN, confidence=0.0)
         return _to_dto(parsed)
+
+    async def _meter_usage(self, completion: object) -> None:
+        """Записать расход вызова. Сбой счётчика не должен ронять разбор:
+        потерять запись дороже, чем недосчитать цент."""
+        if self._meter is None:
+            return
+        try:
+            u = completion.usage
+            await self._meter.note(
+                model=self._model,
+                input_tokens=int(getattr(u, "prompt_tokens", 0) or 0),
+                output_tokens=int(getattr(u, "completion_tokens", 0) or 0),
+            )
+        except Exception:  # noqa: BLE001
+            log.warning("не удалось записать расход разбора", exc_info=True)
 
     async def parse(self, text: str, known_keys: Sequence[str]) -> ParsedMessage:
         return await self._parse_at(text, known_keys, 0.0)

@@ -28,7 +28,7 @@ from app.infrastructure.db.repositories import (
 )
 
 
-def build_nlu(settings: Settings) -> NluPort:
+def build_nlu(settings: Settings, meter: object | None = None) -> NluPort:
     if settings.use_fake_nlu:
         from app.infrastructure.nlu.fake_nlu import FakeNlu
 
@@ -45,12 +45,15 @@ def build_nlu(settings: Settings) -> NluPort:
             AsyncOpenAI(api_key=settings.openai_api_key, max_retries=settings.openai_max_retries),
             settings.openai_model,
             sample_k=settings.sample_k,
+            # AI-PRINCIPLES §2: разбор — основная статья трат, и до 08.09.2026
+            # она не считалась вовсе.
+            meter=meter,
         )
 
     raise RuntimeError(f"Неизвестный LLM_PROVIDER: {settings.llm_provider}")
 
 
-def build_stt(settings: Settings) -> SttPort | None:
+def build_stt(settings: Settings, meter: object | None = None) -> SttPort | None:
     """STT (голос) доступен только при наличии OpenAI-ключа; иначе None."""
     if not settings.openai_api_key:
         return None
@@ -61,6 +64,7 @@ def build_stt(settings: Settings) -> SttPort | None:
     return OpenAiStt(
         AsyncOpenAI(api_key=settings.openai_api_key, max_retries=settings.openai_max_retries),
         settings.openai_stt_model,
+        meter,
     )
 
 
@@ -105,11 +109,16 @@ class Container:
 
     @classmethod
     def create(cls, settings: Settings) -> Container:
+        # БД собираем первой: счётчику трат нужна фабрика сессий, а он нужен
+        # разбору и голосу (AI-PRINCIPLES §2).
+        db = Database(settings.database_url, echo=settings.db_echo)
+        from app.infrastructure.spend_meter import SpendMeter
+
         return cls(
             settings=settings,
-            db=Database(settings.database_url, echo=settings.db_echo),
-            nlu=build_nlu(settings),
-            stt=build_stt(settings),
+            db=db,
+            nlu=build_nlu(settings, SpendMeter(db.session_factory, "nlu")),
+            stt=build_stt(settings, SpendMeter(db.session_factory, "stt")),
             vision=build_vision(settings),
             coach_port=build_coach_port(settings),
         )
