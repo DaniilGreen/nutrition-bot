@@ -16,7 +16,7 @@ from typing import Any, Protocol
 
 from app.application.coach_data import CoachData
 from app.application.entities import User
-from app.application.ports import MealRepo, SpendRepo, WeightRepo
+from app.application.ports import MealRepo, ProductRepo, SpendRepo, WeightRepo
 from app.application.stats_service import StatsService
 from app.domain.mentions import Candidate, mentioned
 from app.domain.spend import Usage, month_limit_reached
@@ -80,12 +80,14 @@ class Coach:
         limit_usd: float,
         meals: MealRepo | None = None,
         weights: WeightRepo | None = None,
+        products: ProductRepo | None = None,
     ) -> None:
         self._port = port
         self._spend = spend
         self._stats = stats
         self._limit = limit_usd
         self._weights = weights
+        self._products = products
         # Нужен только ради «что из этого записать»: берём частое человека,
         # там уже есть product_id и медианная граммовка.
         self._meals = meals
@@ -101,7 +103,7 @@ class Coach:
         # Инструменты выдаём только когда есть чем их обслужить: без репозиториев
         # модель получит вызовы, на которые нечем ответить (§6.21).
         data = (
-            CoachData(user, self._stats, self._meals, self._weights)
+            CoachData(user, self._stats, self._meals, self._weights, self._products)
             if self._meals is not None and self._weights is not None
             else None
         )
@@ -138,7 +140,7 @@ class Coach:
         spent = await self.ensure_budget()
         facts = await self._facts(user)
         data = (
-            CoachData(user, self._stats, self._meals, self._weights)
+            CoachData(user, self._stats, self._meals, self._weights, self._products)
             if self._meals is not None and self._weights is not None
             else None
         )

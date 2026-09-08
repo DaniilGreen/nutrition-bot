@@ -133,6 +133,7 @@ class Container:
             self.settings.coach_month_limit_usd,
             meals,
             SqlWeightRepo(session),
+            SqlProductRepo(session),
         )
 
     def assistant_for(self, session: AsyncSession) -> tuple[Assistant, SqlUserRepo]:

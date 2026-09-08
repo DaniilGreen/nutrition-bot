@@ -99,6 +99,7 @@ class FakeContainer:
             # Без весов не собрать инструменты (§6.21) — тест бы проверял
             # ассистента без единого инструмента, то есть не то, что в проде.
             self.weights,
+            self.products,
         )
 
     def assistant_for(self, session):

@@ -15,7 +15,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.application.entities import User
-from app.application.ports import MealRepo, WeightRepo
+from app.application.ports import MealRepo, ProductRepo, WeightRepo
 from app.application.stats_service import StatsService
 from app.clock import Clock, utcnow
 
@@ -40,12 +40,14 @@ class CoachData:
         stats: StatsService,
         meals: MealRepo,
         weights: WeightRepo,
+        products: ProductRepo | None = None,
         clock: Clock = utcnow,
     ) -> None:
         self._user = user
         self._stats = stats
         self._meals = meals
         self._weights = weights
+        self._products = products
         self._clock = clock
 
     @property
@@ -122,6 +124,39 @@ class CoachData:
             {"date": log.measured_at.date().isoformat(), "kg": round(log.weight_kg, 1)}
             for log in logs
         ]
+
+
+    async def accuracy(self, days: Any = 30) -> dict[str, Any]:
+        """Насколько цифрам дневника можно верить — и что именно чинить.
+
+        Доля без списка продуктов бесполезна: «у тебя 63 % оценок» не говорит,
+        с чего начать. Поэтому отдаём и то, какие продукты эту долю дают —
+        по ним видно, чью этикетку стоит снять, чтобы цифры перестали врать.
+        """
+        n = _clamp(days, 1, MAX_DAYS, 30)
+        est_kcal, total_kcal = await self._meals.estimate_share(self._uid, days=n)
+        share = round(est_kcal / total_kcal, 2) if total_kcal else 0.0
+        out: dict[str, Any] = {
+            "days": n,
+            "share_estimated": share,
+            "kcal_estimated": round(est_kcal),
+            "kcal_total": round(total_kcal),
+            "note": "Оценка — плотность придумала модель. Этикетка — цифры с упаковки.",
+        }
+        if self._products is None:
+            return out
+        # ponytail: пересечение двух готовых запросов вместо третьего с JOIN.
+        # Потолок известен: список оценочных продуктов обрезан двумя сотнями,
+        # и очень старая оценка в него не попадёт. Понадобится точнее — запрос
+        # вклада с фильтром по is_estimate.
+        estimated = {p.id for p in await self._products.list_estimated(200)}
+        rows = await self._meals.contributions(self._uid, days=n, limit=20, by="kcal")
+        out["estimated_products"] = [
+            {"name": name, "kcal": round(total), "times": times}
+            for pid, name, total, times in rows
+            if pid in estimated
+        ][:10]
+        return out
 
 
 def _parse_day(value: Any) -> date:

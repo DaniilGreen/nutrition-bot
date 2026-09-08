@@ -62,6 +62,10 @@ class FakeData:
         self.seen.append(("weight_log", (limit,)))
         return [{"date": "2026-08-28", "kg": 92.1}]
 
+    async def accuracy(self, days=30):
+        self.seen.append(("accuracy", (days,)))
+        return {"share_estimated": 0.63, "estimated_products": [{"name": "фо бо"}]}
+
 
 async def test_модель_видит_данные_через_инструмент():
     """Главное, ради чего всё затевалось: названия еды доходят до модели."""
@@ -162,7 +166,8 @@ async def test_без_данных_инструменты_не_предлага�
     assert text == "Ответ."
 
 
-@pytest.mark.parametrize("name", ["day_totals", "meals_on", "top_products", "weight_log"])
+@pytest.mark.parametrize("name", ["day_totals", "meals_on", "top_products",
+                                  "weight_log", "accuracy"])
 def test_в_схеме_инструмента_нет_пользователя(name):
     """MA-INV-39: модель не может попросить чужие данные, потому что такого
     аргумента не существует — не потому, что мы его проверяем."""
@@ -171,3 +176,17 @@ def test_в_схеме_инструмента_нет_пользователя(na
     tool = next(t for t in TOOLS if t["function"]["name"] == name)
     props = tool["function"]["parameters"]["properties"]
     assert not any("user" in k or "telegram" in k or "id" == k for k in props), props
+
+
+async def test_инструмент_доверия_к_цифрам_доступен_модели():
+    """63 % калорий — оценка. Раньше это число было посчитано и недостижимо."""
+    client = FakeClient([
+        _resp(calls=[_call("accuracy", {"days": 30})], tin=200, tout=20),
+        _resp(content="Твоим цифрам можно верить на треть.", tin=400, tout=30),
+    ])
+    data = FakeData()
+    text, _ = await OpenAiCoach(client, "gpt-5.1").ask("можно ли верить цифрам", "фон", data)
+    assert data.seen == [("accuracy", (30,))]
+    tool_msg = [m for m in client.calls[1]["messages"] if m.get("role") == "tool"][0]
+    assert "фо бо" in tool_msg["content"]
+    assert text.startswith("Твоим цифрам")

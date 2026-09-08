@@ -89,6 +89,22 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "accuracy",
+            "description": "Насколько цифрам дневника можно верить: какая доля калорий "
+                           "посчитана оценкой модели, а не взята с этикетки, и какие "
+                           "продукты дают эту долю.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days": {"type": "integer", "description": "Окно в днях, 1–90."}
+                },
+                "required": ["days"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "weight_log",
             "description": "Замеры веса с датами, свежие первыми.",
             "parameters": {
@@ -110,6 +126,7 @@ class CoachData(Protocol):
     async def meals_on(self, date_str: Any = None) -> Any: ...
     async def top_products(self, days: Any = 30, by: Any = "kcal") -> Any: ...
     async def weight_log(self, limit: Any = 14) -> Any: ...
+    async def accuracy(self, days: Any = 30) -> Any: ...
 
 
 class OpenAiCoach:
@@ -279,6 +296,8 @@ async def _run(data: CoachData | None, call: Any) -> str:
             result = await data.top_products(args.get("days", 30), args.get("by", "kcal"))
         elif name == "weight_log":
             result = await data.weight_log(args.get("limit", 14))
+        elif name == "accuracy":
+            result = await data.accuracy(args.get("days", 30))
         else:
             # Модель выдумала инструмент — говорим ей об этом, а не падаем.
             result = {"error": f"нет такого инструмента: {name}"}
