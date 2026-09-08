@@ -17,9 +17,11 @@ class StubCoach:
     def __init__(self, text="Белка мало.", tokens=(1000, 200)):
         self.text, self.tokens = text, tokens
         self.seen_facts = None
+        self.seen_data = None      # §6.21: чем модель могла бы воспользоваться
 
-    async def ask(self, question, facts):
+    async def ask(self, question, facts, data=None):
         self.seen_facts = facts
+        self.seen_data = data
         return self.text, Usage("gpt-5.1", self.tokens[0], self.tokens[1])
 
 

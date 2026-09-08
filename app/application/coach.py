@@ -11,10 +11,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
+from app.application.coach_data import CoachData
 from app.application.entities import User
-from app.application.ports import MealRepo, SpendRepo
+from app.application.ports import MealRepo, SpendRepo, WeightRepo
 from app.application.stats_service import StatsService
 from app.domain.mentions import Candidate, mentioned
 from app.domain.spend import Usage, month_limit_reached
@@ -22,9 +23,15 @@ from app.domain.spend import Usage, month_limit_reached
 
 class CoachPort(Protocol):
     """Порт к языковой модели для свободного вопроса. Отдельный от `NluPort`:
-    тот извлекает сущности по схеме, этот отвечает текстом."""
+    тот извлекает сущности по схеме, этот отвечает текстом.
 
-    async def ask(self, question: str, facts: str) -> tuple[str, Usage]: ...
+    `data` — то, что модель вправе посмотреть сама (§6.21). Адаптер решает,
+    сколько раз к ней сходить; расход возвращается суммой по всем раундам.
+    """
+
+    async def ask(
+        self, question: str, facts: str, data: Any | None = None
+    ) -> tuple[str, Usage]: ...
 
 
 @dataclass
@@ -51,11 +58,13 @@ class Coach:
         stats: StatsService,
         limit_usd: float,
         meals: MealRepo | None = None,
+        weights: WeightRepo | None = None,
     ) -> None:
         self._port = port
         self._spend = spend
         self._stats = stats
         self._limit = limit_usd
+        self._weights = weights
         # Нужен только ради «что из этого записать»: берём частое человека,
         # там уже есть product_id и медианная граммовка.
         self._meals = meals
@@ -68,7 +77,14 @@ class Coach:
             raise LimitReached
 
         facts = await self._facts(user)
-        text, usage = await self._port.ask(question, facts)
+        # Инструменты выдаём только когда есть чем их обслужить: без репозиториев
+        # модель получит вызовы, на которые нечем ответить (§6.21).
+        data = (
+            CoachData(user, self._stats, self._meals, self._weights)
+            if self._meals is not None and self._weights is not None
+            else None
+        )
+        text, usage = await self._port.ask(question, facts, data)
 
         await self._spend.add(
             user_id=user.id,
@@ -101,10 +117,11 @@ class Coach:
         )
 
     async def _facts(self, user: User) -> str:
-        """Факты для модели — уже посчитанные приложением.
+        """Стартовая сводка — то, с чего модель начинает, не спрашивая ничего.
 
-        Отдаём сводку, а не сырые приёмы: month-длина промпта это деньги, а
-        для вопросов вида «почему не худею» нужны агрегаты, не список блюд.
+        Остаётся и после появления инструментов (§6.21): половина вопросов
+        отвечается по ней без единого вызова, а вызов стоит денег и задержки.
+        Подробности — цель, продукты, приёмы дня, вес — модель берёт сама.
         """
         rows = await self._stats.last_days_macros(user, 30)
         goal = await self._stats.current_goal(user)

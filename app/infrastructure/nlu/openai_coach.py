@@ -1,19 +1,111 @@
-"""Реализация CoachPort на OpenAI. Свободный ответ текстом, не по схеме."""
+"""Реализация CoachPort на OpenAI: свободный ответ текстом плюс инструменты (§6.21).
+
+Модель сама решает, какие данные ей нужны, и запрашивает их вызовом инструмента.
+Схемы инструментов живут здесь, потому что их формат — деталь провайдера; сами
+данные отдаёт `CoachData` из application, привязанный к человеку (MA-INV-39).
+"""
 from __future__ import annotations
+
+import json
+import logging
+from typing import Any, Protocol
 
 from openai import AsyncOpenAI
 
 from app.domain.spend import Usage
 
+log = logging.getLogger(__name__)
+
+# MA-INV-40: потолок обращений к модели на один вопрос. Было ровно одно, стало
+# до четырёх — без потолка вопрос мог бы крутиться, пока не кончится бюджет.
+MAX_ROUNDS = 4
+
 SYSTEM = """Ты — помощник по дневнику питания. Отвечай на русском, коротко и по делу.
 
+У тебя есть инструменты, чтобы посмотреть данные человека. Пользуйся ими, когда
+вопрос требует конкретики: что он ел, какие продукты дают больше всего калорий,
+как менялся вес. Не спрашивай разрешения — просто посмотри.
+
 Правила:
-- Опирайся ТОЛЬКО на переданные цифры. Не выдумывай данных, которых нет.
+- Опирайся ТОЛЬКО на данные из инструментов и переданные цифры. Не выдумывай.
 - Не считай калорийность блюд — это делает приложение. Твоё дело объяснять цифры.
 - Не ставь диагнозов и не назначай лечения. Ты не врач.
 - Если данных мало для вывода, так и скажи, а не сочиняй.
 - Без нравоучений и оценок вроде «плохо» или «ты переел». Факты и следствия.
+- Называя продукт, пиши его ровно так, как он записан в дневнике.
 - 2–5 предложений. Списком — только если пунктов правда несколько."""
+
+TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "day_totals",
+            "description": "Съеденное по дням: ккал, белок, жир, углеводы, число приёмов. "
+                           "Дни без записей тоже возвращаются — по ним видно пропуски.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days": {"type": "integer", "description": "Сколько последних дней, 1–90."}
+                },
+                "required": ["days"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "meals_on",
+            "description": "Приёмы конкретного дня: время, что человек записал, "
+                           "позиции с граммовкой и калориями.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "Дата YYYY-MM-DD."}
+                },
+                "required": ["date"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "top_products",
+            "description": "Какие продукты дают больше всего калорий (или белка, жира, "
+                           "углеводов) за окно. Это вклад, а не частота.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days": {"type": "integer", "description": "Окно в днях, 1–90."},
+                    "by": {"type": "string", "enum": ["kcal", "protein", "fat", "carb"]},
+                },
+                "required": ["days", "by"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "weight_log",
+            "description": "Замеры веса с датами, свежие первыми.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Сколько замеров, 1–60."}
+                },
+                "required": ["limit"],
+            },
+        },
+    },
+]
+
+
+class CoachData(Protocol):
+    """Что адаптер вправе спросить. Пользователя в сигнатурах нет (MA-INV-39)."""
+
+    async def day_totals(self, days: Any = 14) -> Any: ...
+    async def meals_on(self, date_str: Any = None) -> Any: ...
+    async def top_products(self, days: Any = 30, by: Any = "kcal") -> Any: ...
+    async def weight_log(self, limit: Any = 14) -> Any: ...
 
 
 class OpenAiCoach:
@@ -21,21 +113,83 @@ class OpenAiCoach:
         self._client = client
         self._model = model
 
-    async def ask(self, question: str, facts: str) -> tuple[str, Usage]:
-        resp = await self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": SYSTEM},
-                {"role": "user", "content": f"Мои данные:\n{facts}\n\nВопрос: {question}"},
-            ],
-        )
-        text = (resp.choices[0].message.content or "").strip()
-        u = resp.usage
-        usage = Usage(
-            model=self._model,
-            # Токены может не прийти (стрим, сбой) — считаем нулём, но НЕ падаем:
-            # потерять ответ из-за отсутствия счётчика хуже, чем недосчитать цент.
-            input_tokens=int(getattr(u, "prompt_tokens", 0) or 0),
-            output_tokens=int(getattr(u, "completion_tokens", 0) or 0),
-        )
+    async def ask(
+        self, question: str, facts: str, data: CoachData | None = None
+    ) -> tuple[str, Usage]:
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": f"Мои данные:\n{facts}\n\nВопрос: {question}"},
+        ]
+        # Токены копим по ВСЕМ раундам: учесть только последний значило бы
+        # недосчитать в разы, и лимит $5 перестал бы ограничивать (MA-INV-40).
+        tokens_in = tokens_out = 0
+        text = ""
+
+        for round_no in range(MAX_ROUNDS):
+            last = round_no == MAX_ROUNDS - 1
+            kwargs: dict[str, Any] = {"model": self._model, "messages": messages}
+            # На последнем раунде инструментов не предлагаем вовсе: модель обязана
+            # ответить словами, иначе человек не получит ничего.
+            if data is not None and not last:
+                kwargs["tools"] = TOOLS
+            resp = await self._client.chat.completions.create(**kwargs)
+
+            u = resp.usage
+            tokens_in += int(getattr(u, "prompt_tokens", 0) or 0)
+            tokens_out += int(getattr(u, "completion_tokens", 0) or 0)
+
+            msg = resp.choices[0].message
+            text = (msg.content or "").strip()
+            calls = list(getattr(msg, "tool_calls", None) or [])
+            if not calls:
+                break
+
+            messages.append(
+                {"role": "assistant", "content": msg.content,
+                 "tool_calls": [_call_json(c) for c in calls]}
+            )
+            for call in calls:
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": await _run(data, call),
+                })
+
+        usage = Usage(model=self._model, input_tokens=tokens_in, output_tokens=tokens_out)
         return text or "Не нашёл, что ответить по этим данным.", usage
+
+
+def _call_json(call: Any) -> dict[str, Any]:
+    return {
+        "id": call.id,
+        "type": "function",
+        "function": {"name": call.function.name, "arguments": call.function.arguments},
+    }
+
+
+async def _run(data: CoachData | None, call: Any) -> str:
+    """Выполнить вызов инструмента. Любой сбой возвращается модели текстом,
+    а не исключением: упасть на кривом аргументе значит потерять весь ответ."""
+    name = call.function.name
+    try:
+        args = json.loads(call.function.arguments or "{}")
+    except json.JSONDecodeError:
+        args = {}
+    try:
+        if data is None:
+            result: Any = {"error": "данные недоступны"}
+        elif name == "day_totals":
+            result = await data.day_totals(args.get("days", 14))
+        elif name == "meals_on":
+            result = await data.meals_on(args.get("date"))
+        elif name == "top_products":
+            result = await data.top_products(args.get("days", 30), args.get("by", "kcal"))
+        elif name == "weight_log":
+            result = await data.weight_log(args.get("limit", 14))
+        else:
+            # Модель выдумала инструмент — говорим ей об этом, а не падаем.
+            result = {"error": f"нет такого инструмента: {name}"}
+    except Exception as exc:  # noqa: BLE001 — сбой одного инструмента не рушит ответ
+        log.warning("инструмент ассистента %s упал: %s", name, exc, exc_info=True)
+        result = {"error": "не получилось получить эти данные"}
+    return json.dumps(result, ensure_ascii=False)
