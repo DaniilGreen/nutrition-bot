@@ -20,6 +20,7 @@ from app.application.dto import ParsedItem, ParsedMessage
 from app.application.entities import Meal, MealItem, Product, User
 from app.application.ports import MealRepo, ProductRepo
 from app.clock import Clock, utcnow
+from app.domain.inedible import explain
 from app.domain.naming import (
     _NAME_THRESHOLD,
     _coverage,
@@ -128,9 +129,14 @@ class MealService:
                 if product.source in ("curated", "manual") and not user_is_specific
                 else parsed_item.name
             )
+            # INV-7.1: вычли несъедобное — скажи об этом. Человек назвал 400 г с костью,
+            # увидел в ленте 260 и прочитал это как поломку (багрепорт #34). Пояснение
+            # идёт в СНАПШОТ позиции, а не в имя продукта: оно про одну запись, и
+            # засорять им каталог нельзя (INV-3).
+            note = explain(raw_input, display_name, grams)
             items.append(
                 MealItem(
-                    name_snapshot=display_name,
+                    name_snapshot=f"{display_name} · {note}" if note else display_name,
                     grams=round(grams, 1),
                     macros=macros,
                     product_id=product.id,
