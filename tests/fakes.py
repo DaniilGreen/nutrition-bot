@@ -1,10 +1,11 @@
 """In-memory реализации портов + StubNlu/StubStt для тестов без БД и без LLM."""
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from app.application.dto import ParsedItem, ParsedMessage
+from app.application.dto import ParsedItem, ParsedMessage, PlateReading
 from app.application.entities import Meal, Product, User, WeightLog
 from app.domain.goals import Goal
 from app.domain.value_objects import Density, Macros, sum_macros
@@ -420,10 +421,23 @@ class SamplingStubNlu:
 
 
 class StubVision:
-    """read_label отдаёт заданный ParsedItem (FR-27, без vision-вызова). None = не распознано."""
+    """read_label отдаёт заданный ParsedItem (FR-27, без vision-вызова). None = не распознано.
 
-    def __init__(self, item: ParsedItem | None) -> None:
+    read_photo (FR-34): без `plate` снимок считается этикеткой — так старые тесты
+    этикетки проходят и через общий вход фото."""
+
+    def __init__(self, item: ParsedItem | None, plate: PlateReading | None = None) -> None:
         self._item = item
+        self._plate = plate
+        self.photo_calls = 0
+        self.seen_caption: str | None = None
+
+    async def read_photo(self, image: bytes, caption: str = "") -> PlateReading:
+        self.photo_calls += 1
+        self.seen_caption = caption
+        if self._plate is None:
+            return PlateReading(kind="label")
+        return deepcopy(self._plate)
 
     async def read_label(self, image: bytes) -> ParsedItem | None:
         # копия на каждый скан — независимые «снимки» (для теста дедупа повторного скана)

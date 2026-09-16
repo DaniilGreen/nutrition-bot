@@ -56,6 +56,13 @@ class DraftStore:
         self._items[token] = Draft(user_id, payload, item_index, raw_input, kind, day_offset)
         return token
 
+    def peek(self, token: str, user_id: int) -> Draft | None:
+        """Посмотреть, не забирая: проверка ввода до изъятия, чтобы отказ
+        валидации не сжигал черновик (MA-INV-44)."""
+        self._sweep()
+        draft = self._items.get(token)
+        return draft if draft is not None and draft.user_id == user_id else None
+
     def take(self, token: str, user_id: int) -> Draft | None:
         """Достать и удалить. Одноразовость намеренная: повторный ответ на то же
         уточнение записал бы приём дважды."""

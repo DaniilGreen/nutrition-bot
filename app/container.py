@@ -160,5 +160,6 @@ class Container:
         assistant = Assistant(
             self.nlu, products, meal_service, weight_service, stats_service,
             self.stt, bugs, self.vision,
+            SqlSpendRepo(session), self.settings.ai_month_limit_usd,
         )
         return assistant, users

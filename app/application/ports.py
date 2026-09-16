@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol
 
-from app.application.dto import ParsedItem, ParsedMessage
+from app.application.dto import ParsedItem, ParsedMessage, PlateReading
 from app.application.entities import Meal, Product, User, WeightLog
 from app.domain.goals import Goal
 from app.domain.value_objects import Density, Macros
@@ -35,6 +35,11 @@ class VisionPort(Protocol):
     async def read_label(self, image: bytes) -> ParsedItem | None:
         """FR-27: прочитать таблицу КБЖУ с фото этикетки → ParsedItem (name + плотность/100г
         + вес пачки в unit_weight_g, если есть). None — этикетка не распознана."""
+        ...
+
+    async def read_photo(self, image: bytes, caption: str = "") -> PlateReading:
+        """FR-34: что на снимке — этикетка, блюдо или ни то ни другое; для блюда —
+        составляющие с долями и оценкой граммов. Подпись — слова человека к снимку."""
         ...
 
 

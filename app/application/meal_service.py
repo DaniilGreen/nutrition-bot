@@ -59,6 +59,8 @@ class MealService:
         day_offset: int = 0,
     ) -> Meal:
         user_id = _require_id(user)
+        # FR-34: фото без веса — каждая позиция оценка, и это видно в ленте.
+        guessed = parsed.weight_guessed
 
         items: list[MealItem] = []
         estimated = False
@@ -134,15 +136,19 @@ class MealService:
             # идёт в СНАПШОТ позиции, а не в имя продукта: оно про одну запись, и
             # засорять им каталог нельзя (INV-3).
             note = explain(raw_input, display_name, grams)
+            if guessed:
+                note = f"{note} · вес на глаз" if note else "вес на глаз"
             items.append(
                 MealItem(
                     name_snapshot=f"{display_name} · {note}" if note else display_name,
                     grams=round(grams, 1),
                     macros=macros,
                     product_id=product.id,
-                    is_estimate=product.is_estimate,  # INV-13: метка «≈» на оценочной позиции
+                    # INV-13: метка «≈» на оценочной позиции; вес на глаз — тоже оценка
+                    is_estimate=product.is_estimate or guessed,
                 )
             )
+            estimated = estimated or guessed
 
         # FR-33: «вчера»/«завтра» сдвигают ДЕНЬ приёма, время суток берём текущее (владелец: время
         # неважно). Кламп — страховка от галлюцинации LLM (день из будущего/древности).
@@ -152,7 +158,7 @@ class MealService:
         meal = Meal(
             user_id=user_id,
             eaten_at=self._clock() + timedelta(days=offset),
-            input_type=input_type,
+            input_type="photo" if parsed.photo else input_type,
             raw_input=raw_input,
             items=items,
             source_confidence=parsed.confidence,

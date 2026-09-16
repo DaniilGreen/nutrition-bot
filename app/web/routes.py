@@ -30,6 +30,7 @@ from app.application.results import (
     ItemRemoved,
     LabelRead,
     MealLogged,
+    PlateRead,
     VariantClarificationNeeded,
     WeightLogged,
 )
@@ -320,6 +321,114 @@ async def log_label(
     else:
         out = _result_json(result, user, request, raw_input="этикетка")
     return idem.remember(out)
+
+
+@router.post("/meals/photo")
+async def log_photo(
+    request: Request, user: CurrentUser, assistant: CurrentAssistant, idem: CurrentIdem,
+) -> dict[str, Any]:
+    """FR-34: снимок → этикетка (как `/meals/label`) или карточка блюда (§6.22).
+
+    Тело сырое, как у этикетки. Подпись — в `caption` (бот шлёт её с фото; аппка
+    пока нет, но контракт один).
+    """
+    image = await request.body()
+    if not image:
+        raise bad_request("empty_image", "Фото пустое.")
+    if len(image) > 4_000_000:
+        raise bad_request("image_too_big", "Слишком большое фото — сними ближе.")
+    if idem.replay is not None:
+        return idem.replay
+    _throttle(request, user, "label", limit=6, window=60)
+    caption = (request.query_params.get("caption") or "")[:200]
+    offset = _day_offset(request.query_params.get("days_ago"))
+    try:
+        result = await assistant.read_photo(user, image, caption=caption)
+    except LimitReached as exc:
+        raise ApiError(
+            429, "ai_limit",
+            "Лимит на фото в этом месяце исчерпан — опиши словами, это работает всегда.",
+        ) from exc
+    drafts = request.app.state.drafts
+    if isinstance(result, LabelRead):
+        token = drafts.put(_uid(user), result.draft, result.item_index, "этикетка", "label", offset)
+        out = _label_json(result.draft, result.item_index, token, atwater=result.atwater_warning)
+    elif isinstance(result, PlateRead):
+        token = drafts.put(_uid(user), result.reading, 0, "фото", "photo", offset)
+        out = _plate_json(result, token)
+    else:
+        out = _result_json(result, user, request, raw_input="фото")
+    return idem.remember(out)
+
+
+@router.post("/meals/photo/commit")
+async def commit_photo(
+    body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant, request: Request,
+    idem: CurrentIdem,
+) -> dict[str, Any]:
+    """FR-34: «Записать» на карточке блюда. Клиент шлёт только индексы и граммы
+    (MA-INV-43); имена и вопросы — из черновика."""
+    if idem.replay is not None:
+        return idem.replay
+    _throttle(request, user, "meals", limit=20, window=60)
+    rows = body.get("components")
+    if not isinstance(rows, list):
+        raise bad_request("empty_plate", "Нечего записывать.")
+    picked: dict[int, float] = {}
+    try:
+        for row in rows:
+            picked[int(row["i"])] = float(row["grams"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise bad_request("bad_grams", "Граммы должны быть числами.") from exc
+    token = str(body.get("draft_id") or "")
+    drafts = request.app.state.drafts
+    draft = drafts.peek(token, _uid(user))
+    if draft is None or draft.kind != "photo":
+        raise bad_request("draft_gone", "Карточка устарела. Сними блюдо ещё раз.")
+    reading = draft.payload
+    if any(not 0 <= i < len(reading.components) for i in picked):
+        raise bad_request("bad_grams", "Такой позиции на карточке нет.")
+    grams = [picked.get(i) for i in range(len(reading.components))]
+    try:
+        text = assistant.photo_text(
+            reading, grams,
+            fat=str(body.get("fat") or "") or None,
+            dressing=str(body.get("dressing") or "") or None,
+        )
+    except ValueError as exc:
+        # MA-INV-44: черновик не тронут — человек поправит и нажмёт снова.
+        if not any(g is not None for g in grams):
+            raise bad_request("empty_plate", "Оставь хотя бы одну позицию.") from exc
+        raise bad_request(
+            "bad_grams", "Граммы: от 1 до 3000 на позицию, всего до 5000."
+        ) from exc
+    if drafts.take(token, _uid(user)) is None:
+        raise bad_request("draft_gone", "Карточка устарела. Сними блюдо ещё раз.")
+    result = await assistant.log_photo(
+        user, text, weighed=bool(body.get("weighed")), day_offset=draft.day_offset
+    )
+    out = _result_json(result, user, request, raw_input=text, day_offset=draft.day_offset)
+    return idem.remember(out)
+
+
+def _plate_json(result: PlateRead, token: str) -> dict[str, Any]:
+    """Карточка блюда (§6.22): что увидели и что спросить."""
+    r = result.reading
+    return {
+        "kind": "photo",
+        "draft_id": token,
+        "dish": r.dish,
+        "weighed": result.weighed,
+        "total_g": result.total_g,
+        "components": [
+            {"i": i, "name": c.name, "grams": g}
+            for i, (c, g) in enumerate(zip(r.components, result.grams, strict=True))
+        ],
+        "ask_fat": r.ask_fat,
+        "fat_kind": r.fat_kind,
+        "ask_dressing": r.ask_dressing,
+        "liquid": r.liquid,
+    }
 
 
 def _label_json(

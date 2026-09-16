@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 
-from app.application.dto import ParsedMessage
+from app.application.dto import ParsedMessage, PlateReading
 from app.application.entities import Meal, MealItem, WeightLog
 from app.domain.goals import Goal, Remaining
 from app.domain.value_objects import Macros
@@ -42,6 +42,16 @@ class LabelRead:
     draft: ParsedMessage
     item_index: int
     atwater_warning: bool = False  # FR-27: Б/Ж/У ≠ ккал на этикетке → вероятен misread, показать ⚠️
+
+
+@dataclass
+class PlateRead:
+    """FR-34: блюдо разобрано на составляющие — показываем карточку и ждём «Записать»."""
+
+    reading: PlateReading
+    grams: list[float]          # по составляющим, уже с весом от человека, если был
+    weighed: bool               # вес назвал человек (подпись) — не «на глаз»
+    total_g: float | None = None
 
 
 @dataclass
@@ -158,6 +168,7 @@ Result = (
     | ClarificationNeeded
     | VariantClarificationNeeded
     | LabelRead
+    | PlateRead
     | WeightLogged
     | WeightTrend
     | DailyStats

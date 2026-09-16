@@ -63,3 +63,22 @@ class ParsedMessage:
     correction_op: str | None = None  # delete|replace|adjust|other для intent=correction
     confidence: float = 1.0
     day_offset: int = 0  # «вчера»=-1, «завтра»=+1; 0=сегодня. Сдвигает день приёма (FR-33)
+    # FR-34: разбор собран из фото блюда. Живут в черновике, а не в аргументах, —
+    # переживают уточнение варианта между снимком и записью.
+    photo: bool = False
+    weight_guessed: bool = False  # веса не называли: каждая позиция — оценка «на глаз»
+
+
+@dataclass
+class PlateReading:
+    """FR-34: что vision увидел на снимке. Граммы тут — оценка модели; вес от
+    человека накладывает `app/domain/plate.py`."""
+
+    kind: str                              # label | dish | none
+    dish: str = ""
+    components: list = field(default_factory=list)  # list[domain.plate.Component]
+    caption_total_g: float | None = None   # вес всей тарелки из подписи (как прочла модель)
+    ask_fat: bool = False
+    fat_kind: str = ""
+    ask_dressing: bool = False
+    liquid: bool = False

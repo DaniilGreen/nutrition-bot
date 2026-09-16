@@ -9,10 +9,18 @@ from datetime import date, datetime
 from statistics import median
 from zoneinfo import ZoneInfo
 
-from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
+from app.application.coach import LimitReached
+from app.application.dto import Intent, ParsedItem, ParsedMessage, PlateReading, Unit
 from app.application.entities import Meal, MealItem, Product, User, WeightLog
 from app.application.meal_service import MealService
-from app.application.ports import BugRepo, NluPort, ProductRepo, SttPort, VisionPort
+from app.application.ports import (
+    BugRepo,
+    NluPort,
+    ProductRepo,
+    SpendRepo,
+    SttPort,
+    VisionPort,
+)
 from app.application.results import (
     ClarificationNeeded,
     CorrectionFailed,
@@ -26,6 +34,7 @@ from app.application.results import (
     MealDeleted,
     MealLogged,
     MonthReport,
+    PlateRead,
     Result,
     Unknown,
     VariantClarificationNeeded,
@@ -39,9 +48,15 @@ from app.domain.consensus import confidence_from_cv, median_cv
 from app.domain.duplicates import Candidate, group
 from app.domain.goals import Goal, Remaining, in_goal, remaining
 from app.domain.nutrition import atwater_suspect
+from app.domain.plate import caption_numbers
+from app.domain.plate import compose as plate_compose
+from app.domain.plate import extras as plate_extras
+from app.domain.plate import split as plate_split
+from app.domain.plate import valid_grams as plate_valid
 from app.domain.plausibility import clamp_density, is_alcoholic
 from app.domain.portion_answer import parse as parse_portion
 from app.domain.reconcile import Reconciliation, reconcile
+from app.domain.spend import month_limit_reached
 from app.domain.value_objects import Density, Macros, sum_macros
 
 
@@ -56,6 +71,8 @@ class Assistant:
         stt: SttPort | None = None,
         bug_repo: BugRepo | None = None,
         vision: VisionPort | None = None,
+        spend: SpendRepo | None = None,
+        month_limit_usd: float = 0.0,
     ) -> None:
         self._nlu = nlu
         self._products = products
@@ -65,6 +82,10 @@ class Assistant:
         self._stt = stt
         self._bug = bug_repo
         self._vision = vision
+        # FR-34: фото блюда — под месячным лимитом (MA-INV-45). Текстовая запись —
+        # нет, поэтому лимит проверяется только в read_photo.
+        self._spend = spend
+        self._limit = month_limit_usd
 
     async def report_bug(self, user: User, note: str) -> None:
         """FR-26: сохранить багрепорт + контекст последних приёмов юзера (для дебага)."""
@@ -84,7 +105,8 @@ class Assistant:
         await self._bug.add(user_id=user.id, note=note.strip()[:2000], context=context)
 
     async def process(
-        self, user: User, text: str, *, input_type: str = "text", day_offset: int = 0
+        self, user: User, text: str, *, input_type: str = "text", day_offset: int = 0,
+        photo: bool = False, weight_guessed: bool = False,
     ) -> Result:
         """`day_offset` — день, на который смотрит человек, когда пишет (0 = сегодня,
         −1 = вчера). Это ДЕФОЛТ: слово «вчера» в самой фразе его перебивает."""
@@ -94,6 +116,8 @@ class Assistant:
         # для не-meal/стейтед — один сэмпл. Фейки возвращают один сэмпл → поведение тестов цело.
         samples = await self._nlu.parse_samples(text, known_keys=known_keys)
         parsed = _consolidate(samples)
+        parsed.photo = photo
+        parsed.weight_guessed = weight_guessed
 
         if parsed.intent is Intent.MEAL and parsed.items:
             return await self._handle_meal(
@@ -137,6 +161,71 @@ class Assistant:
         )
         draft = ParsedMessage(intent=Intent.MEAL, items=[item], confidence=1.0)
         return LabelRead(draft=draft, item_index=0, atwater_warning=warn)
+
+    async def read_photo(
+        self, user: User, image: bytes, *, caption: str = "", photo_file_id: str | None = None
+    ) -> Result:
+        """FR-34: снимок → этикетка (FR-27) или карточка блюда.
+
+        Раскладку по составляющим делает модель, вес — человек. Число из подписи
+        принимается, только если человек его действительно написал.
+        """
+        if self._vision is None:
+            return Unknown(reason="распознавание фото недоступно")
+        await self._ensure_budget()
+        reading = await self._vision.read_photo(image, caption)
+        if reading.kind == "label":
+            return await self.read_label(user, image, photo_file_id=photo_file_id)
+        if reading.kind != "dish" or not reading.components:
+            return Unknown(reason="не вижу на снимке еды — сними тарелку сверху, при свете")
+        said = caption_numbers(caption)
+        total = reading.caption_total_g if reading.caption_total_g in said else None
+        for c in reading.components:
+            c.fixed = bool(c.fixed and c.grams in said)
+        grams = plate_split(reading.components, total)
+        weighed = total is not None or any(c.fixed for c in reading.components)
+        return PlateRead(reading=reading, grams=grams, weighed=weighed, total_g=total)
+
+    @staticmethod
+    def photo_text(
+        reading: PlateReading, grams: list[float | None], *,
+        fat: str | None = None, dressing: str | None = None,
+    ) -> str:
+        """FR-34: карточка → фраза «имя N г, …». `grams[i]` — граммы i-й
+        составляющей, None — человек её убрал. Имена берём из черновика, не от
+        клиента (MA-INV-43). ValueError — граммы вне границ (MA-INV-44)."""
+        parts = [
+            (c.name, float(g))
+            for c, g in zip(reading.components, grams, strict=False)
+            if g is not None
+        ]
+        if not parts or not plate_valid([g for _, g in parts]):
+            raise ValueError("bad_plate")
+        parts += plate_extras(
+            fat if reading.ask_fat else None,
+            reading.fat_kind,
+            dressing if reading.ask_dressing else None,
+        )
+        text = plate_compose(parts)
+        if not text:
+            raise ValueError("bad_plate")
+        return text
+
+    async def log_photo(
+        self, user: User, text: str, *, weighed: bool = False, day_offset: int = 0
+    ) -> Result:
+        """Фраза из карточки → обычный разбор: каталог, INV-2, INV-7, сэмплы."""
+        return await self.process(
+            user, text, input_type="photo", day_offset=day_offset,
+            photo=True, weight_guessed=not weighed,
+        )
+
+    async def _ensure_budget(self) -> None:
+        """MA-INV-45: проверка ДО vision-вызова — иначе лимит ничего не ограничивает."""
+        if self._spend is None or self._limit <= 0:
+            return
+        if month_limit_reached(await self._spend.spent_this_month(), self._limit):
+            raise LimitReached
 
     async def answer_portion(
         self, user: User, draft: ParsedMessage, item_index: int, answer: str, *,

@@ -114,6 +114,7 @@ class FakeContainer:
         assistant = Assistant(
             self.nlu or StubNlu(_NOTHING),
             self.products, meal, weight, stats, self.stt, self.bugs, self.vision,
+            self.spend_for(None), self.settings.ai_month_limit_usd,
         )
         return assistant, self.users
 
