@@ -21,7 +21,7 @@ from tests.fakes import (
 )
 
 
-async def build_eval_assistant() -> tuple[Assistant, User]:
+async def build_eval_assistant(vision: object | None = None) -> tuple[Assistant, User]:
     from openai import AsyncOpenAI
 
     from app.infrastructure.nlu.openai_nlu import OpenAiNlu
@@ -61,6 +61,7 @@ async def build_eval_assistant() -> tuple[Assistant, User]:
         meal_service,
         WeightService(weights, utcnow),
         StatsService(meals, users, settings.default_goal(), utcnow),
+        vision=vision,
     )
     user = await users.get_or_create(telegram_id=1, name="eval", locale="ru", timezone="UTC")
     return assistant, user
