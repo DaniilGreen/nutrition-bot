@@ -167,3 +167,23 @@ async def test_новое_фото_снимает_открытую_карточ�
     supersedes = (MealStates.awaiting_label_grams.state, MealStates.awaiting_photo.state)
     assert await handlers._busy_with_flow(msg, st, supersedes=supersedes) is False
     assert st.cleared
+
+
+async def test_сбой_разбора_не_теряет_карточку():
+    state, assistant = _State(_data(fat="none")), _assistant()
+    assistant.log_photo.side_effect = RuntimeError("openai down")
+    with pytest.raises(RuntimeError):
+        await handlers.on_photo_btn(_callback("ph:ok"), object(), assistant, AsyncMock(), state)
+    assert not state.cleared and state.data["plate"] is not None
+
+
+async def test_вес_тарелки_не_двигает_названный_вес_позиции():
+    plate = _plate(components=[Component("макароны", 0.6, 250),
+                               Component("курица", 0.3, 150, fixed=True)])
+    state = _State(_data(plate=plate, grams=[270.0, 150.0], weighed=True),
+                   MealStates.awaiting_photo.state)
+    msg, bot = AsyncMock(), AsyncMock()
+    msg.text = "450"
+    msg.chat = Chat.model_construct(id=1, type="private")
+    await handlers.on_photo_weight(msg, bot, state)
+    assert state.data["grams"] == [300.0, 150.0]

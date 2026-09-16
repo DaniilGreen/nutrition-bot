@@ -811,7 +811,8 @@ async def on_photo_weight(message: Message, bot: Bot, state: FSMContext) -> None
             "Пришли вес тарелки числом (например 420) или нажми «✅ Записать» под карточкой."
         )
         return
-    current = [Component(c.name, 0, g) for c, g in zip(
+    # Вес позиции, названный человеком в подписи (`fixed`), при пересчёте не двигается.
+    current = [Component(c.name, c.share, g, c.fixed) for c, g in zip(
         data["plate"].components, data["grams"], strict=True)]
     data["grams"] = plate_split(current, total)
     data["weighed"] = True
@@ -864,9 +865,11 @@ async def on_photo_btn(
     except ValueError:
         await callback.message.answer("Граммы вне границ — пришли вес тарелки числом.")
         return
-    await state.clear()
+    # Состояние чистим ПОСЛЕ записи: упал разбор (сеть, 429) — карточка остаётся,
+    # и «✅ Записать» можно нажать ещё раз, не переснимая блюдо.
     result = await assistant.log_photo(app_user, text, weighed=bool(data.get("weighed")))
     await session.commit()
+    await state.clear()
     await _render_after_continue(callback.message, result, state, app_user, assistant, raw=text)
 
 

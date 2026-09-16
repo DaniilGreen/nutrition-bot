@@ -12,6 +12,7 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Annotated, Any
+from urllib.parse import unquote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Header, Request
@@ -39,6 +40,7 @@ from app.domain.audio import filename_for
 from app.domain.duplicates import SAFE_SPREAD, Candidate, spread, winner
 from app.domain.goals import Goal
 from app.domain.label_portion import label_grams
+from app.domain.plate import MAX_COMPONENTS
 from app.domain.prefs import merge as merge_prefs
 from app.domain.prefs import sanitize
 from app.domain.value_objects import Density
@@ -329,8 +331,8 @@ async def log_photo(
 ) -> dict[str, Any]:
     """FR-34: снимок → этикетка (как `/meals/label`) или карточка блюда (§6.22).
 
-    Тело сырое, как у этикетки. Подпись — в `caption` (бот шлёт её с фото; аппка
-    пока нет, но контракт один).
+    Тело сырое, как у этикетки. Подпись — заголовок `X-Caption`
+    (percent-encoded): набранный в поле текст, «420» или «курица 150».
     """
     image = await request.body()
     if not image:
@@ -340,7 +342,10 @@ async def log_photo(
     if idem.replay is not None:
         return idem.replay
     _throttle(request, user, "label", limit=6, window=60)
-    caption = (request.query_params.get("caption") or "")[:200]
+    # Подпись — в заголовке, а не в адресе: строка запроса уезжает в журнал
+    # доступа (тот же довод, что у initData в deps.py). Кириллица в заголовке
+    # недопустима, поэтому клиент кодирует её encodeURIComponent.
+    caption = unquote(request.headers.get("X-Caption") or "")[:200]
     offset = _day_offset(request.query_params.get("days_ago"))
     try:
         result = await assistant.read_photo(user, image, caption=caption)
@@ -374,6 +379,8 @@ async def commit_photo(
     rows = body.get("components")
     if not isinstance(rows, list):
         raise bad_request("empty_plate", "Нечего записывать.")
+    if len(rows) > MAX_COMPONENTS:
+        raise bad_request("bad_grams", "Такой позиции на карточке нет.")
     picked: dict[int, float] = {}
     try:
         for row in rows:
@@ -421,7 +428,7 @@ def _plate_json(result: PlateRead, token: str) -> dict[str, Any]:
         "weighed": result.weighed,
         "total_g": result.total_g,
         "components": [
-            {"i": i, "name": c.name, "grams": g}
+            {"i": i, "name": c.name, "grams": g, "fixed": c.fixed}
             for i, (c, g) in enumerate(zip(r.components, result.grams, strict=True))
         ],
         "ask_fat": r.ask_fat,

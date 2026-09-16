@@ -1800,8 +1800,9 @@ MA-INV-28 запрещает попрекающий тон, а эта карто
 3. Черновик блюда (карточка в ленте, вместо карточки уточнения):
    - название блюда и метка **«на глаз»** или **«взвешено»**;
    - поле **«Вся тарелка, г»** — предзаполнено оценкой модели или весом из подписи;
-     изменение пропорционально пересчитывает граммы всех позиций (клиентская арифметика
-     над граммами, не над КБЖУ — INV-1 не задет);
+     изменение пропорционально пересчитывает граммы позиций (клиентская арифметика
+     над граммами, не над КБЖУ — INV-1 не задет). Позиции с весом из подписи и позиции,
+     поправленные руками, не двигаются — делится остаток;
    - список составляющих (≤ 8): имя, поле граммов, «✕» убрать;
    - вопрос **«Масло при готовке?»** — чипы «Без / Немного (5 г) / Ложка (10 г) / Много (20 г)»,
      если модель считает, что блюдо могли готовить на жире (`ask_fat`); вид масла — от модели
@@ -2138,8 +2139,8 @@ mime: `voice.webm` / `voice.mp4` / `voice.ogg`. Потолок размера �
 | `POST /api/bug` `{note}` | **есть**: `Assistant.report_bug` (`app/application/assistant.py:65`) — багрепорт из аппки с тем же контекстом последних приёмов |
 
 | `POST /api/meals/label` | **есть**: `Assistant.read_label` (`app/application/assistant.py:113`). Тело — сырой JPEG (как голос), ≤ 4 МБ. Ответ `{kind:"label", draft_id, item_name, per100, package_g, serving_g, atwater_warning, hint}`; вес отвечается через `/api/meals/clarify` с тем же `draft_id`. 400 `empty_image`/`image_too_big`, 429 `rate_limited` (6/мин — vision дороже голоса) |
-| `POST /api/meals/photo` | **НЕТ** (§6.22): `Assistant.read_photo`. Тело — сырой JPEG ≤ 4 МБ, `?days_ago=&caption=`, `Idempotency-Key`. Ответ — этикетка (`kind:"label"`, как выше) или `{kind:"photo", draft_id, dish, weighed, total_g, components:[{i,name,grams}], ask_fat, fat_kind, ask_dressing, liquid}`, или `{kind:"unknown", message}`. 400 `empty_image`/`image_too_big`, 429 `rate_limited` (6/мин) / `ai_limit`, 503 `vision_off` |
-| `POST /api/meals/photo/commit` | **НЕТ** (§6.22): `{draft_id, components:[{i, grams}], fat, dressing, weighed}` + `Idempotency-Key` → `Assistant.log_photo` → тот же union, что `/api/meals`. 400 `draft_gone`/`empty_plate`/`bad_grams` (черновик при этом не сгорает) |
+| `POST /api/meals/photo` | **НЕТ** (§6.22): `Assistant.read_photo`. Тело — сырой JPEG ≤ 4 МБ, `?days_ago=`, подпись — заголовок `X-Caption` (percent-encoded, не в адресе: он попадает в журнал доступа), `Idempotency-Key`. Ответ — этикетка (`kind:"label"`, как выше) или `{kind:"photo", draft_id, dish, weighed, total_g, components:[{i,name,grams}], ask_fat, fat_kind, ask_dressing, liquid}`, или `{kind:"unknown", message}`. 400 `empty_image`/`image_too_big`, 429 `rate_limited` (6/мин) / `ai_limit`, 503 `vision_off` |
+| `POST /api/meals/photo/commit` | **НЕТ** (§6.22): `{draft_id, components:[{i, grams}] (≤ 8), fat, dressing, weighed}` + `Idempotency-Key` → `Assistant.log_photo` → тот же union, что `/api/meals`. 400 `draft_gone`/`empty_plate`/`bad_grams` (черновик при этом не сгорает) |
 
 **Фото этикетки в аппке — ЕСТЬ (04.09.2026).** Изначально было отложено («в чате это работает,
 и камера Telegram там ближе»), но §6.7 всё это время рисовал камеру в поле ввода, и первый же

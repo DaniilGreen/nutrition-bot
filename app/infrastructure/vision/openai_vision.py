@@ -80,7 +80,6 @@ class PhotoReadingOut(BaseModel):
     kind: Literal["label", "dish", "none"]
     dish: str
     components: list[PlateComponentOut]
-    total_grams: float
     caption_total_g: float | None
     ask_fat: bool
     fat_kind: Literal["масло подсолнечное", "масло сливочное", "масло оливковое"]
@@ -147,9 +146,9 @@ class OpenAiVision:
             return PlateReading(kind="none")
         return PlateReading(
             kind=r.kind,
-            dish=r.dish.strip(),
+            dish=r.dish.strip()[:120],
             components=[
-                Component(c.name.strip(), c.share, c.grams, c.fixed)
+                Component(c.name.strip()[:80], c.share, c.grams, c.fixed)
                 for c in r.components[:MAX_COMPONENTS]
                 if c.name.strip()
             ],

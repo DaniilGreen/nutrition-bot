@@ -1472,7 +1472,8 @@
       ask_fat: !!res.ask_fat, ask_dressing: !!res.ask_dressing, liquid: !!res.liquid,
       fat_kind: res.fat_kind || '',
       items: (res.components || []).map(function (c) {
-        return { i: c.i, name: c.name, grams: String(Math.round(c.grams)), off: false };
+        return { i: c.i, name: c.name, grams: String(Math.round(c.grams)), off: false,
+                 fixed: !!c.fixed };
       }),
       fat: null, dressing: null, missing: false, base: null
     };
@@ -1554,14 +1555,19 @@
       /* Масштаб — от граммов на момент начала правки, а не от текущих: набор
          «420» идёт через «4» и «42», и пересчёт от промежуточных значений
          округлял бы позиции до единиц и терял пропорции. */
+      /* Вес позиции, названный подписью («курица 150»), не двигается — делится
+         только остаток, как на сервере (app/domain/plate.py). */
       if (!p.base) p.base = p.items.map(function (it) { return Number(it.grams) || 0; });
-      var want = Number(el.value);
+      var pinned = p.items.reduce(function (a, it, idx) {
+        return a + (!it.off && it.fixed ? p.base[idx] : 0);
+      }, 0);
+      var want = Number(el.value) - pinned;
       var have = p.items.reduce(function (a, it, idx) {
-        return a + (it.off ? 0 : p.base[idx]);
+        return a + (it.off || it.fixed ? 0 : p.base[idx]);
       }, 0);
       if (!(want > 0) || !(have > 0)) return;
       p.items.forEach(function (it, idx) {
-        if (it.off) return;
+        if (it.off || it.fixed) return;
         it.grams = String(Math.round(p.base[idx] * want / have));
         var f = root.querySelector('[data-pg="' + idx + '"]');
         if (f) f.value = it.grams;
@@ -1570,6 +1576,7 @@
     }
     p.base = null;
     p.items[Number(el.dataset.pg)].grams = el.value;
+    p.items[Number(el.dataset.pg)].fixed = true;  // правил руками — общий вес её не двигает
     var t = document.getElementById('ptotal');
     if (t) t.value = photoTotal(p);
   }
@@ -1834,12 +1841,14 @@
     var caption = (state.text || '').trim().slice(0, 200);
     busy('Смотрю на фото…');
     shrink(file, function (blob) {
-      send('/api/meals/photo?days_ago=' + writeDay() +
-           (caption ? '&caption=' + encodeURIComponent(caption) : ''), {
-        headers: {
-          'Content-Type': blob.type || 'image/jpeg',
-          'Idempotency-Key': keyFor('photo')
-        },
+      var headers = {
+        'Content-Type': blob.type || 'image/jpeg',
+        'Idempotency-Key': keyFor('photo')
+      };
+      /* Подпись — заголовком, не в адресе: адрес попадает в журнал доступа. */
+      if (caption) headers['X-Caption'] = encodeURIComponent(caption);
+      send('/api/meals/photo?days_ago=' + writeDay(), {
+        headers: headers,
         body: blob
       }).then(function (r) {
         dropKey('photo');

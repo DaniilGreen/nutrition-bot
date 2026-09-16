@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
@@ -112,8 +113,8 @@ async def test_вес_в_подписи_делится_по_долям(client, f
     fake_container.vision = StubVision(None, _plate(caption_total_g=780))
     fake_container.nlu = EchoNlu()
     async with client as c:
-        d = (await c.post("/api/meals/photo?caption=420%20и%20780",
-                          content=JPEG, headers=_hdr())).json()
+        d = (await c.post("/api/meals/photo", content=JPEG,
+                          headers=_hdr(**{"X-Caption": quote("420 и 780")}))).json()
         assert d["weighed"] is True and d["total_g"] == 780
         assert [x["grams"] for x in d["components"]] == [500, 200, 80]
         r2 = await c.post("/api/meals/photo/commit", headers=_hdr(), json={
@@ -128,8 +129,8 @@ async def test_выдуманный_моделью_вес_не_считаетс�
     """Модель «прочла» 400 в подписи, где этого числа нет, — это не вес от человека."""
     fake_container.vision = StubVision(None, _plate(caption_total_g=400))
     async with client as c:
-        d = (await c.post("/api/meals/photo?caption=вкусно", content=JPEG,
-                          headers=_hdr())).json()
+        d = (await c.post("/api/meals/photo", content=JPEG,
+                          headers=_hdr(**{"X-Caption": quote("вкусно")}))).json()
     assert d["weighed"] is False and d["total_g"] is None
     assert [x["grams"] for x in d["components"]] == [250, 100, 40]
 
@@ -139,8 +140,8 @@ async def test_вес_позиции_из_подписи_остаётся_а_о�
     comps[1] = Component("курица жареная", 0.3, 150, fixed=True)
     fake_container.vision = StubVision(None, _plate(components=comps, caption_total_g=400))
     async with client as c:
-        d = (await c.post("/api/meals/photo?caption=400%2C%20курица%20150",
-                          content=JPEG, headers=_hdr())).json()
+        d = (await c.post("/api/meals/photo", content=JPEG,
+                          headers=_hdr(**{"X-Caption": quote("400, курица 150")}))).json()
     grams = [x["grams"] for x in d["components"]]
     assert grams[1] == 150 and sum(grams) == pytest.approx(400, abs=1)
 
@@ -298,3 +299,41 @@ async def test_ключ_вместо_имени_возвращается_к_сл
                          json={"draft_id": d["draft_id"], "components": _all(d)})
     names = [i["name"] for i in r.json()["meal"]["items"]]
     assert names[1].startswith("курица жареная")
+
+
+async def test_подпись_доходит_до_vision_и_не_живёт_в_адресе(client, fake_container):
+    vision = StubVision(None, _plate())
+    fake_container.vision = vision
+    async with client as c:
+        await c.post("/api/meals/photo", content=JPEG,
+                     headers=_hdr(**{"X-Caption": quote("тарелка 420")}))
+    assert vision.seen_caption == "тарелка 420"
+
+
+async def test_чужой_черновик_не_записывается(client, fake_container):
+    """Единственная проверка прав на черновик — привязка к user_id (MA-INV-43)."""
+    fake_container.vision = StubVision(None, _plate())
+    fake_container.nlu = EchoNlu()
+    other = {"id": 778, "first_name": "Чужой"}
+    import json as _json
+    stranger = valid(user=_json.dumps(other, ensure_ascii=False, separators=(",", ":")))
+    async with client as c:
+        d = (await c.post("/api/meals/photo", content=JPEG, headers=_hdr())).json()
+        r = await c.post("/api/meals/photo/commit",
+                         headers={"X-Telegram-Init-Data": stranger, "Idempotency-Key": "x1"},
+                         json={"draft_id": d["draft_id"], "components": _all(d)})
+        assert r.status_code == 400 and r.json()["error"]["code"] == "draft_gone"
+        mine = await c.post("/api/meals/photo/commit", headers=_hdr(),
+                            json={"draft_id": d["draft_id"], "components": _all(d)})
+    assert mine.status_code == 200
+
+
+async def test_слишком_много_позиций_отказ(client, fake_container):
+    fake_container.vision = StubVision(None, _plate())
+    async with client as c:
+        d = (await c.post("/api/meals/photo", content=JPEG, headers=_hdr())).json()
+        r = await c.post("/api/meals/photo/commit", headers=_hdr(), json={
+            "draft_id": d["draft_id"],
+            "components": [{"i": i, "grams": 10} for i in range(9)],
+        })
+    assert r.status_code == 400

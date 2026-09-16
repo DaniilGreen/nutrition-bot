@@ -199,7 +199,7 @@ class Assistant:
         клиента (MA-INV-43). ValueError — граммы вне границ (MA-INV-44)."""
         parts = [
             (c.name, float(g))
-            for c, g in zip(reading.components, grams, strict=False)
+            for c, g in zip(reading.components, grams, strict=True)
             if g is not None
         ]
         if not parts or not plate_valid([g for _, g in parts]):
