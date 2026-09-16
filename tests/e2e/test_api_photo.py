@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -370,3 +371,25 @@ async def test_позиция_без_имени_не_показывается(cl
     async with client as c:
         d = (await c.post("/api/meals/photo", content=JPEG, headers=_hdr())).json()
     assert [x["name"] for x in d["components"]] == ["рис отварной"]
+
+
+async def test_ключ_вместо_имени_при_другом_делении_фразы(client, fake_container):
+    """Разбор разделил фразу на другое число позиций — имя всё равно из фразы."""
+    class SplitNlu(EchoNlu):
+        async def parse(self, text, known_keys):
+            parsed = await super().parse(text, known_keys)
+            extra = deepcopy(parsed.items[0])
+            extra.name, extra.grams = "сыр пармезан", 5.0
+            parsed.items.append(extra)
+            parsed.items[1].name = "chicken_fried"
+            return parsed
+
+    fake_container.vision = StubVision(None, _plate(ask_fat=False))
+    fake_container.nlu = SplitNlu()
+    async with client as c:
+        d = (await c.post("/api/meals/photo", content=JPEG, headers=_hdr())).json()
+        r = await c.post("/api/meals/photo/commit", headers=_hdr(),
+                         json={"draft_id": d["draft_id"], "components": _all(d)})
+    names = [i["name"] for i in r.json()["meal"]["items"]]
+    assert not any("_" in n for n in names)
+    assert names[1].startswith("курица жареная")

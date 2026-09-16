@@ -611,14 +611,27 @@ class Assistant:
 
 def _names_from_phrase(parsed: ParsedMessage, text: str) -> None:
     """Фраза фото собрана нами, и имя каждой позиции в ней известно. Ключ вместо
-    имени («grapes_red_fresh», замер 16.09.2026) возвращаем к словам фразы —
-    но только когда позиции и куски фразы сходятся один к одному."""
+    имени («grapes_red_fresh», замер 16.09.2026: 7 позиций из ~300) возвращаем к
+    словам фразы.
+
+    Один к одному сходится не всегда: разбор может разделить «курица с овощами»
+    надвое. Тогда берём куски фразы, которые не заняты именами других позиций:
+    единственный свободный — он и есть; несколько — по порядку позиции.
+    """
     names = phrase_names(text)
-    if len(names) != len(parsed.items):
+    if not names:
         return
-    for item, name in zip(parsed.items, names, strict=True):
-        if looks_like_key(item.name):
-            item.name = name
+    if len(names) == len(parsed.items):
+        for item, name in zip(parsed.items, names, strict=True):
+            if looks_like_key(item.name):
+                item.name = name
+        return
+    taken = {i.name.lower() for i in parsed.items if not looks_like_key(i.name)}
+    free = [n for n in names if n.lower() not in taken]
+    for idx, item in enumerate(parsed.items):
+        if not looks_like_key(item.name) or not free:
+            continue
+        item.name = free.pop(0) if len(free) == 1 else free.pop(min(idx, len(free) - 1))
 
 
 def _is_blank_item(i: ParsedItem) -> bool:
