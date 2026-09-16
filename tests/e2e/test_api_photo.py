@@ -337,3 +337,36 @@ async def test_слишком_много_позиций_отказ(client, fake_
             "components": [{"i": i, "grams": 10} for i in range(9)],
         })
     assert r.status_code == 400
+
+
+async def test_сбой_разбора_не_сжигает_карточку(client, fake_container):
+    class Down(EchoNlu):
+        fail = True
+
+        async def parse(self, text, known_keys):
+            if self.fail:
+                self.fail = False
+                raise RuntimeError("сеть")
+            return await super().parse(text, known_keys)
+
+    fake_container.vision = StubVision(None, _plate(ask_fat=False))
+    fake_container.nlu = Down()
+    from app.main_api import app
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as c:
+        d = (await c.post("/api/meals/photo", content=JPEG, headers=_hdr())).json()
+        body = {"draft_id": d["draft_id"], "components": _all(d)}
+        first = await c.post("/api/meals/photo/commit", headers=_hdr(), json=body)
+        assert first.status_code >= 500
+        again = await c.post("/api/meals/photo/commit", headers=_hdr(), json=body)
+    assert again.status_code == 200 and again.json()["kind"] == "logged"
+
+
+async def test_позиция_без_имени_не_показывается(client, fake_container):
+    comps = [Component("123 г", 0.5, 100), Component("рис отварной", 0.5, 150)]
+    fake_container.vision = StubVision(None, _plate(components=comps))
+    async with client as c:
+        d = (await c.post("/api/meals/photo", content=JPEG, headers=_hdr())).json()
+    assert [x["name"] for x in d["components"]] == ["рис отварной"]

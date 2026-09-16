@@ -76,6 +76,11 @@ class DraftStore:
         del self._items[token]
         return draft
 
+    def restore(self, token: str, draft: Draft) -> None:
+        """Вернуть взятый черновик под тем же токеном: запись упала (сеть, 429),
+        и повтор с тем же ключом должен найти карточку, а не «устарела»."""
+        self._items[token] = draft
+
     def _sweep(self) -> None:
         now = time.monotonic()
         dead = [k for k, v in self._items.items() if now - v.created_at > TTL_SECONDS]

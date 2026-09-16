@@ -61,6 +61,12 @@ def caption_numbers(text: str) -> set[float]:
     }
 
 
+def said(value: float | None, numbers: set[float]) -> bool:
+    """Число от модели есть среди написанных человеком — с допуском на запись
+    float в JSON («150» могло вернуться как 150.0000001)."""
+    return value is not None and any(abs(value - n) < 0.5 for n in numbers)
+
+
 def split(components: list[Component], total_g: float | None) -> list[float]:
     """Граммы каждой позиции.
 
@@ -161,6 +167,7 @@ def demo() -> None:
 
     assert caption_numbers("тарелка 420 г, курица 150,5") == {420.0, 150.5}
     assert caption_numbers("") == set()
+    assert said(150.0000001, {150.0}) and not said(151, {150.0}) and not said(None, {1.0})
 
     assert valid_grams([100, 200])
     assert not valid_grams([])

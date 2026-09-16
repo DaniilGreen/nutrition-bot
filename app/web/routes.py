@@ -409,11 +409,17 @@ async def commit_photo(
         raise bad_request(
             "bad_grams", "Граммы: от 1 до 3000 на позицию, всего до 5000."
         ) from exc
-    if drafts.take(token, _uid(user)) is None:
+    taken = drafts.take(token, _uid(user))
+    if taken is None:
         raise bad_request("draft_gone", "Карточка устарела. Сними блюдо ещё раз.")
-    result = await assistant.log_photo(
-        user, text, weighed=bool(body.get("weighed")), day_offset=draft.day_offset
-    )
+    try:
+        result = await assistant.log_photo(
+            user, text, weighed=bool(body.get("weighed")), day_offset=draft.day_offset
+        )
+    except Exception:
+        # Разбор упал — запись не состоялась; карточка должна пережить повтор.
+        drafts.restore(token, taken)
+        raise
     out = _result_json(result, user, request, raw_input=text, day_offset=draft.day_offset)
     return idem.remember(out)
 

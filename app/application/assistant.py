@@ -49,7 +49,7 @@ from app.domain.duplicates import Candidate, group
 from app.domain.goals import Goal, Remaining, in_goal, remaining
 from app.domain.naming import looks_like_key, phrase_names
 from app.domain.nutrition import atwater_suspect
-from app.domain.plate import caption_numbers
+from app.domain.plate import caption_numbers, clean_name, said
 from app.domain.plate import compose as plate_compose
 from app.domain.plate import extras as plate_extras
 from app.domain.plate import split as plate_split
@@ -179,12 +179,15 @@ class Assistant:
         reading = await self._vision.read_photo(image, caption)
         if reading.kind == "label":
             return await self.read_label(user, image, photo_file_id=photo_file_id)
+        # Позиция, чьё имя после очистки пусто (одни цифры и знаки), не попала бы
+        # в фразу — и карточка показала бы то, что не запишется. Отсекаем здесь.
+        reading.components = [c for c in reading.components if clean_name(c.name)]
         if reading.kind != "dish" or not reading.components:
             return Unknown(reason="не вижу на снимке еды — сними тарелку сверху, при свете")
-        said = caption_numbers(caption)
-        total = reading.caption_total_g if reading.caption_total_g in said else None
+        numbers = caption_numbers(caption)
+        total = reading.caption_total_g if said(reading.caption_total_g, numbers) else None
         for c in reading.components:
-            c.fixed = bool(c.fixed and c.grams in said)
+            c.fixed = bool(c.fixed and said(c.grams, numbers))
         grams = plate_split(reading.components, total)
         weighed = total is not None or any(c.fixed for c in reading.components)
         return PlateRead(reading=reading, grams=grams, weighed=weighed, total_g=total)
