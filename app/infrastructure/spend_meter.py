@@ -27,8 +27,10 @@ class SpendMeter:
         self._sessions = session_factory
         self._purpose = purpose
 
-    async def note(self, *, model: str, input_tokens: int, output_tokens: int) -> None:
-        await self._write(Usage(model, input_tokens, output_tokens))
+    async def note(
+        self, *, model: str, input_tokens: int, output_tokens: int, cached_tokens: int = 0
+    ) -> None:
+        await self._write(Usage(model, input_tokens, output_tokens, cached_tokens))
 
     async def note_audio(self, *, model: str, seconds: float) -> None:
         """Whisper тарифицируется за МИНУТЫ, не за токены (AI-PRINCIPLES §2).

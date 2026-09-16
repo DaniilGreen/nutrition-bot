@@ -967,10 +967,10 @@ async def coach_budget(
     """Сколько бюджета осталось. Нужен настройкам: без счётчика строка «Лимит»
     была бы декоративной, а таких мы не выкатываем (MA-INV-31)."""
     container: Container = request.app.state.container
-    spent = await container.spend_for(session).spent_this_month(purpose="coach")
+    spent = await container.spend_for(session).spent_this_month()
     return {
         "spent_usd": round(spent, 4),
-        "limit_usd": container.settings.coach_month_limit_usd,
+        "limit_usd": container.settings.ai_month_limit_usd,
         "available": container.coach_port is not None,
     }
 
@@ -1002,14 +1002,14 @@ async def settings(
     """Всё, что показывает экран настроек, одним запросом (§6.5)."""
     container: Container = request.app.state.container
     goal = await assistant.current_goal(user)
-    spent = await container.spend_for(session).spent_this_month(purpose="coach")
+    spent = await container.spend_for(session).spent_this_month()
     return {
         "goal": goal_json(goal),
         "timezone": user.timezone,
         "prefs": sanitize(user.ui_prefs),
         "coach": {
             "model": container.settings.coach_model,
-            "limit_usd": container.settings.coach_month_limit_usd,
+            "limit_usd": container.settings.ai_month_limit_usd,
             "spent_usd": round(spent, 4),
             "available": container.coach_port is not None,
         },

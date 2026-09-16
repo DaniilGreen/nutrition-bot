@@ -45,7 +45,7 @@ async def test_настройки_одним_запросом(client):
         d = (await c.get("/api/settings", headers=_hdr())).json()
     assert d["prefs"]["hero"] == "bars"      # принятый вариант Е по умолчанию
     assert d["timezone"] == "Europe/Moscow"
-    assert d["coach"]["limit_usd"] == 5.0
+    assert d["coach"]["limit_usd"] == 15.0
     assert d["coach"]["available"] is False  # ключа в тестах нет — и это видно
 
 

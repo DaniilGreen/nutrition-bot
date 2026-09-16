@@ -16,6 +16,7 @@ from openai import AsyncOpenAI
 
 from app.application.coach import CoachChunk
 from app.domain.spend import Usage
+from app.infrastructure.openai_compat import token_counts
 
 log = logging.getLogger(__name__)
 
@@ -143,7 +144,7 @@ class OpenAiCoach:
         ]
         # Токены копим по ВСЕМ раундам: учесть только последний значило бы
         # недосчитать в разы, и лимит $5 перестал бы ограничивать (MA-INV-40).
-        tokens_in = tokens_out = 0
+        tokens_in = tokens_out = cached = 0
         text = ""
 
         for round_no in range(MAX_ROUNDS):
@@ -155,9 +156,10 @@ class OpenAiCoach:
                 kwargs["tools"] = TOOLS
             resp = await self._client.chat.completions.create(**kwargs)
 
-            u = resp.usage
-            tokens_in += int(getattr(u, "prompt_tokens", 0) or 0)
-            tokens_out += int(getattr(u, "completion_tokens", 0) or 0)
+            add_in, add_cached, add_out = token_counts(resp.usage)
+            tokens_in += add_in
+            cached += add_cached
+            tokens_out += add_out
 
             msg = resp.choices[0].message
             text = (msg.content or "").strip()
@@ -182,7 +184,7 @@ class OpenAiCoach:
                     "content": await _run(data, call),
                 })
 
-        usage = Usage(model=self._model, input_tokens=tokens_in, output_tokens=tokens_out)
+        usage = Usage(self._model, tokens_in, tokens_out, cached)
         return text or "Не нашёл, что ответить по этим данным.", usage
 
 
@@ -199,7 +201,7 @@ class OpenAiCoach:
             {"role": "system", "content": SYSTEM},
             {"role": "user", "content": f"Мои данные:\n{facts}\n\nВопрос: {question}"},
         ]
-        tokens_in = tokens_out = 0
+        tokens_in = tokens_out = cached = 0
 
         for round_no in range(MAX_ROUNDS):
             last = round_no == MAX_ROUNDS - 1
@@ -218,8 +220,10 @@ class OpenAiCoach:
             async for event in await self._client.chat.completions.create(**kwargs):
                 u = getattr(event, "usage", None)
                 if u is not None:
-                    tokens_in += int(getattr(u, "prompt_tokens", 0) or 0)
-                    tokens_out += int(getattr(u, "completion_tokens", 0) or 0)
+                    add_in, add_cached, add_out = token_counts(u)
+                    tokens_in += add_in
+                    cached += add_cached
+                    tokens_out += add_out
                 if not getattr(event, "choices", None):
                     continue
                 delta = event.choices[0].delta
@@ -265,7 +269,7 @@ class OpenAiCoach:
 
         yield CoachChunk(
             kind="end",
-            usage=Usage(self._model, input_tokens=tokens_in, output_tokens=tokens_out),
+            usage=Usage(self._model, tokens_in, tokens_out, cached),
         )
 
 

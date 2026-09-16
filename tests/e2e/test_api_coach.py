@@ -65,14 +65,14 @@ async def test_ответ_и_расход(client, fake_container):
     # Наружу отдаётся округлённым до четырёх знаков — для бюджета в $5 это
     # доли цента; в БД лежит точное значение.
     assert d["spent_usd"] == pytest.approx(0.00325, abs=1e-4)
-    assert d["limit_usd"] == 5.0
+    assert d["limit_usd"] == 15.0
 
 
 async def test_лимит_проверяется_до_запроса(client, fake_container):
     """Проверка после означала бы «превысил — узнал»: лимит, который не ограничивает."""
     port = StubCoach()
     fake_container.coach_port = port
-    fake_container.spend = InMemorySpendRepo(preloaded_usd=5.0)
+    fake_container.spend = InMemorySpendRepo(preloaded_usd=15.0)
     async with client as c:
         r = await c.post("/api/coach", json={"question": "х"}, headers=_hdr())
     assert r.status_code == 429

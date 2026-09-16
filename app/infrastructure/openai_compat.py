@@ -29,3 +29,24 @@ def temperature_for(model: str, temperature: float) -> float | Omit:
     `omit` — штатный сентинел SDK: он выкидывает поле из запроса, а не шлёт null.
     """
     return temperature if supports_temperature(model) else omit
+
+
+def token_counts(usage: object) -> tuple[int, int, int]:
+    """(вход, из них из кэша, выход) из объекта usage любого вызова.
+
+    Одно место на все адаптеры: кэшированные токены лежат во вложенном
+    `prompt_tokens_details`, которого у части ответов нет вовсе. Пропустить его
+    значит считать кэш по полной цене — так счётчик и завышал разбор до 16.09.2026.
+    """
+    def num(obj: object, name: str) -> int:
+        try:
+            return int(getattr(obj, name, 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    details = getattr(usage, "prompt_tokens_details", None)
+    return (
+        num(usage, "prompt_tokens"),
+        num(details, "cached_tokens") if details is not None else 0,
+        num(usage, "completion_tokens"),
+    )

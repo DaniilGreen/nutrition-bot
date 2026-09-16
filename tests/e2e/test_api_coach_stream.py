@@ -152,3 +152,16 @@ async def test_без_ключа_ассистента_503(client, fake_container
         r = await c.post("/api/coach/stream", json={"question": "q"}, headers=_hdr())
     assert r.status_code == 503
     assert r.json()["error"]["code"] == "coach_off"
+
+
+async def test_лимит_считает_весь_расход_а_не_только_ассистента(client, fake_container):
+    """AI-PRINCIPLES §2: разбор еды — основная статья. Лимит, который её не
+    видит, не ограничивает ничего (решение владельца 16.09.2026)."""
+    fake_container.coach_port = StubStream()
+    spend = InMemorySpendRepo()
+    await spend.add(user_id=None, model="gpt-5.1", purpose="nlu",
+                    input_tokens=0, output_tokens=0, cost_usd=99.0)
+    fake_container.spend = spend
+    async with client as c:
+        r = await c.post("/api/coach/stream", json={"question": "q"}, headers=_hdr())
+    assert r.status_code == 429

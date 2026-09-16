@@ -6,12 +6,15 @@
 from __future__ import annotations
 
 import base64
+import logging
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from app.application.dto import ParsedItem, Unit
-from app.infrastructure.openai_compat import temperature_for
+from app.infrastructure.openai_compat import temperature_for, token_counts
+
+log = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "Ты читаешь таблицу пищевой ценности (КБЖУ) с фото этикетки продукта.\n"
@@ -39,9 +42,24 @@ class LabelReading(BaseModel):
 
 
 class OpenAiVision:
-    def __init__(self, client: AsyncOpenAI, model: str) -> None:
+    def __init__(self, client: AsyncOpenAI, model: str, meter: object | None = None) -> None:
         self._client = client
         self._model = model
+        # До 16.09.2026 фото не считались вовсе — самый дорогой вызов шёл мимо
+        # лимита (AI-PRINCIPLES §2).
+        self._meter = meter
+
+    async def _meter_usage(self, completion: object) -> None:
+        if self._meter is None:
+            return
+        try:
+            tokens_in, cached, tokens_out = token_counts(completion.usage)
+            await self._meter.note(
+                model=self._model, input_tokens=tokens_in,
+                output_tokens=tokens_out, cached_tokens=cached,
+            )
+        except Exception:  # noqa: BLE001 — недосчитать цент дешевле, чем потерять фото
+            log.warning("не удалось записать расход фото", exc_info=True)
 
     async def read_label(self, image: bytes) -> ParsedItem | None:
         b64 = base64.b64encode(image).decode()
@@ -62,6 +80,7 @@ class OpenAiVision:
             ],
             response_format=LabelReading,
         )
+        await self._meter_usage(completion)
         r = completion.choices[0].message.parsed
         if r is None or not r.found:
             return None

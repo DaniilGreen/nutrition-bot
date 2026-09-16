@@ -92,7 +92,7 @@ class FakeContainer:
         stats = StatsService(self.meals, self.users, self.settings.default_goal())
         return Coach(
             self.coach_port, self.spend or InMemorySpendRepo(),
-            stats, self.settings.coach_month_limit_usd,
+            stats, self.settings.ai_month_limit_usd,
             # Без репозитория приёмов ассистент не соберёт кандидатов на
             # «Записать» — и тест бы молча проверял пустой список.
             self.meals,

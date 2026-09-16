@@ -16,7 +16,7 @@ from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
 from app.domain.consensus import SAMPLE_TEMPERATURE
 from app.infrastructure.nlu.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.infrastructure.nlu.schema import NluResult
-from app.infrastructure.openai_compat import temperature_for
+from app.infrastructure.openai_compat import temperature_for, token_counts
 
 # AI-PRINCIPLES §1: сеть моргает, и разбор еды не должен от этого теряться.
 # Ретраим всё одинаково — разбираться, что именно отвалилось, дороже, чем повторить.
@@ -89,11 +89,10 @@ class OpenAiNlu:
         if self._meter is None:
             return
         try:
-            u = completion.usage
+            tokens_in, cached, tokens_out = token_counts(completion.usage)
             await self._meter.note(
-                model=self._model,
-                input_tokens=int(getattr(u, "prompt_tokens", 0) or 0),
-                output_tokens=int(getattr(u, "completion_tokens", 0) or 0),
+                model=self._model, input_tokens=tokens_in,
+                output_tokens=tokens_out, cached_tokens=cached,
             )
         except Exception:  # noqa: BLE001
             log.warning("не удалось записать расход разбора", exc_info=True)

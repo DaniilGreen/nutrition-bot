@@ -68,7 +68,7 @@ def build_stt(settings: Settings, meter: object | None = None) -> SttPort | None
     )
 
 
-def build_vision(settings: Settings) -> VisionPort | None:
+def build_vision(settings: Settings, meter: object | None = None) -> VisionPort | None:
     """Vision (фото этикеток, FR-27) доступен только при наличии OpenAI-ключа; иначе None."""
     if not settings.openai_api_key:
         return None
@@ -79,6 +79,7 @@ def build_vision(settings: Settings) -> VisionPort | None:
     return OpenAiVision(
         AsyncOpenAI(api_key=settings.openai_api_key, max_retries=settings.openai_max_retries),
         settings.openai_model,
+        meter,
     )
 
 
@@ -119,7 +120,7 @@ class Container:
             db=db,
             nlu=build_nlu(settings, SpendMeter(db.session_factory, "nlu")),
             stt=build_stt(settings, SpendMeter(db.session_factory, "stt")),
-            vision=build_vision(settings),
+            vision=build_vision(settings, SpendMeter(db.session_factory, "vision")),
             coach_port=build_coach_port(settings),
         )
 
@@ -139,7 +140,7 @@ class Container:
             self.coach_port,
             SqlSpendRepo(session),
             stats,
-            self.settings.coach_month_limit_usd,
+            self.settings.ai_month_limit_usd,
             meals,
             SqlWeightRepo(session),
             SqlProductRepo(session),

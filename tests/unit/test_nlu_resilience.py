@@ -47,8 +47,9 @@ class Meter:
     def __init__(self):
         self.notes = []
 
-    async def note(self, *, model, input_tokens, output_tokens):
+    async def note(self, *, model, input_tokens, output_tokens, cached_tokens=0):
         self.notes.append((model, input_tokens, output_tokens))
+        self.cached = cached_tokens
 
 
 @pytest.fixture(autouse=True)

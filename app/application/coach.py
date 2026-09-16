@@ -95,9 +95,7 @@ class Coach:
     async def ask(self, user: User, question: str) -> CoachAnswer:
         # Проверка ДО запроса. После — это «превысил и узнал», то есть лимит,
         # который ничего не ограничивает.
-        spent = await self._spend.spent_this_month(purpose="coach")
-        if month_limit_reached(spent, self._limit):
-            raise LimitReached
+        spent = await self.ensure_budget()
 
         facts = await self._facts(user)
         # Инструменты выдаём только когда есть чем их обслужить: без репозиториев
@@ -130,7 +128,9 @@ class Coach:
         В потоке отказ уже не отдать нормальным кодом: заголовки ушли. Поэтому
         проверяем здесь, из обработчика, пока ответ ещё можно не начинать.
         """
-        spent = await self._spend.spent_this_month(purpose="coach")
+        # Весь расход, а не только ассистента: лимит, который видит часть трат,
+        # не ограничивает ничего (AI-PRINCIPLES §2).
+        spent = await self._spend.spent_this_month()
         if month_limit_reached(spent, self._limit):
             raise LimitReached
         return spent
