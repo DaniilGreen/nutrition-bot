@@ -1535,7 +1535,7 @@
         : '') +
       (p.weighed ? '' :
         '<div class="mic" style="margin-top:var(--s-3);line-height:1.5">' +
-        'Взвесь тарелку и впиши вес — ошибка упадёт примерно вдвое.</div>') +
+        'Взвесь тарелку и впиши вес — так точнее.</div>') +
       '<button class="primary" data-pcommit="1">Записать</button>' +
       '<div class="opts" style="margin-top:var(--s-2)">' +
         '<button data-pcancel="1" style="border-color:var(--surface-3);' +

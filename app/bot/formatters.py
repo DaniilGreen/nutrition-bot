@@ -349,7 +349,7 @@ def format_photo_card(
     lines.append(f"Всего {sum(grams):g} г")
     if not weighed:
         lines.append("\nВзвешивал? Пришли вес тарелки числом — пересчитаю, "
-                     "ошибка упадёт примерно вдвое.")
+                     "так точнее.")
     if plate.ask_fat:
         oil = plate.fat_kind.replace("масло ", "") if plate.fat_kind else ""
         answer = _FAT_WORD.get(fat or "", "❔ отметь кнопкой")
