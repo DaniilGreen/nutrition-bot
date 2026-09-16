@@ -91,8 +91,33 @@ def _qualifiers(name: str) -> list[str]:
     return sorted(re.findall(r"\d+[.,]?\d*", stripped))
 
 
+_KEY_RE = re.compile(r"[a-z0-9]+(?:_[a-z0-9]+)+")
+
+
+def looks_like_key(name: str) -> bool:
+    """Модель иногда отдаёт в имени каталожный ключ («grapes_red_fresh»). Такое имя
+    уезжает в ленту и в каталог как есть — человек его не писал и не узнает."""
+    return bool(_KEY_RE.fullmatch((name or "").strip()))
+
+
+def phrase_names(text: str) -> list[str]:
+    """Имена из фразы-списка «имя N г, имя N г» — той, что собирает фото (FR-34)."""
+    out = []
+    for part in (text or "").split(","):
+        name = re.sub(r"\s*\d+(?:[.,]\d+)?\s*(?:г|гр|грамм\w*|мл)?\s*$", "", part.strip())
+        if name:
+            out.append(name)
+    return out
+
+
 def demo() -> None:
     """Runnable-чек: одна еда против разной с общим началом."""
+    assert looks_like_key("grapes_red_fresh")
+    assert not looks_like_key("виноград красный")
+    assert not looks_like_key("apple")
+    assert phrase_names("виноград красный 79 г, яблоко целое 158 г") == [
+        "виноград красный", "яблоко целое"
+    ]
     assert _names_compatible("творог 5%", "Творог 5%")
     assert _names_compatible("куриная грудка", "грудка куриная")
     # Разная еда с общим префиксом склеиваться не должна (INV-4.2).

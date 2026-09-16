@@ -47,6 +47,7 @@ from app.application.weight_service import WeightService
 from app.domain.consensus import confidence_from_cv, median_cv
 from app.domain.duplicates import Candidate, group
 from app.domain.goals import Goal, Remaining, in_goal, remaining
+from app.domain.naming import looks_like_key, phrase_names
 from app.domain.nutrition import atwater_suspect
 from app.domain.plate import caption_numbers
 from app.domain.plate import compose as plate_compose
@@ -118,6 +119,8 @@ class Assistant:
         parsed = _consolidate(samples)
         parsed.photo = photo
         parsed.weight_guessed = weight_guessed
+        if photo:
+            _names_from_phrase(parsed, text)
 
         if parsed.intent is Intent.MEAL and parsed.items:
             return await self._handle_meal(
@@ -601,6 +604,18 @@ class Assistant:
         item, old_grams = adjusted[-1]
         stats = await self._stats.daily(user)
         return ItemAdjusted(item=item, old_grams=old_grams, remaining=stats.remaining)
+
+
+def _names_from_phrase(parsed: ParsedMessage, text: str) -> None:
+    """Фраза фото собрана нами, и имя каждой позиции в ней известно. Ключ вместо
+    имени («grapes_red_fresh», замер 16.09.2026) возвращаем к словам фразы —
+    но только когда позиции и куски фразы сходятся один к одному."""
+    names = phrase_names(text)
+    if len(names) != len(parsed.items):
+        return
+    for item, name in zip(parsed.items, names, strict=True):
+        if looks_like_key(item.name):
+            item.name = name
 
 
 def _is_blank_item(i: ParsedItem) -> bool:

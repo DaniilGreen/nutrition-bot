@@ -109,18 +109,18 @@ async def test_фото_без_подписи_даёт_карточку_на_г�
 
 async def test_вес_в_подписи_делится_по_долям(client, fake_container):
     """AC-MA-44."""
-    fake_container.vision = StubVision(None, _plate(caption_total_g=400))
+    fake_container.vision = StubVision(None, _plate(caption_total_g=780))
     fake_container.nlu = EchoNlu()
     async with client as c:
-        d = (await c.post("/api/meals/photo?caption=420%20и%20400",
+        d = (await c.post("/api/meals/photo?caption=420%20и%20780",
                           content=JPEG, headers=_hdr())).json()
-        assert d["weighed"] is True and d["total_g"] == 400
-        assert [x["grams"] for x in d["components"]] == [240, 120, 40]
+        assert d["weighed"] is True and d["total_g"] == 780
+        assert [x["grams"] for x in d["components"]] == [500, 200, 80]
         r2 = await c.post("/api/meals/photo/commit", headers=_hdr(), json={
             "draft_id": d["draft_id"], "components": _all(d), "weighed": True,
         })
     items = r2.json()["meal"]["items"]
-    assert sum(i["grams"] for i in items) == pytest.approx(400)
+    assert sum(i["grams"] for i in items) == pytest.approx(780)
     assert not any("на глаз" in i["name"] for i in items)
 
 
@@ -279,3 +279,21 @@ async def test_ключ_записи_обязателен(client, fake_container
                    else c.post(path, json={"draft_id": "x", "components": []}, headers=hdr))
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "no_idempotency_key"
+
+
+async def test_ключ_вместо_имени_возвращается_к_словам_фразы(client, fake_container):
+    """Замер 16.09.2026: разбор отдал «grapes_red_fresh» именем позиции."""
+    class KeyNlu(EchoNlu):
+        async def parse(self, text, known_keys):
+            parsed = await super().parse(text, known_keys)
+            parsed.items[1].name = "grapes_red_fresh"
+            return parsed
+
+    fake_container.vision = StubVision(None, _plate(ask_fat=False))
+    fake_container.nlu = KeyNlu()
+    async with client as c:
+        d = (await c.post("/api/meals/photo", content=JPEG, headers=_hdr())).json()
+        r = await c.post("/api/meals/photo/commit", headers=_hdr(),
+                         json={"draft_id": d["draft_id"], "components": _all(d)})
+    names = [i["name"] for i in r.json()["meal"]["items"]]
+    assert names[1].startswith("курица жареная")

@@ -65,7 +65,12 @@ def split(components: list[Component], total_g: float | None) -> list[float]:
     """Граммы каждой позиции.
 
     Нет общего веса — оценки модели как есть. Есть — позиции с названным весом
-    остаются, остаток делится по долям; нет долей — по оценкам; нет и их — поровну.
+    остаются, остаток делится пропорционально оценкам граммов; нет оценок — по
+    долям; нет и их — поровну.
+
+    Почему оценки, а не доли: замер 16.09.2026 — модель давала миндалю 30% тарелки
+    по площади, хотя сама же насчитала ему 48 г из 350. Граммы она считает
+    поштучно, доли — на глаз; у плотной мелочи (орехи, сыр) это разница втрое.
     """
     est = [_bound(c.grams) for c in components]
     if not total_g or total_g <= 0 or not components:
@@ -75,9 +80,9 @@ def split(components: list[Component], total_g: float | None) -> list[float]:
     rest = max(total_g - fixed, 0.0)
     if not free:
         return est
-    weights = [max(components[i].share, 0.0) for i in free]
+    weights = [est[i] for i in free]
     if sum(weights) <= 0:
-        weights = [est[i] for i in free]
+        weights = [max(components[i].share, 0.0) for i in free]
     if sum(weights) <= 0:
         weights = [1.0] * len(free)
     total_w = sum(weights)
@@ -126,12 +131,16 @@ def demo() -> None:
         Component("соус сливочный", 0.1, 40),
     ]
     assert split(pasta, None) == [250, 100, 40]
-    assert split(pasta, 400) == [240, 120, 40]
-    # Названный вес курицы остаётся, остаток 250 делится 6:1.
+    assert split(pasta, 390) == [250, 100, 40]
+    assert split(pasta, 780) == [500, 200, 80]
+    # Названный вес курицы остаётся, остаток 250 делится 250:40.
     pasta[1].fixed = True
-    assert split(pasta, 350) == [214, 100, 36]
-    # Нет долей — делим по оценкам; нет и их — поровну.
-    assert split([Component("а", 0, 100), Component("б", 0, 300)], 200) == [50, 150]
+    assert split(pasta, 350) == [216, 100, 34]
+    # Доли — вторая очередь: миндаль «30% площади» не перебивает поштучные 48 г.
+    nuts = [Component("яблоко", 0.3, 180), Component("миндаль", 0.3, 48)]
+    assert split(nuts, 228) == [180, 48]
+    # Нет оценок — по долям; нет и их — поровну.
+    assert split([Component("а", 1, 0), Component("б", 3, 0)], 200) == [50, 150]
     assert split([Component("а", 0, 0), Component("б", 0, 0)], 200) == [100, 100]
     # Названное больше общего веса — остаток ноль, а не минус.
     assert split([Component("а", 1, 500, True), Component("б", 1, 50)], 300) == [500, 0]
