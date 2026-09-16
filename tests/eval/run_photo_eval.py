@@ -23,7 +23,7 @@ import statistics
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.application.results import MealLogged, PlateRead
+from app.application.results import MealLogged, PlateRead, VariantClarificationNeeded
 from tests.eval.catalog import build_eval_assistant
 
 OUT = Path(__file__).resolve().parent / "baselines" / "photo.json"
@@ -37,22 +37,32 @@ def _summary(errs: list[float]) -> dict:
         "n": len(errs),
         "mape_median": round(statistics.median(abs_) * 100, 1),
         "mape_mean": round(statistics.fmean(abs_) * 100, 1),
-        "p90": round(abs_[int(0.9 * (len(abs_) - 1))] * 100, 1),
+        "p90": round(abs_[min(len(abs_) - 1, -(-9 * len(abs_) // 10) - 1)] * 100, 1),
         # Знак: минус — занижаем. Рынок занижает на треть (NIH 2026).
         "bias_mean": round(statistics.fmean(errs) * 100, 1),
         "within_20": round(sum(a <= 0.20 for a in abs_) / len(abs_), 2),
     }
 
 
-async def _one(assistant, user, image: bytes, caption: str) -> tuple[float, float] | None:
+async def _one(assistant, user, image: bytes, caption: str) -> tuple[float, float, str] | str:
     read = await assistant.read_photo(user, image, caption=caption)
     if not isinstance(read, PlateRead):
-        return None
+        return f"не блюдо: {read!r}"[:200]
     text = assistant.photo_text(read.reading, read.grams, fat="none")
     res = await assistant.log_photo(user, text, weighed=read.weighed)
+    # Уточнение варианта человек закрыл бы тапом — берём первый предложенный,
+    # как самый частый выбор (D-19 ставит его первым).
+    for _ in range(3):
+        if not isinstance(res, VariantClarificationNeeded):
+            break
+        res = await assistant.resolve_clarification(
+            user, res.draft, res.item_index, res.options[0], raw_input=text
+        )
     if not isinstance(res, MealLogged):
-        return None
-    return res.meal.totals.kcal, sum(read.grams)
+        return f"не записалось: {type(res).__name__} на «{text}»"
+    items = "; ".join(f"{i.name_snapshot.split(' · ')[0]} {i.grams:g}г={i.macros.kcal:.0f}"
+                      for i in res.meal.items)
+    return res.meal.totals.kcal, sum(read.grams), items
 
 
 async def main() -> None:
@@ -88,12 +98,13 @@ async def main() -> None:
             try:
                 got = await _one(assistant, user, image, caption)
             except Exception as exc:  # noqa: BLE001 — замер не должен падать на одном блюде
-                print(dish, mode, "ошибка:", exc)
-                got = None
-            if got is None:
+                got = f"ошибка: {exc!r}"[:300]
+            if not isinstance(got, tuple):
+                print(dish, mode, got)
                 failed[mode] += 1
                 continue
-            est_kcal, est_mass = got
+            est_kcal, est_mass, items = got
+            line[f"{mode}_items"] = items
             kcal_err[mode].append((est_kcal - true_kcal) / true_kcal)
             line[mode] = round(est_kcal)
             if mode == "photo":
