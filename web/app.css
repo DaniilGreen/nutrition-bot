@@ -183,6 +183,30 @@ nav button[aria-current="page"]{color:var(--accent)}
   font:inherit;font-size:var(--f-caption);border-radius:var(--r-sm);padding:10px 14px;
   cursor:pointer;min-height:44px}
 
+/* ── фото блюда (§6.22) ──────────────────────────────────────────────── */
+/* Потолок в пикселях: на 1100 поле граммов уезжало от названия на 600 px —
+   та же ловушка, что у сетки панели (web/responsive.md). */
+.prow{display:flex;align-items:center;gap:var(--s-2);min-height:44px;max-width:520px;
+  border-bottom:1px solid var(--separator);font-size:var(--f-body-s)}
+.prow .pname{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;line-height:1.3}
+.prow .g{color:var(--text-faint)}
+/* 16px и выше: меньший шрифт в поле iOS зумит страницу при фокусе. */
+.prow .pg{width:68px;flex:0 0 auto;background:var(--surface-2);border:1px solid var(--surface-3);
+  border-radius:var(--r-sm);color:var(--text);font:inherit;font-size:16px;padding:8px;
+  text-align:right;min-height:40px}
+.prow .pg:focus{outline:none;border-color:var(--accent)}
+.prow .px{flex:0 0 auto;min-width:44px;height:44px;border:0;background:none;
+  color:var(--text-muted);font:inherit;font-size:var(--f-caption);cursor:pointer;
+  display:flex;align-items:center;justify-content:center}
+.prow.off .pname{text-decoration:line-through;color:var(--text-faint)}
+.prow.ptotal{margin-top:var(--s-3);font-weight:600}
+.pq{margin-top:var(--s-3)}
+.photo .primary{max-width:520px}
+.pq.need{color:var(--alert)}
+.photo .chips.wrap{flex-wrap:wrap;overflow:visible;margin:var(--s-2) 0 0;padding:0;min-height:0}
+.photo .chip{flex-shrink:1;max-width:100%;border:1px solid transparent}
+.chip[aria-pressed="true"]{background:var(--tint);border-color:var(--accent)}
+
 /* ── всплывающее сообщение ───────────────────────────────────────────── */
 .toast{position:fixed;left:var(--s-4);right:var(--s-4);
   bottom:calc(var(--tabbar) + var(--s-3) + env(safe-area-inset-bottom));

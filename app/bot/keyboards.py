@@ -22,6 +22,7 @@ MEAL_REPEAT_PREFIX = "meal_repeat"
 PROD_FIX_PREFIX = "prod_fix"
 PROD_RENAME_PREFIX = "prod_rename"  # переименовать продукт в /products (FR-27 #6)
 ONBOARD_PREFIX = "onb"
+PHOTO_PREFIX = "ph"  # карточка фото блюда: ph:fat:<id> / ph:dr:<id> / ph:ok (FR-34)
 WIZ_CANCEL = "wiz_cancel"  # «✖️ Отмена» в любом визарде (профиль/вариант) — сброс FSM
 
 # Тексты кнопок постоянного меню (они же приходят как обычные сообщения).
@@ -276,3 +277,29 @@ def _distinct(options: Sequence[str]) -> list[str]:
     ):
         common += 1
     return [" ".join(w[common:]) for w in words]
+
+
+PHOTO_FAT = (("none", "Без масла"), ("little", "Немного"), ("spoon", "Ложка"), ("lots", "Много"))
+PHOTO_DRESS = (("none", "Без"), ("sour_cream", "Сметана"), ("mayo", "Майонез"), ("oil", "Масло"))
+
+
+def photo_keyboard(
+    ask_fat: bool, fat: str | None, ask_dressing: bool, dressing: str | None
+) -> InlineKeyboardMarkup:
+    """FR-34: чипы масла и заправки (выбранный — с «✓») и «Записать»/«Отмена»."""
+    builder = InlineKeyboardBuilder()
+    rows: list[int] = []
+    if ask_fat:
+        for key, text in PHOTO_FAT:
+            mark = "✓ " if fat == key else ""
+            builder.button(text=f"{mark}{text}", callback_data=f"{PHOTO_PREFIX}:fat:{key}")
+        rows += [2, 2]
+    if ask_dressing:
+        for key, text in PHOTO_DRESS:
+            mark = "✓ " if dressing == key else ""
+            builder.button(text=f"{mark}{text}", callback_data=f"{PHOTO_PREFIX}:dr:{key}")
+        rows += [2, 2]
+    builder.button(text="✅ Записать", callback_data=f"{PHOTO_PREFIX}:ok")
+    builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
+    builder.adjust(*rows, 2)
+    return builder.as_markup()

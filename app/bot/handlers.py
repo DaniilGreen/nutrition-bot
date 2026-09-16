@@ -32,6 +32,7 @@ from openai import RateLimitError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.assistant import Assistant
+from app.application.coach import LimitReached
 from app.application.dto import Unit
 from app.application.entities import User
 from app.application.ports import UserRepo
@@ -42,13 +43,17 @@ from app.application.results import (
     ItemRemoved,
     LabelRead,
     MealLogged,
+    PlateRead,
     Result,
     VariantClarificationNeeded,
     WeightLogged,
     WeightTrend,
 )
 from app.bot.dashboard_image import render_weight_chart  # единственный уцелевший PNG — линия веса
-from app.bot.formatters import format_result  # текстовые подсказки внутри диалога (не экраны)
+from app.bot.formatters import (  # текстовые подсказки внутри диалога (не экраны)
+    format_photo_card,
+    format_result,
+)
 from app.bot.keyboards import (
     BTN_BUG,
     BTN_GOAL,
@@ -63,6 +68,7 @@ from app.bot.keyboards import (
     GOAL_TARGET_PREFIX,
     LABEL_G_PREFIX,
     ONBOARD_PREFIX,
+    PHOTO_PREFIX,
     PROD_RENAME_PREFIX,
     WIZ_CANCEL,
     activity_keyboard,
@@ -74,6 +80,7 @@ from app.bot.keyboards import (
     main_menu_keyboard,
     meal_actions_keyboard,
     onboarding_intro_keyboard,
+    photo_keyboard,
     portion_keyboard,
     prod_edit_keyboard,
     products_fix_keyboard,
@@ -85,6 +92,8 @@ from app.bot.states import MealStates, ProfileStates
 from app.bot.ui import gather, screens
 from app.domain.goals import Goal, goal_from_macros, goal_from_profile, rebalance, set_macro
 from app.domain.label_portion import label_grams
+from app.domain.plate import Component
+from app.domain.plate import split as plate_split
 from app.domain.portion_answer import parse as parse_portion
 from app.domain.timeframe import tz_from_longitude, tz_from_utc_offset
 from app.domain.value_objects import Density
@@ -713,11 +722,12 @@ async def on_photo(
     session: AsyncSession,
     state: FSMContext,
 ) -> None:
-    """Фото = этикетка (FR-27): читаем КБЖУ → спрашиваем вес порции. (Фото готовой еды пока нет.)"""
-    # Новая этикетка отменяет вопрос про вес предыдущей (багрепорт #31); прочие
-    # незавершённые шаги по-прежнему держат оборону.
+    """Фото = этикетка (FR-27) или блюдо (FR-34): различает vision."""
+    # Новый снимок отменяет вопрос про вес этикетки и открытую карточку блюда
+    # (багрепорт #31); прочие незавершённые шаги по-прежнему держат оборону.
     if await _busy_with_flow(
-        message, state, supersedes=MealStates.awaiting_label_grams.state
+        message, state,
+        supersedes=(MealStates.awaiting_label_grams.state, MealStates.awaiting_photo.state),
     ):
         return
     await state.clear()
@@ -727,7 +737,29 @@ async def on_photo(
     photo = message.photo[-1]  # последний = максимальное разрешение
     buffer = await bot.download(photo)
     image = buffer.read() if buffer is not None else b""
-    result = await assistant.read_label(app_user, image, photo_file_id=photo.file_id)
+    try:
+        result = await assistant.read_photo(
+            app_user, image, caption=message.caption or "", photo_file_id=photo.file_id
+        )
+    except LimitReached:
+        await message.answer(
+            "Лимит на распознавание фото в этом месяце исчерпан — опиши блюдо словами, "
+            "это работает всегда."
+        )
+        return
+    await session.commit()  # расход vision уже записан своей сессией; тут — пины этикетки
+    if isinstance(result, PlateRead):
+        await state.set_state(MealStates.awaiting_photo)
+        data = {
+            "plate": result.reading, "grams": result.grams, "weighed": result.weighed,
+            "fat": None, "dressing": None,
+        }
+        await state.update_data(**data)
+        sent = await message.answer(
+            _photo_text(data), reply_markup=_photo_kb(data)
+        )
+        await state.update_data(card_id=sent.message_id)
+        return
     if isinstance(result, LabelRead):
         item = result.draft.items[result.item_index]
         cap_g = (
@@ -751,6 +783,91 @@ async def on_photo(
         )
     else:
         await message.answer(format_result(result))
+
+
+def _photo_text(data: dict) -> str:
+    return format_photo_card(
+        data["plate"], data["grams"], weighed=data["weighed"],
+        fat=data.get("fat"), dressing=data.get("dressing"),
+    )
+
+
+def _photo_kb(data: dict) -> InlineKeyboardMarkup:
+    plate = data["plate"]
+    return photo_keyboard(plate.ask_fat, data.get("fat"), plate.ask_dressing, data.get("dressing"))
+
+
+@router.message(MealStates.awaiting_photo, F.text)
+async def on_photo_weight(message: Message, bot: Bot, state: FSMContext) -> None:
+    """FR-34: вес тарелки числом, пока открыта карточка → пересчёт граммов на месте."""
+    data = await state.get_data()
+    if data.get("plate") is None:
+        await state.clear()
+        await message.answer("⏳ Карточка устарела — пришли фото заново.")
+        return
+    total = label_grams(message.text or "", None)
+    if total is None or not 1 <= total <= 5000:
+        await message.answer(
+            "Пришли вес тарелки числом (например 420) или нажми «✅ Записать» под карточкой."
+        )
+        return
+    current = [Component(c.name, 0, g) for c, g in zip(
+        data["plate"].components, data["grams"], strict=True)]
+    data["grams"] = plate_split(current, total)
+    data["weighed"] = True
+    await state.update_data(grams=data["grams"], weighed=True)
+    card_id = data.get("card_id")
+    if card_id:
+        with suppress(TelegramBadRequest):
+            await bot.edit_message_text(
+                _photo_text(data), chat_id=message.chat.id, message_id=card_id,
+                reply_markup=_photo_kb(data),
+            )
+            return
+    sent = await message.answer(_photo_text(data), reply_markup=_photo_kb(data))
+    await state.update_data(card_id=sent.message_id)
+
+
+@router.callback_query(F.data.startswith(f"{PHOTO_PREFIX}:"))
+async def on_photo_btn(
+    callback: CallbackQuery,
+    app_user: User,
+    assistant: Assistant,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    """FR-34: чипы масла/заправки и «Записать» на карточке блюда."""
+    data = await state.get_data()
+    if data.get("plate") is None or not isinstance(callback.message, Message):
+        await callback.answer("Карточка устарела — пришли фото заново.")
+        return
+    parts = (callback.data or "").split(":")
+    if parts[1] in ("fat", "dr") and len(parts) == 3:
+        key = "fat" if parts[1] == "fat" else "dressing"
+        data[key] = parts[2]
+        await state.update_data(**{key: parts[2]})
+        await callback.answer()
+        await _safe_edit(callback.message, _photo_text(data), _photo_kb(data))
+        return
+    plate = data["plate"]
+    # Масло на фото не видно — главный недосчёт фото-трекеров (D-MA-11).
+    if (plate.ask_fat and not data.get("fat")) or (
+        plate.ask_dressing and not data.get("dressing")
+    ):
+        await callback.answer("Отметь масло и заправку — на фото их не видно.", show_alert=True)
+        return
+    await callback.answer()
+    try:
+        text = assistant.photo_text(
+            plate, data["grams"], fat=data.get("fat"), dressing=data.get("dressing")
+        )
+    except ValueError:
+        await callback.message.answer("Граммы вне границ — пришли вес тарелки числом.")
+        return
+    await state.clear()
+    result = await assistant.log_photo(app_user, text, weighed=bool(data.get("weighed")))
+    await session.commit()
+    await _render_after_continue(callback.message, result, state, app_user, assistant, raw=text)
 
 
 @router.message(MealStates.awaiting_label_grams, F.text)
@@ -833,6 +950,7 @@ async def on_text(
         MealStates.awaiting_density,
         MealStates.awaiting_rename,
         MealStates.awaiting_label_grams,
+        MealStates.awaiting_photo,
         MealStates.awaiting_bug,
         ProfileStates.body,
     )
@@ -1264,7 +1382,7 @@ async def _clear_intro_keyboard(message: Message, bot: Bot, state: FSMContext) -
 
 
 async def _busy_with_flow(
-    message: Message, state: FSMContext, *, supersedes: str | None = None
+    message: Message, state: FSMContext, *, supersedes: str | tuple[str, ...] | None = None
 ) -> bool:
     """True, если идёт незавершённый вопрос/визард — голос/фото не должны затирать черновик.
 
@@ -1277,7 +1395,8 @@ async def _busy_with_flow(
     current = await state.get_state()
     if current is None:
         return False
-    if supersedes is not None and current == supersedes:
+    allowed = (supersedes,) if isinstance(supersedes, str) else (supersedes or ())
+    if current in allowed:
         await state.clear()
         return False
     await message.answer(

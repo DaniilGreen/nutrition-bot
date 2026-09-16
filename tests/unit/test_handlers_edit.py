@@ -116,7 +116,10 @@ async def test_variant_answers_callback_before_llm(monkeypatch: pytest.MonkeyPat
 
 
 # Методы, которые ходят в LLM/STT — то есть занимают секунды, а не миллисекунды.
-_SLOW = {"resolve_clarification", "continue_meal", "process", "process_voice", "read_label"}
+_SLOW = {
+    "resolve_clarification", "continue_meal", "process", "process_voice", "read_label",
+    "read_photo", "log_photo",
+}
 
 
 def test_every_slow_callback_answers_telegram_first() -> None:

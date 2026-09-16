@@ -11,6 +11,7 @@ class MealStates(StatesGroup):
     awaiting_bug = State()      # описание бага после «🐛 Баг» (FR-26)
     awaiting_label_grams = State()  # вес порции после фото этикетки (FR-27)
     awaiting_rename = State()        # новое имя продукта (FR-27 #6)
+    awaiting_photo = State()         # карточка фото блюда ждёт «Записать» или вес (FR-34)
 
 
 class ProfileStates(StatesGroup):

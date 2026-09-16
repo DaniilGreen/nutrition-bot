@@ -244,7 +244,8 @@ async def test_черновик_одноразовый_и_чужой_не_отд
     async with client as c:
         d = (await c.post("/api/meals/photo", content=JPEG, headers=_hdr())).json()
         body = {"draft_id": d["draft_id"], "components": _all(d)}
-        assert (await c.post("/api/meals/photo/commit", headers=_hdr(), json=body)).status_code == 200
+        first = await c.post("/api/meals/photo/commit", headers=_hdr(), json=body)
+        assert first.status_code == 200
         again = await c.post("/api/meals/photo/commit", headers=_hdr(), json=body)
     assert again.status_code == 400 and again.json()["error"]["code"] == "draft_gone"
 
