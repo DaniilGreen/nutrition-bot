@@ -405,7 +405,9 @@
     else if (state.clarify) extra = clarifyCard(state.clarify);
     else if (state.label) extra = labelCard(state.label);
     else if (state.photo) extra = photoCard(state.photo);
-    var pace = d.pace && !paceMuted(d) ? paceCard(d.pace) : '';
+    /* Пока открыта карточка записи, «Добор» молчит: иначе он выталкивал её
+       за край экрана (фото 17.09.2026). */
+    var pace = d.pace && !extra && !paceMuted(d) ? paceCard(d.pace) : '';
     return hero(d) + composer() + chips() + pace + extra + feed(d);
   }
 
@@ -1403,38 +1405,6 @@
     try { localStorage.setItem(paceOffKey(d), '1'); } catch (e) { /* переживём */ }
   }
 
-  /* Две накопленные кривые: серая — обычный день, жёлтая — сегодняшний.
-     Инлайн-SVG, как остальные графики аппки: сборщика в проекте нет (§5.7). */
-  function paceSvg(p) {
-    var all = (p.norm_points || []).concat(p.today_points || []);
-    if (all.length < 2) return '';
-    var W = 240, H = 58, pad = 8;
-    var lo = all[0][0], hi = all[0][0], max = 1;
-    all.forEach(function (q) {
-      if (q[0] < lo) lo = q[0];
-      if (q[0] > hi) hi = q[0];
-      if (q[1] > max) max = q[1];
-    });
-    var x = function (h) { return hi === lo ? W / 2 : pad + (h - lo) / (hi - lo) * (W - pad * 2); };
-    var y = function (v) { return H - 6 - (v / max) * (H - 18); };
-    var line = function (pts) {
-      return pts.map(function (q) { return n(x(q[0]), 1) + ',' + n(y(q[1]), 1); }).join(' ');
-    };
-    var last = (p.today_points || [])[(p.today_points || []).length - 1];
-    return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" ' +
-      'aria-label="Обычный набор калорий по часам против сегодняшнего" ' +
-      'style="display:block;width:100%;height:auto;margin-top:8px">' +
-      '<line x1="' + pad + '" y1="' + (H - 5) + '" x2="' + (W - pad) + '" y2="' + (H - 5) +
-        '" stroke="var(--separator)" stroke-width="1"/>' +
-      '<polyline points="' + line(p.norm_points) + '" fill="none" ' +
-        'stroke="var(--bar)" stroke-width="1.6" stroke-linecap="round"/>' +
-      '<polyline points="' + line(p.today_points) + '" fill="none" ' +
-        'stroke="var(--warn)" stroke-width="2" stroke-linecap="round"/>' +
-      (last ? '<circle cx="' + n(x(last[0]), 1) + '" cy="' + n(y(last[1]), 1) +
-        '" r="2.8" fill="var(--warn)"/>' : '') +
-      '</svg>';
-  }
-
   function paceCard(p) {
     var chips = (p.chips || []).map(function (i) {
       return '<button class="chip" data-quick="' + i.product_id +
@@ -1448,7 +1418,6 @@
       '<div class="mic">К ' + hh(p.hour) + ' у тебя обычно ' + n(p.norm_kcal) + '</div>' +
       '<div class="num" style="font-size:var(--f-t1);font-weight:700;color:var(--warn);' +
         'line-height:1.1">' + n(p.today_kcal) + '</div>' +
-      paceSvg(p) +
       '<div class="mic" style="margin-top:6px;line-height:1.5">' + when + '</div>' +
       '<div class="chips">' + chips +
         '<button class="chip off" data-pace-off="1">Ничего не ел</button></div>' +

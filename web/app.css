@@ -168,10 +168,6 @@ nav button[aria-current="page"]{color:var(--accent)}
 .pace .chips{flex-wrap:wrap;overflow:visible;margin-left:0;margin-right:0;
   padding-left:0;padding-right:0;min-height:0}
 .pace .chip{flex-shrink:1;max-width:100%}
-/* Кривая тянется по ширине, и на десктопе 240×58 растягивались в четверть
-   экрана. Потолок в пикселях, а не в процентах: процент от широкого окна —
-   это то же самое раздувание, только записанное иначе. */
-.pace svg{max-width:420px}
 .actions{display:flex;gap:var(--s-2);margin-top:var(--s-4)}
 .actions button{background:var(--surface-2);border:0;color:var(--text);font:inherit;
   font-size:var(--f-caption);border-radius:var(--r-pill);padding:9px 15px;cursor:pointer;min-height:44px}
