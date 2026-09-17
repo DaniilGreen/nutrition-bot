@@ -121,6 +121,11 @@ class Assistant:
         parsed.weight_guessed = weight_guessed
         if photo:
             _names_from_phrase(parsed, text)
+            # Карточка фото уже была подтверждением: второй круг «с кожей?», «с маслом?»
+            # переспрашивал то, что человек только что отметил, а ответ «с маслом» при
+            # отдельной позиции масла считал его дважды (фото 17.09.2026).
+            for item in parsed.items:
+                item.clarify_options = None
 
         if parsed.intent is Intent.MEAL and parsed.items:
             return await self._handle_meal(

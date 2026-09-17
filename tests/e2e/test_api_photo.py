@@ -393,3 +393,31 @@ async def test_ключ_вместо_имени_при_другом_делени
     names = [i["name"] for i in r.json()["meal"]["items"]]
     assert not any("_" in n for n in names)
     assert names[1].startswith("курица жареная")
+
+
+async def test_после_карточки_нет_уточнений_и_кость_не_липнет_к_соседям(client, fake_container):
+    """Фото 17.09.2026: разбор переспросил «с кожей?», «с маслом?», а пояснение
+    про кость прилипло к огурцу и маслу."""
+    class AskyNlu(EchoNlu):
+        async def parse(self, text, known_keys):
+            parsed = await super().parse(text, known_keys)
+            parsed.items[0].clarify_options = ["с кожей", "без кожи"]
+            parsed.items[0].grams = 210.0          # вычли кость
+            parsed.items[1].clarify_options = ["с маслом", "без масла"]
+            return parsed
+
+    comps = [Component("куриные бёдра запечённые с кожей с костью", 0.5, 300),
+             Component("огурец свежий", 0.5, 50)]
+    fake_container.vision = StubVision(None, _plate(components=comps))
+    fake_container.nlu = AskyNlu()
+    async with client as c:
+        d = (await c.post("/api/meals/photo", content=JPEG, headers=_hdr())).json()
+        r = await c.post("/api/meals/photo/commit", headers=_hdr(), json={
+            "draft_id": d["draft_id"], "components": _all(d), "fat": "little",
+            "weighed": True,
+        })
+    out = r.json()
+    assert out["kind"] == "logged", out
+    names = [i["name"] for i in out["meal"]["items"]]
+    assert "съедобное из 300 г" in names[0]
+    assert not any("кост" in n for n in names[1:]), names

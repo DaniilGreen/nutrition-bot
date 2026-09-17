@@ -10,6 +10,9 @@
 """
 from __future__ import annotations
 
+import re
+
+from app.domain.naming import _coverage
 from app.domain.stated_amount import stated_grams
 
 # Слова, которыми человек сам сообщает, что взвесил вместе с несъедобным.
@@ -33,7 +36,10 @@ def explain(raw_input: str, item_name: str, grams: float) -> str | None:
     назвал несъедобное, а записалось меньше. Всё остальное — обычная оценка,
     и приписка к ней была бы шумом.
     """
-    if not raw_input or grams <= 0 or not _said_inedible(raw_input):
+    if not raw_input or grams <= 0:
+        return None
+    raw_input = _own_part(raw_input, item_name)
+    if not raw_input or not _said_inedible(raw_input):
         return None
     said = stated_grams(raw_input)
     if said is None or said <= grams:
@@ -42,6 +48,25 @@ def explain(raw_input: str, item_name: str, grams: float) -> str | None:
         return None
     part = _what(raw_input)
     return f"съедобное из {said:g} г {part}"
+
+
+def _own_part(text: str, item_name: str) -> str | None:
+    """Кусок ввода, который относится к этой позиции.
+
+    Фраза из нескольких позиций («бёдра с костью 300 г, огурец 50 г») раньше
+    проверялась целиком, и «съедобное из 300 г с костью» прилипало к огурцу и
+    маслу (фото 17.09.2026). Делим по запятым и берём кусок, больше всего
+    похожий на имя позиции; ни один не похож — пояснять не о чем.
+
+    ponytail: делим только по запятой и точке с запятой. «Бедро с костью и
+    огурец» одним куском всё ещё спутает позиции; «и» внутри одной позиции
+    («с костью и с кожей») встречается чаще, чем как разделитель.
+    """
+    parts = [p.strip() for p in re.split(r"[,;\n]+", text) if p.strip()]
+    if len(parts) <= 1:
+        return text
+    score, best = max((_coverage(item_name, p), p) for p in parts)
+    return best if score > 0 else None
 
 
 def _what(text: str) -> str:
@@ -77,6 +102,15 @@ def demo() -> None:
     assert explain("мандарины 200 г с кожурой", "мандарин", 150) == "съедобное из 200 г с кожурой"
     assert explain("фисташки 100 г в скорлупе", "фисташки", 55) == "съедобное из 100 г в скорлупе"
     assert explain("", "что-то", 100) is None
+    # Фраза из нескольких позиций: пояснение — только у своей (фото 17.09.2026).
+    plate = ("куриные бёдра запечённые с костью 300 г, картофель запечённый дольками 320 г, "
+             "огурец свежий 50 г, масло подсолнечное 5 г")
+    assert explain(plate, "куриные бёдра запечённые с кожей", 210) == (
+        "съедобное из 300 г с костью"
+    )
+    assert explain(plate, "огурец свежий", 50) is None
+    assert explain(plate, "масло подсолнечное", 5) is None
+    assert explain(plate, "нечто совсем другое", 5) is None
     print("пояснение к весу: ок")
 
 
