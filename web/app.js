@@ -1358,6 +1358,37 @@
       esc(value) + '</span></div>';
   }
 
+
+  /* Правка целей формой (MA-INV-54): сервер решает, кто берёт разницу, а экран
+     говорит словами, что сдвинулось — иначе «углеводы +100» выглядело бы сбоем. */
+  var MOVED_WORD = { kcal: ['калории', ''], protein_g: ['белок', ' г'],
+                     fat_g: ['жир', ' г'], carb_g: ['углеводы', ' г'] };
+
+  function saveGoal() {
+    var body = {
+      kcal: Number(document.getElementById('gk').value),
+      protein_g: Number(document.getElementById('gp').value),
+      fat_g: Number(document.getElementById('gf').value),
+      carb_g: Number(document.getElementById('gc').value)
+    };
+    send('/api/settings/goal', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      if (r.changed === 'none') { toast('Цели не менялись.'); return; }
+      var parts = Object.keys(r.moved || {}).map(function (k) {
+        var w = MOVED_WORD[k];
+        return w[0] + ' ' + signed(r.moved[k]) + w[1];
+      });
+      var kept = r.moved && !r.moved.kcal ? ', калории те же' : '';
+      toast('Цели сохранены: ' + parts.join(', ') + kept + '.' +
+            (r.low_protein ? ' Белка меньше 1,2 г на кг — на сушке это потеря мышц.' : ''),
+            !!r.low_protein);
+      renderSettings();
+    }).catch(function (e) { toast(e.message, true); });
+  }
+
   function patch(path, body, ok) {
     return send(path, {
       method: 'PATCH',
@@ -2708,12 +2739,7 @@
     if (b.id === 'next') { state.cat.offset += PAGE; return renderCatalog(); }
     if (b.id === 'save') return saveProduct();
     if (b.id === 'toDay') { state.tab = 'day'; return render(); }
-    if (b.id === 'saveGoal') return patch('/api/settings/goal', {
-      kcal: Number(document.getElementById('gk').value),
-      protein_g: Number(document.getElementById('gp').value),
-      fat_g: Number(document.getElementById('gf').value),
-      carb_g: Number(document.getElementById('gc').value)
-    }, 'Цели сохранены.');
+    if (b.id === 'saveGoal') return saveGoal();
     if (b.id === 'saveKg') return patch('/api/settings/goal',
       { protein_per_kg: Number(document.getElementById('gpk').value) }, 'Белок пересчитан.');
     if (b.id === 'saveTz') return patch('/api/settings/timezone',

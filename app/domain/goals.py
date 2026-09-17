@@ -144,6 +144,44 @@ def set_macro(goal: Goal, macro: Literal["protein", "fat", "carb"], grams: float
     return goal_from_macros(new["protein"], new["fat"], new["carb"], goal.target)
 
 
+def set_kcal(goal: Goal, kcal: float) -> Goal:
+    """Поменять только калории (MINIAPP-SPEC §6.5): белок и жир те же, разницу берут
+    углеводы; не хватает — жир до нуля, потом белок. Калории — честно от макросов."""
+    p, f = goal.protein_g, goal.fat_g
+    c = (kcal - 4 * p - 9 * f) / 4
+    if c < 0:
+        c = 0.0
+        f = max(0.0, (kcal - 4 * p) / 9)
+        if kcal - 4 * p < 0:
+            p = max(0.0, kcal / 4)
+    return goal_from_macros(round(p), round(f), round(c), goal.target)
+
+
+def edit_goal(current: Goal, *, kcal: float, protein_g: float, fat_g: float,
+              carb_g: float) -> tuple[Goal, str]:
+    """Что человек поменял в форме → согласованная цель (MA-INV-54).
+
+    Второе — что поменяли: `none` | `kcal` | `protein` | `fat` | `carb` | `macros`.
+    """
+    new = {"protein": protein_g, "fat": fat_g, "carb": carb_g}
+    old = {"protein": current.protein_g, "fat": current.fat_g, "carb": current.carb_g}
+    macros = [m for m in new if abs(new[m] - old[m]) >= 0.5]
+    kcal_changed = abs(kcal - current.daily_kcal) >= 0.5
+    if not macros and not kcal_changed:
+        drift = abs(4 * current.protein_g + 9 * current.fat_g + 4 * current.carb_g
+                    - current.daily_kcal)
+        if drift <= 9:
+            return current, "none"
+        # Цель уже несогласована (сохранена до 17.09.2026) — выравниваем углеводами.
+        return set_kcal(current, current.daily_kcal), "kcal"
+    if not macros:
+        return set_kcal(current, kcal), "kcal"
+    if len(macros) == 1 and not kcal_changed:
+        m = macros[0]
+        return set_macro(current, m, new[m]), m  # type: ignore[arg-type]
+    return goal_from_macros(round(protein_g), round(fat_g), round(carb_g), current.target), "macros"
+
+
 def goal_from_profile(
     *,
     sex: Literal["male", "female"],

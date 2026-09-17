@@ -140,3 +140,49 @@ def test_set_macro_to_current_value_changes_nothing() -> None:
         _BASE.carb_g,
         _BASE.daily_kcal,
     )
+
+
+def test_форма_один_макрос_калории_те_же():
+    """Баг 17.09.2026: белок 190 → 90 сохранялся, а калории и углеводы стояли."""
+    from app.domain.goals import edit_goal
+
+    cur = Goal(2176, 190, 72, 188, "cut")
+    g, what = edit_goal(cur, kcal=2176, protein_g=90, fat_g=72, carb_g=188)
+    assert what == "protein"
+    # (2176 − 4·90 − 9·72) / 4 = 292: калории сохраняются, даже если старая цель
+    # сама была несогласована (2176 при макросах на 2160).
+    assert (g.protein_g, g.fat_g) == (90, 72) and g.carb_g == 292
+    assert g.daily_kcal == 2176
+    assert g.daily_kcal == 4 * g.protein_g + 9 * g.fat_g + 4 * g.carb_g
+
+
+def test_форма_только_калории_берут_углеводы():
+    from app.domain.goals import edit_goal
+
+    cur = Goal(2176, 190, 72, 188, "cut")
+    g, what = edit_goal(cur, kcal=1900, protein_g=190, fat_g=72, carb_g=188)
+    assert what == "kcal" and (g.protein_g, g.fat_g) == (190, 72) and g.carb_g == 123
+    # Калорий меньше, чем белок и жир, — углеводы 0, жир уступает, но не в минус.
+    low, _ = edit_goal(cur, kcal=900, protein_g=190, fat_g=72, carb_g=188)
+    assert low.carb_g == 0 and low.fat_g == 16 and low.protein_g == 190
+    assert low.daily_kcal == 4 * 190 + 9 * 16
+
+
+def test_форма_несколько_чисел_калории_от_макросов():
+    from app.domain.goals import edit_goal
+
+    cur = Goal(2176, 190, 72, 188, "cut")
+    g, what = edit_goal(cur, kcal=3000, protein_g=150, fat_g=60, carb_g=200)
+    assert what == "macros" and g.daily_kcal == 150 * 4 + 60 * 9 + 200 * 4
+    ok = Goal(2160, 190, 72, 188, "cut")      # согласованная: 760 + 648 + 752
+    same, what = edit_goal(ok, kcal=2160, protein_g=190, fat_g=72, carb_g=188)
+    assert what == "none" and same == ok
+
+
+def test_несогласованная_цель_выравнивается_при_сохранении():
+    """Цель владельца после бага: 2176 ккал при макросах на 1760."""
+    from app.domain.goals import edit_goal
+
+    bad = Goal(2176, 90, 72, 188, "cut")
+    g, what = edit_goal(bad, kcal=2176, protein_g=90, fat_g=72, carb_g=188)
+    assert what == "kcal" and g.carb_g == 292 and g.daily_kcal == 2176

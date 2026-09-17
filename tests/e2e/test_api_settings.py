@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from app.application.entities import WeightLog
+from app.domain.goals import Goal
 from tests.initdata_fixtures import valid
 
 
@@ -260,3 +261,23 @@ async def test_граница_суток_двигает_сегодня(client, f
                                   Goal(2000, 100, 60, 200),
                                   clock=lambda: datetime(2026, 9, 17, 12, tzinfo=UTC))
     assert (await yesterday_view.daily(user)).remaining.consumed.kcal == 300
+
+
+async def test_смена_белка_в_форме_двигает_углеводы(client, fake_container):
+    """Баг 17.09.2026: белок 190 → 90 сохранялся, калории и углеводы стояли (MA-INV-54)."""
+    async with client as c:
+        uid = await _login(c)
+        await fake_container.users.set_goal(uid, Goal(2176, 190, 72, 188, "cut"))
+        await fake_container.weights.add(
+            WeightLog(user_id=uid, measured_at=datetime.now(UTC), weight_kg=91.8))
+        r = (await c.patch("/api/settings/goal", headers=_hdr(), json={
+            "kcal": 2176, "protein_g": 90, "fat_g": 72, "carb_g": 188})).json()
+        same = (await c.patch("/api/settings/goal", headers=_hdr(), json={
+            "kcal": r["goal"]["kcal"], "protein_g": 90, "fat_g": 72,
+            "carb_g": r["goal"]["carb_g"]})).json()
+    g = r["goal"]
+    assert r["changed"] == "protein" and g["carb_g"] == 292 and g["kcal"] == 2176
+    assert g["kcal"] == 4 * g["protein_g"] + 9 * g["fat_g"] + 4 * g["carb_g"]
+    assert r["moved"] == {"protein_g": -100, "carb_g": 104}
+    assert r["low_protein"] is True
+    assert same["changed"] == "none"

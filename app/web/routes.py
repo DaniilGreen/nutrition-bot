@@ -43,6 +43,7 @@ from app.domain.audio import filename_for
 from app.domain.body_scan import BodyScan, with_fields
 from app.domain.duplicates import SAFE_SPREAD, Candidate, spread, winner
 from app.domain.goals import Goal
+from app.domain.goals import edit_goal as consistent_goal
 from app.domain.label_portion import label_grams
 from app.domain.plate import MAX_COMPONENTS
 from app.domain.prefs import merge as merge_prefs
@@ -1353,7 +1354,7 @@ async def edit_goal(
         protein = per_kg * trend.logs[0].weight_kg
 
     try:
-        goal = Goal(
+        asked = Goal(
             daily_kcal=float(body.get("kcal", current.daily_kcal)),
             protein_g=float(protein if protein is not None else current.protein_g),
             fat_g=float(body.get("fat_g", current.fat_g)),
@@ -1363,15 +1364,40 @@ async def edit_goal(
     except (TypeError, ValueError) as exc:
         raise bad_request("bad_goal", "Цели должны быть числами.") from exc
 
-    if not 800 <= goal.daily_kcal <= 6000:
+    if not 800 <= asked.daily_kcal <= 6000:
         raise bad_request("kcal_out_of_range", "Калорийность вне разумных пределов.")
-    if not all(0 <= v <= 600 for v in (goal.protein_g, goal.fat_g, goal.carb_g)):
+    if not all(0 <= v <= 600 for v in (asked.protein_g, asked.fat_g, asked.carb_g)):
         raise bad_request("macros_out_of_range", "Макросы вне разумных пределов.")
-    if goal.target not in ("cut", "maintain", "bulk"):
+    if asked.target not in ("cut", "maintain", "bulk"):
         raise bad_request("bad_target", "Неизвестный режим.")
 
+    # MA-INV-54: форма шлёт все четыре числа, но менял человек обычно одно. Разницу
+    # поглощает тот же макрос, что и в боте (FR-16.1), и цель остаётся согласованной.
+    base = replace(current, target=asked.target)
+    goal, changed = consistent_goal(
+        base, kcal=asked.daily_kcal, protein_g=asked.protein_g,
+        fat_g=asked.fat_g, carb_g=asked.carb_g,
+    )
+    if changed == "none" and asked.target == current.target:
+        return {"goal": goal_json(current), "changed": "none", "moved": {}}
+    if not 800 <= goal.daily_kcal <= 6000:
+        raise bad_request("kcal_out_of_range",
+                          "С такими макросами калории выходят за разумные пределы.")
     await users.set_goal(_uid(user), goal)
-    return {"goal": goal_json(goal)}
+    trend = await assistant.weight_trend(user, 1)
+    weight = trend.logs[0].weight_kg if trend.logs else None
+    return {
+        "goal": goal_json(goal),
+        "changed": changed,
+        "moved": {
+            k: round(getattr(goal, f) - getattr(current, f))
+            for k, f in (("kcal", "daily_kcal"), ("protein_g", "protein_g"),
+                         ("fat_g", "fat_g"), ("carb_g", "carb_g"))
+            if round(getattr(goal, f) - getattr(current, f))
+        },
+        # Ниже 1.2 г/кг на сушке — потеря мышц; не запрещаем, но говорим.
+        "low_protein": bool(weight and goal.protein_g < 1.2 * weight),
+    }
 
 
 @router.patch("/settings/timezone")
