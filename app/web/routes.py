@@ -539,6 +539,40 @@ def _label_json(
     }
 
 
+def _scan_from_fields(read: BodyScan, fields: Any, tz: str) -> BodyScan:
+    """Прочитанное с бланка + правки человека. ValueError — правка не разобрана."""
+    if not isinstance(fields, dict):
+        raise ValueError("fields")
+    scan = with_fields(read, fields)
+    if fields.get("date") or fields.get("time"):
+        local = scan.measured_at.astimezone(ZoneInfo(tz))
+        d = date.fromisoformat(str(fields.get("date") or local.date().isoformat()))
+        hh, mm = (int(x) for x in str(fields.get("time") or local.strftime("%H:%M")).split(":"))
+        scan = replace(scan, measured_at=datetime(d.year, d.month, d.day, hh, mm,
+                                                  tzinfo=ZoneInfo(tz)))
+    return scan
+
+
+@router.post("/body-scans/check")
+async def check_scan(
+    body: dict[str, Any], user: CurrentUser, request: Request, scans: CurrentScans,
+) -> dict[str, Any]:
+    """Перепроверка карточки после правки поля (§6.24): сверка живёт в одном месте —
+    в домене, а не копией в JS."""
+    token = str(body.get("draft_id") or "")
+    draft = request.app.state.drafts.peek(token, _uid(user))
+    if draft is None or draft.kind != "scan":
+        raise bad_request("draft_gone", "Карточка устарела. Сфотографируй бланк ещё раз.")
+    fields = body.get("fields") or {}
+    try:
+        scan = _scan_from_fields(draft.payload["read"], fields, user.timezone)
+    except (TypeError, ValueError) as exc:
+        raise bad_request("bad_scan", "Число не разобрал — проверь поле.") from exc
+    ambiguous = bool(draft.payload["ambiguous"]) and not fields.get("date")
+    check = await scans.check(user, scan, date_ambiguous=ambiguous)
+    return scan_check_json(check, token, user.timezone)
+
+
 @router.post("/body-scans")
 async def save_scan(
     body: dict[str, Any], user: CurrentUser, request: Request, scans: CurrentScans,
@@ -553,17 +587,9 @@ async def save_scan(
     if draft is None or draft.kind != "scan":
         raise bad_request("draft_gone", "Карточка устарела. Сфотографируй бланк ещё раз.")
     fields = body.get("fields") or {}
-    if not isinstance(fields, dict):
-        raise bad_request("bad_scan", "Поля замера должны быть объектом.")
     read: BodyScan = draft.payload["read"]
     try:
-        scan = with_fields(read, fields)
-        if fields.get("date") or fields.get("time"):
-            local = scan.measured_at.astimezone(ZoneInfo(user.timezone))
-            d = date.fromisoformat(str(fields.get("date") or local.date().isoformat()))
-            hh, mm = (int(x) for x in str(fields.get("time") or local.strftime("%H:%M")).split(":"))
-            scan = replace(scan, measured_at=datetime(d.year, d.month, d.day, hh, mm,
-                                                      tzinfo=ZoneInfo(user.timezone)))
+        scan = _scan_from_fields(read, fields, user.timezone)
     except (TypeError, ValueError) as exc:
         raise bad_request("bad_scan", "Числа замера не разобрал — проверь поля.") from exc
     corrected = [f for f in SCAN_FIELDS if getattr(scan, f) != getattr(read, f)]

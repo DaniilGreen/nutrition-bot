@@ -23,6 +23,7 @@ PROD_FIX_PREFIX = "prod_fix"
 PROD_RENAME_PREFIX = "prod_rename"  # переименовать продукт в /products (FR-27 #6)
 ONBOARD_PREFIX = "onb"
 PHOTO_PREFIX = "ph"  # карточка фото блюда: ph:fat:<id> / ph:dr:<id> / ph:ok (FR-34)
+SCAN_PREFIX = "scan"  # карточка бланка InBody: scan:save / scan:confirm / scan:apply (FR-36)
 WIZ_CANCEL = "wiz_cancel"  # «✖️ Отмена» в любом визарде (профиль/вариант) — сброс FSM
 
 # Тексты кнопок постоянного меню (они же приходят как обычные сообщения).
@@ -302,4 +303,26 @@ def photo_keyboard(
     builder.button(text="✅ Записать", callback_data=f"{PHOTO_PREFIX}:ok")
     builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
     builder.adjust(*rows, 2)
+    return builder.as_markup()
+
+
+def scan_keyboard(check: object) -> InlineKeyboardMarkup:
+    """FR-36: несошедшийся бланк сохраняется только явным «Всё верно» (MA-INV-50)."""
+    builder = InlineKeyboardBuilder()
+    if getattr(check, "date_problem", None) == "future":
+        builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
+        return builder.as_markup()
+    if getattr(check, "needs_confirm", False):
+        builder.button(text="✅ Всё верно — сохранить", callback_data=f"{SCAN_PREFIX}:confirm")
+    else:
+        label = "💾 Обновить замер" if getattr(check, "existing", None) else "💾 Сохранить"
+        builder.button(text=label, callback_data=f"{SCAN_PREFIX}:save")
+    builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def scan_apply_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Применить цели", callback_data=f"{SCAN_PREFIX}:apply")
     return builder.as_markup()

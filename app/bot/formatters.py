@@ -357,3 +357,97 @@ def format_photo_card(
     if plate.ask_dressing:
         lines.append(f"Заправка: {_DRESS_WORD.get(dressing or '', '❔ отметь кнопкой')}")
     return "\n".join(lines)
+
+
+SCAN_REFUSAL = {
+    "not_inbody": "Пока понимаю только бланки InBody — у других приборов обмен считается иначе.",
+    "no_numbers": "Не нашёл на бланке вес и жир — сними его ровно и целиком, при свете.",
+    "no_date": "Не разобрал дату на бланке — сними верх бланка чётче.",
+}
+
+_SCAN_LINES = (
+    ("weight_kg", "Вес", "кг"),
+    ("skeletal_muscle_kg", "Скелетные мышцы", "кг"),
+    ("body_fat_kg", "Жир", "кг"),
+    ("body_fat_pct", "Процент жира", "%"),
+    ("fat_free_kg", "Безжировая масса", "кг"),
+    ("visceral_level", "Висцеральный жир", "· норма 1–9"),
+    ("bmr_kcal", "Базовый обмен", "ккал"),
+    ("water_l", "Вода", "л"),
+    ("protein_kg", "Белок", "кг"),
+    ("minerals_kg", "Минералы", "кг"),
+)
+_ALWAYS = {"weight_kg", "skeletal_muscle_kg", "body_fat_kg", "body_fat_pct", "fat_free_kg",
+           "visceral_level", "bmr_kcal", "water_l"}
+
+
+def _num(v: float) -> str:
+    return f"{v:g}".replace(".", ",")
+
+
+def format_scan_card(check: object, tz: str) -> str:
+    """FR-36: что прочитали с бланка; несошедшееся — с ⚠️ (MA-INV-50)."""
+    s = check.scan  # type: ignore[attr-defined]
+    local = s.measured_at.astimezone(ZoneInfo(tz))
+    head = f"📋 <b>{escape(s.device or 'InBody')} · {local:%d.%m.%Y %H:%M}</b>"
+    who = " · ".join(x for x in (
+        f"{_num(s.height_cm)} см" if s.height_cm else "",
+        f"{s.age} лет" if s.age else "",
+    ) if x)
+    lines = [head + (f"\n{who}" if who else ""), ""]
+    bad = check.bad  # type: ignore[attr-defined]
+    for key, label, unit in _SCAN_LINES:
+        v = getattr(s, key)
+        if v is None or (key not in _ALWAYS and key not in bad):
+            continue
+        mark = "⚠️ " if key in bad else ""
+        lines.append(f"{mark}{label}: <b>{_num(v)}</b> {unit}")
+    notes = []
+    if bad:
+        notes.append("Отмеченные числа не сходятся с остальными — сверь с бланком. Поправить "
+                     "их можно в мини-аппе: сними бланк там.")
+    if check.foreign:  # type: ignore[attr-defined]
+        notes.append("Похоже, бланк не твой: рост, пол, возраст или вес не сходятся с прошлыми.")
+    if check.date_ambiguous:  # type: ignore[attr-defined]
+        notes.append("Дату можно прочитать двумя способами — проверь её.")
+    if check.date_problem == "old":  # type: ignore[attr-defined]
+        notes.append("Замеру больше двух лет — точно этот?")
+    if check.date_problem == "future":  # type: ignore[attr-defined]
+        notes.append("Дата замера в будущем — так сохранить нельзя.")
+    if check.existing is not None:  # type: ignore[attr-defined]
+        notes.append("Такой замер уже есть — сохраню поверх.")
+    if notes:
+        lines += [""] + notes
+    lines += ["", "<i>Сравнивай замеры, сделанные в одинаковых условиях: утром, натощак, "
+              "без тренировки накануне.</i>"]
+    return "\n".join(lines)
+
+
+_TARGET_WORD = {"cut": "похудение", "maintain": "поддержание", "bulk": "набор"}
+_ACTIVITY_FACTOR = {"low": 1.2, "medium": 1.375, "high": 1.55}
+
+
+def format_goal_proposal(p: object) -> str:
+    """«Было → станет» (MA-INV-52): цели меняются только кнопкой."""
+    cur, new = p.current, p.proposed  # type: ignore[attr-defined]
+    target = _TARGET_WORD.get(cur.target, cur.target)
+    if p.base == "energy":  # type: ignore[attr-defined]
+        basis = f"{p.tdee_kcal:g} расход по замерам × {target}"  # type: ignore[attr-defined]
+    else:
+        basis = (f"{p.bmr_kcal:g} обмен × {_num(_ACTIVITY_FACTOR[p.activity])} активность × "  # type: ignore[attr-defined]
+                 f"{target}")
+
+    def row(label: str, a: float, b: float, unit: str) -> str:
+        d = round(b) - round(a)
+        diff = f"{'+' if d > 0 else '−'}{abs(d)}" if d else "без изменений"
+        return f"{label}: {round(a)} → <b>{round(b)}</b>{unit} ({diff})"
+
+    return "\n".join([
+        "🎯 <b>Цели по замеру</b>",
+        f"<i>{escape(basis)}; белок — от безжировой массы</i>",
+        row("Калории", cur.daily_kcal, new.daily_kcal, ""),
+        row("Белок", cur.protein_g, new.protein_g, " г"),
+        row("Жир", cur.fat_g, new.fat_g, " г"),
+        row("Углеводы", cur.carb_g, new.carb_g, " г"),
+        "Прошедшие дни недели останутся посчитанными по старой цели.",
+    ])

@@ -127,7 +127,7 @@ def evening(d: DayContext) -> str:
         return (
             "<h3>🌙 Итог дня</h3>"
             f"<p><b>{n(c.kcal)} / {n(g.daily_kcal)} ккал</b> · белок {n(c.protein)} г — всё "
-            "закрыто. Делать ничего не надо.</p>" + blocks.anchor(d)
+            "закрыто. Делать ничего не надо.</p>" + blocks.week_balance(d) + blocks.anchor(d)
         )
     return (
         "<h3>🌙 Итог дня</h3>"
@@ -135,6 +135,7 @@ def evening(d: DayContext) -> str:
         + blocks.macro_block("Белок", c.protein, g.protein_g)
         + over
         + adv
+        + blocks.week_balance(d)
         + blocks.anchor(d)
     )
 
@@ -147,7 +148,8 @@ def week(d: DayContext) -> str:
         )
     a, g = w.avg_macros, d.goal
     return (
-        "<h3>📈 Неделя · в среднем за день</h3>"
+        blocks.week_balance(d, sunday_summary=False)
+        + "<h3>📈 Неделя · в среднем за день</h3>"
         f"<p><i>{verdict(a, g, final=True)}</i></p>"
         + _bars(a, g)
         + f"<p>Дней в цели: <b>{w.days_in_goal}</b> из {w.days_logged} записанных</p>"
@@ -375,6 +377,8 @@ def help_() -> str:
         "<details><summary>📷 Фото и цифры</summary>"
         "<p>Сфоткай тарелку — разложу блюдо на составляющие и спрошу про масло. Взвесил — "
         "напиши вес подписью к фото («420»): так точнее.</p>"
+        "<p>Бланк InBody — тоже фото: сверю цифры, сохраню замер и предложу цели по составу "
+        "тела.</p>"
         "<p>Пришли снимок таблицы КБЖУ — прочитаю сам, спрошу только вес. Знаешь цифры из меню? "
         "Назови прямо: «рис из кафе, 400 ккал, 30 белка, 10 жира, 50 углеводов».</p></details>"
         "<details><summary>✏️ Исправить</summary>"

@@ -51,7 +51,7 @@ async def _tick(
             )
             if not due:
                 continue
-            ctx = await gather(assistant, user)
+            ctx = await gather(assistant, user, container.body_scans_for(session))
             if ctx.today.meals_count == 0:
                 continue  # нечего подытоживать — не дёргаем
             sent[user.telegram_id] = today

@@ -190,7 +190,7 @@
       '<svg width="120" height="120" viewBox="0 0 120 120" aria-hidden="true" ' +
       'style="flex-shrink:0">' + rings + '</svg>' +
       '<div style="flex-grow:1;min-width:0;display:flex;flex-direction:column;gap:6px">' +
-      rows + '</div></div>' + heroFoot(d) + '</section>';
+      rows + '</div></div>' + weekStrip(d) + heroFoot(d) + '</section>';
   }
 
   /* Минимум: только остаток калорий, белок уходит в подпись. */
@@ -204,6 +204,7 @@
       (over ? 'ккал перебор' : 'ккал осталось') + ' · белка ещё ' +
       n(Math.max(0, t.protein_left)) + ' г</div>' +
       '<div class="track"><i style="width:' + pct(t.kcal, g.kcal) + '%"></i></div>' +
+      weekLine(d) +
       '</section>';
   }
 
@@ -261,6 +262,7 @@
               proteinNote(d) + '</div>' +
           '</div>' +
         '</div>' +
+        weekStrip(d) +
         heroFoot(d) +
       '</section>';
   }
@@ -405,6 +407,8 @@
     else if (state.clarify) extra = clarifyCard(state.clarify);
     else if (state.label) extra = labelCard(state.label);
     else if (state.photo) extra = photoCard(state.photo);
+    else if (state.scan) extra = scanCard(state.scan);
+    else if (state.proposal) extra = proposalCard(state.proposal);
     /* Пока открыта карточка записи, «Добор» молчит: иначе он выталкивал её
        за край экрана (фото 17.09.2026). */
     var pace = d.pace && !extra && !paceMuted(d) ? paceCard(d.pace) : '';
@@ -638,6 +642,189 @@
   }
 
 
+
+  /* ── неделя (§6.23) ──────────────────────────────────────────────────── */
+
+  var WDAYS = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'];
+  var MONTHS_GEN = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл',
+                    'авг', 'сен', 'окт', 'ноя', 'дек'];
+  var CHEV_L = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M15 18l-6-6 6-6"/></svg>';
+  var CHEV_R = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M9 18l6-6-6-6"/></svg>';
+
+  /* Плашку показываем, когда есть о чём говорить: не в понедельник (неделя и
+     день совпадают), не на прошлых днях и не без единого прошедшего записанного
+     дня — иначе это дубль дневного остатка. */
+  function weekShown(d) {
+    var w = d.week_balance;
+    if (!w || !w.goal_kcal || w.verdict === 'empty') return null;
+    if (w.days[0].date === d.day) return null;
+    var before = w.days.some(function (x) { return x.kcal != null && x.date < d.day; });
+    return before ? w : null;
+  }
+
+  function weekToday(w, day) {
+    for (var i = 0; i < w.days.length; i++) if (w.days[i].date === day) return w.days[i];
+    return null;
+  }
+
+  function weekRight(w, day) {
+    var t = weekToday(w, day);
+    var todayIn = t && !t.over;            // сегодня ещё не в балансе — оно «оставшееся»
+    if (w.floor_hit) return null;
+    if (w.per_day_kcal == null) {
+      return '<span class="badge ' + (w.verdict === 'over' ? 'warn' : 'ok') + '">' +
+        (w.verdict === 'over' ? 'перебор' : 'в плане') + '</span>';
+    }
+    if (w.remaining_days === 1) {
+      return '<div class="mic">' + (todayIn ? 'на сегодня' : 'на завтра') + '</div>' +
+        '<div class="num" style="font-size:var(--f-body-s);font-weight:600">' +
+        n(w.per_day_kcal) + '</div>';
+    }
+    return '<div class="mic">до воскресенья</div>' +
+      '<div class="num" style="font-size:var(--f-body-s);font-weight:600">' +
+      (todayIn && !(t && t.kcal) ? 'с сегодня по ' : 'по ') + n(w.per_day_kcal) + '</div>' +
+      '<div class="mic">в день</div>';
+  }
+
+  function weekStrip(d) {
+    var w = weekShown(d);
+    if (!w) return '';
+    var over = w.balance_kcal > 0;
+    if (w.verdict === 'few_logs') {
+      return '<div class="wk muted"><div class="l"><div class="mic">Неделя</div>' +
+        '<div class="cap">Записано ' + n(w.logged_days) + ' дн. — для баланса маловато</div></div>' +
+        '<div class="r"><span class="badge">мало записей</span></div></div>';
+    }
+    var right = weekRight(w, d.day);
+    return '<div class="wk">' +
+      '<div class="l"><div class="mic" style="color:var(--text)">' +
+        (over ? 'Перебор за неделю' : 'Запас на неделе') + '</div>' +
+        '<div class="num v"' + (over ? ' style="color:var(--warn)"' : '') + '>' +
+        n(Math.abs(w.balance_kcal)) + ' <span class="unit">ккал</span></div></div>' +
+      (right ? '<div class="r">' + right + '</div>'
+             : '<div class="mic full">Неделю уже не догнать — ешь по обычной цели, ' +
+               'с понедельника новая.</div>') +
+      '</div>';
+  }
+
+  function weekLine(d) {
+    var w = weekShown(d);
+    if (!w || w.verdict === 'few_logs') return '';
+    var over = w.balance_kcal > 0;
+    return '<div class="cap" style="margin-top:6px">Неделя: ' +
+      (over ? 'перебор ' : 'запас ') + n(Math.abs(w.balance_kcal)) +
+      (w.per_day_kcal != null ? ' · до вс по ' + n(w.per_day_kcal) : '') + '</div>';
+  }
+
+  function weekTitle(w, ago) {
+    var a = w.start.split('-'), b = w.end.split('-');
+    var dates = Number(a[2]) + (a[1] !== b[1] ? ' ' + MONTHS_GEN[Number(a[1]) - 1] : '') +
+      '–' + Number(b[2]) + ' ' + MONTHS_GEN[Number(b[1]) - 1];
+    if (ago === 0) return 'Эта неделя · ' + dates;
+    if (ago === 1) return 'Прошлая неделя · ' + dates;
+    return dates;
+  }
+
+  /* Столбики в одном масштабе с пунктиром цели; красным — только часть выше
+     цели (MA-INV-27). Подписи дней — HTML под SVG: текст внутри растянутого
+     SVG на 320 px сжимался бы до нечитаемого. */
+  function weekBars(w, today) {
+    var W = 300, H = 120, base = 112, slot = W / 7, bw = 26;
+    var top = Math.max(w.goal_kcal * 1.25, 1);
+    w.days.forEach(function (x) { if (x.kcal != null) top = Math.max(top, x.kcal * 1.08); });
+    var y = function (v) { return base - v / top * 104; };
+    var words = [];
+    var bars = w.days.map(function (x, i) {
+      var cx = i * slot + slot / 2, x0 = cx - bw / 2;
+      if (x.kcal == null) {
+        words.push(WDAYS[i] + (x.date > today ? ' впереди' : ' не записан'));
+        if (x.date > today) return '';
+        return '<rect x="' + (cx - 7) + '" y="' + (base - 3) + '" width="14" height="2" rx="1" ' +
+          'fill="var(--text-faint)"/>';
+      }
+      var goal = w.goal_kcal, v = x.kcal, low = Math.min(v, goal);
+      words.push(WDAYS[i] + ' ' + n(v) + (v > goal ? ' — перебор ' + n(v - goal) : ''));
+      var out = '<rect x="' + x0 + '" y="' + y(low) + '" width="' + bw + '" height="' +
+        (base - y(low)) + '" rx="4" fill="var(--bar)"/>';
+      if (v > goal) {
+        out += '<rect x="' + x0 + '" y="' + y(v) + '" width="' + bw + '" height="' +
+          (y(goal) - y(v)) + '" rx="4" fill="var(--danger)"/>' +
+          '<rect x="' + x0 + '" y="' + (y(goal) - 0.5) + '" width="' + bw +
+          '" height="1" fill="var(--surface)"/>';
+      }
+      return out;
+    }).join('');
+    var labels = w.days.map(function (x, i) {
+      var cls = x.date === today ? ' class="now"' : (x.date > today ? ' class="later"' : '');
+      return '<span' + cls + '>' + WDAYS[i] + '</span>';
+    }).join('');
+    return '<div class="wkchart">' +
+      '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' +
+        esc(words.join(', ')) + '">' +
+        '<line x1="0" x2="' + W + '" y1="' + y(w.goal_kcal) + '" y2="' + y(w.goal_kcal) +
+          '" stroke="var(--line)" stroke-width="1" stroke-dasharray="3 4" ' +
+          'vector-effect="non-scaling-stroke"/>' + bars + '</svg>' +
+      '<div class="wkdays">' + labels + '</div></div>' +
+      '<div class="legend"><span><i style="background:var(--line)"></i>цель ' +
+        n(w.goal_kcal) + ' в день</span>' +
+        '<span><i style="background:var(--danger)"></i>перебор</span></div>';
+  }
+
+  function weekCard(w, ago) {
+    var today = state.lastDay ? state.lastDay.day : '';
+    var head = '<div class="wkhead">' +
+      '<button class="iconbtn" data-wk="1" aria-label="Предыдущая неделя"' +
+        (ago >= 4 ? ' disabled' : '') + '>' + CHEV_L + '</button>' +
+      '<div class="cap" aria-live="polite">' + esc(weekTitle(w, ago)) + '</div>' +
+      '<button class="iconbtn" data-wk="-1" aria-label="Следующая неделя"' +
+        (ago <= 0 ? ' disabled' : '') + '>' + CHEV_R + '</button>' +
+      '</div>';
+    var badge = w.verdict === 'on_track' ? '<span class="badge ok">в плане</span>'
+      : w.verdict === 'over' ? '<span class="badge warn">перебор</span>'
+      : w.verdict === 'few_logs' ? '<span class="badge">мало записей</span>' : '';
+    if (w.verdict === 'empty') {
+      return '<section class="card" id="weekcard">' + head +
+        '<div class="state">За эту неделю записей нет.</div></section>';
+    }
+    var over = w.balance_kcal > 0;
+    var past = w.days.filter(function (x) { return ago > 0 || x.date < today; }).length;
+    var counted = w.counted_days;
+    return '<section class="card" id="weekcard">' + head +
+      '<div style="display:flex;align-items:baseline;gap:var(--s-2);margin-top:var(--s-2);' +
+        'max-width:420px">' +
+        '<span class="num" style="font-size:var(--f-t1);font-weight:700' +
+          (over ? ';color:var(--warn)' : '') + '">' + n(Math.abs(w.balance_kcal)) + '</span>' +
+        '<span class="cap">' + (over ? 'ккал перебор' : 'ккал в запасе') + '</span>' +
+        '<span style="margin-left:auto">' + badge + '</span></div>' +
+      '<div class="mic" style="margin-top:2px">' + (ago > 0
+        ? 'записано ' + n(w.logged_days) + ' дн. из 7'
+        : 'записано ' + n(w.past_logged_days) + ' дн. из ' + n(past) + ' прошедших') + '</div>' +
+      '<div class="chart">' + weekBars(w, ago > 0 ? '9999' : today) + '</div>' +
+      (counted ? '<div class="rows">' +
+        '<div class="field"><label>Цель за ' + n(counted) + ' дн.</label>' +
+          '<span class="num">' + n(w.week_goal_kcal) + '</span></div>' +
+        '<div class="field"><label>Съедено</label><span class="num">' +
+          n(w.consumed_kcal) + '</span></div>' +
+        '<div class="field"><label>В среднем за день</label><span class="num">' +
+          n(w.average_kcal) + '</span></div>' +
+      '</div>' : '') +
+      '<div class="mic note">Пустые дни не считаются ни нулём, ни целью. ' +
+        'Сегодня входит в баланс, только когда цель уже превышена.</div>' +
+      '</section>';
+  }
+
+  function loadWeek() {
+    var ago = state.weekAgo || 0;
+    api('/api/week?weeks_ago=' + ago).then(function (r) {
+      var el = document.getElementById('weekcard');
+      if (el && r.week) el.outerHTML = weekCard(r.week, ago);
+    }).catch(function (e) { toast(e.message, true); });
+  }
+
   /* ── Итоги: графики инлайн-SVG, без библиотек (§5.7) ─────────────────── */
 
   var PERIODS = [[7, 'Неделя'], [30, '30 дней'], [90, '3 месяца']];
@@ -653,21 +840,26 @@
       api('/api/stats/reconcile?days=' + Math.max(days, 14)).catch(nothing),
       api('/api/stats/contributions?days=' + days).catch(nothing),
       api('/api/stats/contributions?by=protein&days=' + days).catch(nothing),
-      api('/api/stats/accuracy?days=' + days).catch(nothing)
+      api('/api/stats/accuracy?days=' + days).catch(nothing),
+      api('/api/week?weeks_ago=' + (state.weekAgo || 0)).catch(nothing),
+      api('/api/body-scans').catch(nothing)
     ]).then(function (res) {
       var d = res[0], w = res[1], rec = res[2], con = res[3], pro = res[4], acc = res[5];
+      var wk = res[6] && res[6].week ? weekCard(res[6].week, state.weekAgo || 0) : '';
+      var comp = compCard(res[7]);
       /* Без единой записи графики рисуют пустые сетки и «среднее 0 при цели
          170» — шесть коробок, которые выглядят поломкой, а не отсутствием
          данных. Одна честная карточка понятнее. */
       if (!d.days.some(function (x) { return x.meals > 0; })) {
-        show(periods() +
+        show(wk + comp + periods() +
           card('За этот период записей нет',
                '<div class="state">Выбери период побольше или запиши приём — ' +
                'графики появятся сами.</div>', ''));
         return;
       }
-      show(periods() +
+      show(wk + periods() +
            reconcileCard(rec) +
+           comp +
            card('Белок по дням', barChart(d, 'protein_g', d.goal.protein_g, 'var(--prot)'),
                 'Среднее ' + n(avg(d, 'protein_g')) + ' г при цели ' + n(d.goal.protein_g) + '.') +
            card('Ккал по дням', barChart(d, 'kcal', d.goal.kcal, 'var(--bar)'),
@@ -964,7 +1156,11 @@
   function renderSettings() {
     document.getElementById('title').textContent = 'Настройки';
     loading();
-    api('/api/settings').then(function (d) {
+    Promise.all([
+      api('/api/settings'),
+      api('/api/body-scans').catch(function () { return null; })
+    ]).then(function (res) {
+      var d = res[0], o = res[1];
       state.settings = d;
       var p = d.prefs, g = d.goal;
       show(
@@ -1032,6 +1228,8 @@
             }).join(''),
           'От режима зависит раскладка макросов при пересчёте цели.') +
 
+        bodyGroups(p, g, o) +
+
         group('Цели',
           field('gk', 'Калорий в день', g.kcal) +
           field('gp', 'Белок, г', g.protein_g) +
@@ -1044,7 +1242,10 @@
         group('Белок на килограмм',
           field('gpk', 'г на кг веса', 2) +
           '<button class="primary" id="saveKg">Пересчитать белок</button>',
-          'Нужен хотя бы один замер веса — иначе умножать не на что.') +
+          o && o.proposal
+            ? 'Есть свежий замер InBody — белок точнее считать от безжировой массы: ' +
+              'кнопка «Пересчитать цели» выше.'
+            : 'Нужен хотя бы один замер веса — иначе умножать не на что.') +
 
         group('День',
           '<div class="field"><label for="tz">Часовой пояс</label>' +
@@ -1073,6 +1274,65 @@
 
         '<div class="pager"><button id="toDay">Назад</button></div>');
     }).catch(failure);
+  }
+
+
+  /* Настройки по замеру (§6.24): обмен, активность, белок, пересчёт. */
+  function bodyGroups(p, g, o) {
+    if (!o || !o.scans || !o.scans.length) {
+      return group('Состав тела',
+        '<div class="state" style="text-align:left;padding:var(--s-2) 0">Сфотографируй бланк ' +
+        'InBody камерой на экране «День» — появятся обмен и белок по составу тела.</div>', '');
+    }
+    var src = p.bmr_source || 'inbody';
+    var fresh = o.stale_days != null && o.stale_days <= 180;
+    var tile = function (key, title, v, sub, disabled) {
+      var on = src === key && !disabled;
+      return '<div class="pick tile' + (on ? ' on' : '') + '"' + pk(on) +
+        (disabled ? ' aria-disabled="true"' : ' data-bmr="' + key + '"') + '>' +
+        '<div class="tile-h"><span class="dot"></span><span class="mic">' + title + '</span></div>' +
+        '<div class="num v">' + (v != null ? n(v) : '—') + '</div>' +
+        '<div class="mic">' + sub + '</div></div>';
+    };
+    var bmr = src === 'formula' && o.formula_bmr != null ? o.formula_bmr : o.inbody_bmr;
+    var act = p.activity || 'medium';
+    var factor = { low: 1.2, medium: 1.375, high: 1.55 }[act];
+    var prop = o.proposal;
+    var acts = [
+      ['low', 'Мало движения', 'сидячая работа, почти без тренировок'],
+      ['medium', 'Средне', '3–4 тренировки в неделю'],
+      ['high', 'Много', 'почти каждый день или физическая работа']
+    ];
+    return group('Базовый обмен',
+        '<div class="tiles" role="radiogroup" aria-label="Базовый обмен">' +
+          tile('inbody', 'По InBody', o.inbody_bmr, fresh ? 'из безжировой массы'
+               : 'замер старше полугода', !fresh) +
+          tile('formula', 'По формуле', o.formula_bmr, 'рост, вес, возраст',
+               o.formula_bmr == null) +
+        '</div>',
+        'Обмен по InBody точнее при нетипичном составе тела: он не опирается на ' +
+        'средний состав по весу.') +
+      group('Активность',
+        acts.map(function (a) {
+          var on = act === a[0];
+          return '<div class="pick' + (on ? ' on' : '') + '"' + pk(on) +
+            ' data-activity="' + a[0] + '"><span class="dot"></span>' +
+            '<span style="flex-grow:1;font-size:var(--f-body-s)">' + esc(a[1]) +
+            ' <span class="mic">· ' + esc(a[2]) + '</span></span></div>';
+        }).join(''),
+        n(bmr) + ' × ' + n(factor, 3) + ' = расход ≈ ' + n(Math.round(bmr * factor)) +
+        ' ккал в день.') +
+      (prop
+        ? group('Белок',
+            '<div class="field"><label>По безжировой массе</label><span class="num" ' +
+              'style="color:var(--prot)">' + n(prop.proposed.protein_g) + ' г</span></div>' +
+            '<div class="field"><label>Сейчас в целях</label><span class="num">' +
+              n(g.protein_g) + ' г</span></div>' +
+            '<button class="primary" data-scanprop="1">Пересчитать цели</button>' +
+            '<div id="propslot"></div>',
+            'Жиру белок не нужен — считаем от ' + n(prop.fat_free_kg, 1) +
+            ' кг безжировой массы, но не меньше 1,6 г на кг веса.')
+        : '');
   }
 
   function group(title, body, note) {
@@ -1435,6 +1695,399 @@
       '</section>';
   }
 
+
+  /* ── состав тела (§6.24) ─────────────────────────────────────────────── */
+
+  var TARGET_WORD = { cut: 'похудение', maintain: 'поддержание', bulk: 'набор' };
+  var ACTIVITY_WORD = { low: 'мало движения', medium: 'средняя', high: 'много' };
+
+  function ddmm(iso) {
+    var a = String(iso).split('-');
+    return a[2] + '.' + a[1] + '.' + a[0];
+  }
+
+  function signed(v, digits) {
+    if (v == null) return '—';
+    return (v > 0 ? '+' : v < 0 ? '−' : '') + n(Math.abs(v), digits);
+  }
+
+  /* Ось — изменение от первого замера, а не абсолютные кг: на общей шкале
+     15–45 кг сдвиг на килограмм даёт плоские линии, а две оси нечестны.
+     Серая полоса ±1 кг — погрешность прибора между днями. */
+  function compChart(scans) {
+    var W = 300, H = 120, pad = 14;
+    var first = scans[0];
+    if (scans.length === 1) {
+      return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Один замер: жир ' +
+        n(first.body_fat_kg, 1) + ' кг, мышцы ' + n(first.skeletal_muscle_kg, 1) + ' кг">' +
+        '<line x1="40" x2="260" y1="40" y2="40" stroke="var(--fat)" stroke-width="2" stroke-dasharray="5 5"/>' +
+        '<line x1="40" x2="260" y1="80" y2="80" stroke="var(--data)" stroke-width="2" stroke-dasharray="5 5"/>' +
+        '<circle cx="40" cy="40" r="5" fill="var(--fat)"/>' +
+        '<circle cx="260" cy="40" r="5" fill="var(--surface)" stroke="var(--fat)" stroke-width="1.5"/>' +
+        '<rect x="35" y="75" width="10" height="10" fill="var(--data)"/>' +
+        '<rect x="255" y="75" width="10" height="10" fill="var(--surface)" stroke="var(--data)" stroke-width="1.5"/>' +
+        '</svg>' +
+        '<div class="comprow"><span>' + ddmm(first.date) + '</span><span>след. замер</span></div>' +
+        '<div class="legend"><span><i class="dotf"></i>жир ' + n(first.body_fat_kg, 1) +
+        ' кг → ?</span><span><i class="sqm"></i>мышцы ' + n(first.skeletal_muscle_kg, 1) +
+        ' кг → ?</span></div>';
+    }
+    var t0 = Date.parse(first.measured_at), t1 = Date.parse(scans[scans.length - 1].measured_at);
+    var span = Math.max(t1 - t0, 1);
+    var dFat = scans.map(function (x) { return x.body_fat_kg - first.body_fat_kg; });
+    var dMus = scans.map(function (x) {
+      return x.skeletal_muscle_kg != null && first.skeletal_muscle_kg != null
+        ? x.skeletal_muscle_kg - first.skeletal_muscle_kg : null;
+    });
+    var lim = 1;
+    dFat.concat(dMus).forEach(function (v) { if (v != null) lim = Math.max(lim, Math.abs(v)); });
+    lim *= 1.15;
+    var X = function (m) { return pad + (Date.parse(m) - t0) / span * (W - pad * 2); };
+    var Y = function (v) { return H / 2 - v / lim * (H / 2 - pad); };
+    var path = function (vals) {
+      var d = '';
+      scans.forEach(function (x, i) {
+        if (vals[i] == null) return;
+        d += (d ? 'L' : 'M') + X(x.measured_at).toFixed(1) + ' ' + Y(vals[i]).toFixed(1);
+      });
+      return d;
+    };
+    var marks = scans.map(function (x, i) {
+      var out = '<circle cx="' + X(x.measured_at) + '" cy="' + Y(dFat[i]) + '" r="4" fill="var(--fat)"/>';
+      if (dMus[i] != null) {
+        out += '<rect x="' + (X(x.measured_at) - 4) + '" y="' + (Y(dMus[i]) - 4) +
+          '" width="8" height="8" fill="var(--data)"/>';
+      }
+      return out;
+    }).join('');
+    var last = scans[scans.length - 1];
+    return '<div class="mic">Изменение от первого замера, кг</div>' +
+      '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' +
+      esc('Жир ' + signed(dFat[dFat.length - 1], 1) + ' кг, мышцы ' +
+          signed(dMus[dMus.length - 1], 1) + ' кг с ' + ddmm(first.date)) + '">' +
+      '<rect x="0" y="' + Y(1) + '" width="' + W + '" height="' + (Y(-1) - Y(1)) +
+        '" fill="var(--surface-2)"/>' +
+      '<line x1="0" x2="' + W + '" y1="' + Y(0) + '" y2="' + Y(0) +
+        '" stroke="var(--separator)" stroke-width="1"/>' +
+      '<path d="' + path(dFat) + '" fill="none" stroke="var(--fat)" stroke-width="2"/>' +
+      '<path d="' + path(dMus) + '" fill="none" stroke="var(--data)" stroke-width="2"/>' +
+      marks + '</svg>' +
+      '<div class="comprow"><span>' + ddmm(first.date) + '</span><span>' +
+        ddmm(last.date) + '</span></div>' +
+      '<div class="legend"><span><i class="dotf"></i>жир</span>' +
+      '<span><i class="sqm"></i>мышцы</span>' +
+      '<span><i style="background:var(--surface-3)"></i>±1 кг — шум прибора</span></div>';
+  }
+
+  function compRow(label, a, b, unit, digits) {
+    if (a == null || b == null) return '';
+    var d = b - a;
+    return '<div class="field"><label>' + esc(label) + '</label><span class="num">' +
+      n(a, digits) + ' → ' + n(b, digits) + ' · ' + signed(d, digits) +
+      (unit ? ' ' + unit : '') + '</span></div>';
+  }
+
+  function diaryBlock(o) {
+    var d = o.diary;
+    if (!d) return '';
+    var since = d.since ? ddmm(d.since).slice(0, 5) : '';
+    var title = 'Сверка с дневником', color = 'var(--text)', text;
+    if (d.verdict === 'waiting' && d.days < 7) {
+      text = 'Сверка с дневником появится через неделю записей после замера ' + since + '.';
+    } else if (d.verdict === 'waiting') {
+      text = d.deficit_kcal >= 0
+        ? 'С ' + since + ' по дневнику дефицит ≈ ' + n(d.deficit_kcal) + ' ккал — около ' +
+          n(Math.abs(d.expected_kg), 1) + ' кг веса, в основном жир. Следующий замер ' +
+          'покажет, сколько ушло на самом деле.'
+        : 'С ' + since + ' записано больше расхода на ' + n(-d.deficit_kcal) +
+          ' ккал — около +' + n(d.expected_kg, 1) + ' кг. Следующий замер покажет, так ли это.';
+      if (d.days >= 14 && d.logged_days < 0.8 * d.days) {
+        text += ' Записано ' + n(d.logged_days) + ' дн. из ' + n(d.days) +
+          ' — сверка будет неточной.';
+      }
+    } else if (d.verdict === 'few_logs') {
+      text = 'Записано ' + n(d.logged_days) + ' дн. из ' + n(d.days) +
+        ' — сверять дневник с замерами не по чему.';
+    } else {
+      var exp = signed(d.expected_kg, 1), got = signed(d.actual_kg, 1);
+      if (d.verdict === 'agree') {
+        title = 'Сходится';
+        text = 'Ждали ' + exp + ' кг, весы показали ' + got + ' кг. Цифрам дневника можно верить.';
+      } else if (d.verdict === 'less_lost') {
+        title = 'Ушло меньше, чем ждали'; color = 'var(--alert)';
+        text = got + ' кг вместо ' + exp + '. Обычно так, если не всё записано ' +
+          'или расход ниже расчётного.';
+      } else {
+        title = 'Ушло больше, чем ждали'; color = 'var(--alert)';
+        text = got + ' кг вместо ' + exp + '. Расход, похоже, выше расчётного — ' +
+          'или часть потери вода.';
+      }
+    }
+    return '<div class="wk"><div class="l">' +
+      '<div class="mic" style="color:' + color + '">' + esc(title) + '</div>' +
+      '<div class="cap" style="margin-top:4px;line-height:1.5">' + esc(text) + '</div>' +
+      '</div></div>';
+  }
+
+  function energyBlock(o) {
+    var e = o.energy;
+    if (!e) return '';
+    if (e.verdict === 'few_logs') {
+      return '<div class="mic note">Расход по дневнику: записано ' + n(e.logged_days) +
+        ' полных дн. из ' + n(e.days) + ', для расчёта нужно от ' + n(e.need_days) + '.</div>';
+    }
+    if (e.verdict !== 'ok') return '';
+    var lo = e.tdee_kcal - e.error_kcal, hi = e.tdee_kcal + e.error_kcal;
+    return '<div class="field"><label>Твой расход по дневнику и замерам</label>' +
+      '<span class="num">' + n(lo) + '–' + n(hi) + ' ккал</span></div>' +
+      (e.proposable
+        ? '<div class="opts"><button data-scanprop="1">Посмотреть новые цели</button></div>'
+        : '<div class="mic note">Разброс пока широкий — ещё один замер через месяц, и можно ' +
+          'будет предложить цель по расходу.</div>');
+  }
+
+  function compCard(o) {
+    if (!o || !o.scans || !o.scans.length) return '';
+    var scans = o.scans, last = scans[scans.length - 1], prev = scans[scans.length - 2];
+    var c = o.change;
+    var body = compChart(scans);
+    if (prev) {
+      body += '<div class="rows">' +
+        compRow('Вес', prev.weight_kg, last.weight_kg, 'кг', 1) +
+        compRow('Жир', prev.body_fat_kg, last.body_fat_kg, 'кг', 1) +
+        compRow('Мышцы', prev.skeletal_muscle_kg, last.skeletal_muscle_kg, 'кг', 1) +
+        compRow('% жира', prev.body_fat_pct, last.body_fat_pct, '', 1) +
+        compRow('Висцеральный', prev.visceral_level, last.visceral_level, '', 0) +
+        '</div>';
+    } else {
+      body += '<div class="rows">' +
+        '<div class="field"><label>Вес</label><span class="num">' + n(last.weight_kg, 1) + ' кг</span></div>' +
+        '<div class="field"><label>Жир</label><span class="num">' + n(last.body_fat_kg, 1) +
+          ' кг · ' + n(last.body_fat_pct, 1) + '%</span></div>' +
+        '<div class="field"><label>Безжировая масса</label><span class="num">' +
+          n(last.fat_free_kg, 1) + ' кг</span></div>' +
+        (last.visceral_level != null ? '<div class="field"><label>Висцеральный жир</label>' +
+          '<span class="num">' + n(last.visceral_level) + ' · норма 1–9</span></div>' : '') +
+        '</div>';
+    }
+    if (c && c.lean_share != null) {
+      var fatPart = Math.max(0, Math.min(100, 100 * c.body_fat_kg / c.weight_kg));
+      body += '<div class="mic" style="margin-top:var(--s-3)">Из ' + signed(c.weight_kg, 1) +
+        ' кг: жир ' + signed(c.body_fat_kg, 1) + ', безжировая ' + signed(c.fat_free_kg, 1) + '</div>' +
+        '<div class="track split"><i style="width:' + fatPart + '%;background:var(--fat)"></i>' +
+        '<i style="width:' + (100 - fatPart) + '%;background:var(--data)"></i></div>';
+      if (o.lean_warning) {
+        body += '<div class="attn">Из ' + signed(c.weight_kg, 1) + ' кг на безжировую массу ' +
+          'пришлось ' + n(Math.abs(c.fat_free_kg), 1) + ' — больше трети. Часть может быть ' +
+          'водой; добирай белок и не бросай силовые, дефицит можно смягчить.</div>';
+      }
+    }
+    body += diaryBlock(o) + energyBlock(o);
+    if (o.stale_days > 180) {
+      body += '<div class="attn">Замер ' + n(Math.round(o.stale_days / 30)) +
+        ' мес. назад — пора обновить. Пока цели считаются без него.</div>';
+    }
+    body += '<details class="scanlist"><summary class="mic">Замеры · ' + n(scans.length) +
+      '</summary>' + scans.slice().reverse().map(function (x) {
+        return '<div class="field"><label>' + ddmm(x.date) + ' · ' + n(x.weight_kg, 1) +
+          ' кг · жир ' + n(x.body_fat_pct, 1) + '%</label>' +
+          '<button class="linkbtn" data-scandel="' + x.id + '">Удалить</button></div>';
+      }).join('') + '</details>';
+    return '<section class="card comp" style="margin-top:var(--s-3)">' +
+      '<div class="cap">Состав тела</div><div class="chart">' + body + '</div>' +
+      '<div class="mic note">Сравнивай замеры, сделанные в одинаковых условиях: утром, ' +
+      'натощак, без тренировки накануне.</div></section>';
+  }
+
+  /* «Было → станет» (MA-INV-52): цели меняются только этой кнопкой. */
+  function proposalCard(p) {
+    if (!p) return '';
+    var cur = p.current, nw = p.proposed;
+    var cell = function (label, a, b, unit) {
+      var d = Math.round(b) - Math.round(a);
+      return '<div class="bwc"><div class="mic">' + label + '</div>' +
+        '<div class="num v">' + n(b) + (unit ? ' <span class="unit">' + unit + '</span>' : '') + '</div>' +
+        '<div class="mic">' + (d ? 'было ' + n(a) + ' · ' + signed(d) : 'без изменений') + '</div></div>';
+    };
+    var formula = p.base === 'energy'
+      ? n(p.tdee_kcal) + ' расход по замерам × ' + n(p.target_factor, 2) + ' ' +
+        (TARGET_WORD[cur.target] || '')
+      : n(p.bmr_kcal) + ' обмен × ' + n(p.activity_factor, 3) + ' активность × ' +
+        n(p.target_factor, 2) + ' ' + (TARGET_WORD[cur.target] || '');
+    return '<section class="card just" style="margin-top:var(--s-3)" id="propcard">' +
+      '<div class="ttl">Цели по замеру</div>' +
+      '<div class="mic" style="margin-top:4px">' + esc(formula) + '</div>' +
+      (p.fat_free_kg ? '<div class="mic">белок — от ' + n(p.fat_free_kg, 1) +
+        ' кг безжировой массы</div>' : '') +
+      '<div class="bw">' +
+        cell('Калории', cur.kcal, nw.kcal, '') +
+        cell('Белок', cur.protein_g, nw.protein_g, 'г') +
+        cell('Жир', cur.fat_g, nw.fat_g, 'г') +
+        cell('Углеводы', cur.carb_g, nw.carb_g, 'г') +
+      '</div>' +
+      (p.changed
+        ? '<div class="mic" style="margin-top:var(--s-3)">Прошедшие дни недели останутся ' +
+          'посчитанными по старой цели.</div>' +
+          '<button class="primary" data-applygoal="1">Применить цели</button>' +
+          '<div class="opts" style="margin-top:var(--s-2)"><button data-propclose="1" ' +
+          'style="border-color:var(--surface-3);background:var(--surface-2)">Не сейчас</button></div>'
+        : '<div class="mic" style="margin-top:var(--s-3)">Цели уже совпадают с замером.</div>' +
+          '<div class="opts"><button data-propclose="1">Понятно</button></div>') +
+      '</section>';
+  }
+
+  function openProposal() {
+    api('/api/body-scans').then(function (o) {
+      if (!o.proposal) { toast('Нужен свежий замер InBody.', true); return; }
+      state.proposal = o.proposal;
+      if (state.tab === 'day') return repaintDay();
+      var el = document.getElementById('propslot');
+      if (el) el.innerHTML = proposalCard(o.proposal);
+    }).catch(function (e) { toast(e.message, true); });
+  }
+
+  function applyGoal() {
+    if (state.sending) return;
+    state.sending = true;
+    send('/api/body-scans/apply-goal', { headers: { 'Idempotency-Key': keyFor('applygoal') } })
+      .then(function () {
+        dropKey('applygoal');
+        state.proposal = null;
+        toast('Цели обновлены.');
+        return state.tab === 'set' ? renderSettings() : renderDay();
+      })
+      .catch(oops)
+      .then(function () { state.sending = false; });
+  }
+
+  /* ── карточка бланка InBody (§6.24) ──────────────────────────────────── */
+
+  var SCAN_ROWS = [
+    ['weight_kg', 'Вес', 'кг'],
+    ['skeletal_muscle_kg', 'Скелетные мышцы', 'кг'],
+    ['body_fat_kg', 'Жир', 'кг'],
+    ['body_fat_pct', 'Процент жира', '%'],
+    ['fat_free_kg', 'Безжировая масса', 'кг'],
+    ['visceral_level', 'Висцеральный жир', 'ур.'],
+    ['bmr_kcal', 'Базовый обмен', 'ккал'],
+    ['water_l', 'Вода', 'л'],
+    ['protein_kg', 'Белок', 'кг'],
+    ['minerals_kg', 'Минералы', 'кг']
+  ];
+  var SCAN_ALWAYS = { weight_kg: 1, skeletal_muscle_kg: 1, body_fat_kg: 1, body_fat_pct: 1,
+                      fat_free_kg: 1, visceral_level: 1, bmr_kcal: 1, water_l: 1 };
+
+  function scanValue(sc, key) {
+    return sc.edits[key] != null ? sc.edits[key] : sc.card.scan[key];
+  }
+
+  function scanWarn(sc) {
+    var c = sc.card, bad = c.bad;
+    var lines = [];
+    if (bad.length) {
+      var w = Number(String(scanValue(sc, 'weight_kg')).replace(',', '.'));
+      var f = Number(String(scanValue(sc, 'body_fat_kg')).replace(',', '.'));
+      var l = Number(String(scanValue(sc, 'fat_free_kg')).replace(',', '.'));
+      var sum = Math.round((f + l) * 10) / 10;
+      lines.push(bad.indexOf('weight_kg') > -1 && Math.abs(w - sum) > 0.3
+        ? 'Вес не равен жир + безжировая: ' + n(w, 1) + ' ≠ ' + n(f, 1) + ' + ' + n(l, 1) + '.'
+        : 'Отмеченные числа не сходятся с остальными — сверь с бланком.');
+    }
+    if (c.foreign) lines.push('Похоже, бланк не твой: рост, пол, возраст или вес не сходятся ' +
+                              'с прошлыми данными.');
+    if (c.date_ambiguous) lines.push('Дату на бланке можно прочитать двумя способами — проверь её.');
+    if (c.date_problem === 'old') lines.push('Замеру больше двух лет — точно этот?');
+    if (c.date_problem === 'future') lines.push('Дата замера в будущем — поправь дату.');
+    if (!lines.length) return '';
+    var confirmed = sc.confirmed;
+    return '<div class="scanwarn' + (confirmed ? ' ok' : '') + '" id="scanwarn">' +
+      (confirmed ? 'Сверено с бланком.' : lines.map(esc).join('<br>')) +
+      (!confirmed && c.date_problem !== 'future'
+        ? '<div class="opts" style="margin-top:var(--s-2)"><button data-scanok="1">Всё верно</button></div>'
+        : '') + '</div>';
+  }
+
+  function scanCard(sc) {
+    var c = sc.card, s = c.scan;
+    var rows = SCAN_ROWS.filter(function (r) {
+      return SCAN_ALWAYS[r[0]] || c.bad.indexOf(r[0]) > -1;
+    }).map(function (r) {
+      var v = scanValue(sc, r[0]);
+      if (v == null && !SCAN_ALWAYS[r[0]]) return '';
+      var bad = c.bad.indexOf(r[0]) > -1;
+      var id = 'sf-' + r[0];
+      return '<div class="sf' + (bad ? ' bad' : '') + '">' +
+        '<label for="' + id + '">' + esc(r[1]) +
+          (r[0] === 'visceral_level' ? ' <span class="g">· норма 1–9</span>' : '') + '</label>' +
+        '<input id="' + id + '" data-sf="' + r[0] + '" type="text" inputmode="decimal" ' +
+          'value="' + esc(v == null ? '' : String(v).replace('.', ',')) + '"' +
+          (bad ? ' aria-invalid="true" aria-describedby="scanwarn"' : '') + '>' +
+        '<span class="u">' + r[2] + '</span></div>';
+    }).join('');
+    var dateVal = sc.edits.date || s.date;
+    var dateRow = '<div class="sf' + (c.date_ambiguous || c.date_problem ? ' bad' : '') + '">' +
+      '<label for="sf-date">Дата замера</label>' +
+      '<input id="sf-date" data-sf="date" type="date" value="' + esc(dateVal) + '">' +
+      '<span class="u">' + esc(sc.edits.time || s.time) + '</span></div>';
+    var blocked = c.date_problem === 'future' || (c.needs_confirm && !sc.confirmed);
+    var sub = [s.height_cm ? n(s.height_cm) + ' см' : '', s.age ? n(s.age) + ' лет' : '']
+      .filter(Boolean).join(' · ');
+    return '<section class="card just scan" style="margin-top:var(--s-3)">' +
+      '<div class="ttl">С фото: ' + esc(s.device || 'InBody') + ' · ' + ddmm(dateVal) + '</div>' +
+      '<div class="mic" style="margin-top:3px">' + (sub ? esc(sub) + ' · ' : '') +
+        'нажми на число, чтобы поправить</div>' +
+      (c.existing ? '<div class="mic" style="margin-top:6px;color:var(--text)">Такой замер уже ' +
+        'есть — сохраню поверх.</div>' : '') +
+      '<div class="sfs">' + dateRow + rows + '</div>' +
+      '<div class="mic" style="margin-top:var(--s-3);line-height:1.5">Остальное с бланка не ' +
+        'сохраняю — на расчёты не влияет.</div>' +
+      scanWarn(sc) +
+      '<button class="primary" data-scansave="1"' + (blocked ? ' disabled' : '') + '>' +
+        (c.existing ? 'Обновить замер' : 'Сохранить замер') + '</button>' +
+      '<div class="opts" style="margin-top:var(--s-2)"><button data-scancancel="1" ' +
+        'style="border-color:var(--surface-3);background:var(--surface-2)">Отмена</button></div>' +
+      '<div class="mic" style="margin-top:var(--s-3);line-height:1.5">Сравнивай замеры, ' +
+        'сделанные в одинаковых условиях: утром, натощак, без тренировки накануне.</div>' +
+      '</section>';
+  }
+
+  function recheckScan() {
+    var sc = state.scan;
+    if (!sc) return;
+    send('/api/body-scans/check', {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ draft_id: sc.card.draft_id, fields: sc.edits })
+    }).then(function (r) {
+      if (state.scan !== sc) return;
+      sc.card = r;
+      if (!r.needs_confirm) sc.confirmed = false;
+      repaintDay();
+    }).catch(oops);
+  }
+
+  function saveScan() {
+    var sc = state.scan;
+    if (!sc || state.sending) return;
+    state.sending = true;
+    var id = 'scan:' + sc.card.draft_id;
+    busy('Сохраняю замер…');
+    send('/api/body-scans', {
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': keyFor(id) },
+      body: JSON.stringify({ draft_id: sc.card.draft_id, fields: sc.edits,
+                             confirmed: sc.confirmed })
+    }).then(function (r) {
+      dropKey(id);
+      state.scan = null;
+      state.proposal = r.proposal && r.proposal.changed ? r.proposal : null;
+      toast(r.updated ? 'Замер обновлён.' : 'Замер сохранён. Он появится в «Итогах».');
+      renderDay();
+    }).catch(function (e) {
+      if (e.code === 'draft_gone') state.scan = null;
+      oops(e);
+      renderDay();
+    }).then(function () { state.sending = false; });
+  }
+
   /* ── фото блюда (§6.22) ──────────────────────────────────────────────
 
      Фото говорит, ЧТО на тарелке, человек — СКОЛЬКО. Карточка правит только
@@ -1697,6 +2350,7 @@
     state.clarify = null;
     state.label = null;
     state.photo = null;
+    state.scan = null;
     state.justLogged = null;
     if (res.kind === 'logged') {
       state.justLogged = res.meal;
@@ -1707,6 +2361,9 @@
       state.label = res;
     } else if (res.kind === 'photo') {
       state.photo = photoState(res);
+    } else if (res.kind === 'body_scan') {
+      state.proposal = null;
+      state.scan = { card: res, edits: {}, confirmed: false };
     } else if (res.kind === 'weight') {
       var d = res.delta_kg;
       toast('Вес ' + n(res.weight_kg, 1) + ' кг' +
@@ -2103,6 +2760,29 @@
       return sendAnswer(grams);
     }
 
+    if (b.dataset.wk) {
+      state.weekAgo = Math.max(0, Math.min(4, (state.weekAgo || 0) + Number(b.dataset.wk)));
+      return loadWeek();
+    }
+    if (b.dataset.scanok) { state.scan.confirmed = true; return repaintDay(); }
+    if (b.dataset.scansave) return saveScan();
+    if (b.dataset.scancancel) { state.scan = null; return repaintDay(); }
+    if (b.dataset.scanprop) return openProposal();
+    if (b.dataset.applygoal) return applyGoal();
+    if (b.dataset.propclose) {
+      state.proposal = null;
+      var slot = document.getElementById('propslot');
+      if (slot) slot.innerHTML = '';
+      return state.tab === 'day' ? repaintDay() : null;
+    }
+    if (b.dataset.scandel) {
+      var sid = b.dataset.scandel;
+      return ask('Удалить этот замер? Вес в ленте останется.', function () {
+        send('/api/body-scans/' + sid, { method: 'DELETE' })
+          .then(function () { toast('Замер удалён.'); renderTotals(); })
+          .catch(function (err) { toast(err.message, true); });
+      });
+    }
     if (b.dataset.pfat) { state.photo.fat = b.dataset.pfat; return repaintDay(); }
     if (b.dataset.pdress) { state.photo.dressing = b.dataset.pdress; return repaintDay(); }
     if (b.dataset.pdrop) {
@@ -2129,7 +2809,7 @@
 
   root.addEventListener('click', function (e) {
     var pick = e.target.closest('.pick');
-    if (!pick) return;
+    if (!pick || pick.getAttribute('aria-disabled') === 'true') return;
     if (pick.dataset.target) {
       return patch('/api/settings/goal', { target: pick.dataset.target }, 'Режим изменён.');
     }
@@ -2142,6 +2822,12 @@
     if (pick.dataset.mic) {
       return patch('/api/settings/prefs',
         { mic_first: pick.dataset.mic === 'true' }, 'Ввод изменён.');
+    }
+    if (pick.dataset.bmr) {
+      return patch('/api/settings/prefs', { bmr_source: pick.dataset.bmr }, 'Источник обмена изменён.');
+    }
+    if (pick.dataset.activity) {
+      return patch('/api/settings/prefs', { activity: pick.dataset.activity }, 'Активность изменена.');
     }
     if (pick.dataset.daystart) {
       state.lastDay = null;   // границы дня сменились — старый день показывать нельзя
@@ -2245,6 +2931,10 @@
     if (e.target.id === 'ptotal' || (e.target.dataset && e.target.dataset.pg)) {
       return photoInput(e.target);
     }
+    if (e.target.dataset && e.target.dataset.sf && state.scan) {
+      state.scan.edits[e.target.dataset.sf] = e.target.value;
+      return;
+    }
     if (e.target.id === 'q') {
       /* Ждём паузу в наборе: запрос на каждый символ — это 15 запросов
          на слово и мигающий список. */
@@ -2253,6 +2943,15 @@
       state.keepFocus = true;
       clearTimeout(searchTimer);
       searchTimer = setTimeout(renderCatalog, 300);
+    }
+  });
+
+  /* Перепроверка бланка — на уходе из поля, а не на каждой цифре: иначе
+     перерисовка выбивала бы курсор посреди ввода. */
+  root.addEventListener('change', function (e) {
+    if (e.target.dataset && e.target.dataset.sf && state.scan) {
+      state.scan.edits[e.target.dataset.sf] = e.target.value;
+      recheckScan();
     }
   });
 

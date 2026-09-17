@@ -147,6 +147,8 @@ def week_json(w: WeekBalance) -> dict[str, Any]:
         "consumed_kcal": round(w.consumed_kcal),
         "balance_kcal": round(w.balance_kcal),
         "logged_days": w.logged_days,
+        "counted_days": w.counted_days,
+        "past_logged_days": w.past_logged_days,
         "average_kcal": round(w.average_kcal),
         "days": [
             {"date": d.day.isoformat(), "kcal": None if d.kcal is None else round(d.kcal),

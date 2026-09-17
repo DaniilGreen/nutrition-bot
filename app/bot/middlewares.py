@@ -34,6 +34,7 @@ class ServicesMiddleware(BaseMiddleware):
                 timezone=self._container.settings.default_timezone,
             )
             data["assistant"] = assistant
+            data["scans"] = self._container.body_scans_for(session)
             data["users"] = users
             data["app_user"] = user
             data["session"] = session

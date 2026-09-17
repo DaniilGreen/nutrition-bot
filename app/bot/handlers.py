@@ -32,11 +32,13 @@ from openai import RateLimitError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.assistant import Assistant
+from app.application.body_scans import BodyScanService, from_reading
 from app.application.coach import LimitReached
 from app.application.dto import Unit
 from app.application.entities import User
 from app.application.ports import UserRepo
 from app.application.results import (
+    BodyScanRead,
     ClarificationNeeded,
     DailyStats,
     ItemAdjusted,
@@ -51,8 +53,11 @@ from app.application.results import (
 )
 from app.bot.dashboard_image import render_weight_chart  # единственный уцелевший PNG — линия веса
 from app.bot.formatters import (  # текстовые подсказки внутри диалога (не экраны)
+    SCAN_REFUSAL,
+    format_goal_proposal,
     format_photo_card,
     format_result,
+    format_scan_card,
 )
 from app.bot.keyboards import (
     BTN_BUG,
@@ -70,6 +75,7 @@ from app.bot.keyboards import (
     ONBOARD_PREFIX,
     PHOTO_PREFIX,
     PROD_RENAME_PREFIX,
+    SCAN_PREFIX,
     WIZ_CANCEL,
     activity_keyboard,
     day_nav_keyboard,
@@ -84,6 +90,8 @@ from app.bot.keyboards import (
     portion_keyboard,
     prod_edit_keyboard,
     products_fix_keyboard,
+    scan_apply_keyboard,
+    scan_keyboard,
     sex_keyboard,
     undo_picker_keyboard,
     variant_keyboard,
@@ -318,8 +326,10 @@ async def cmd_today(message: Message, app_user: User, assistant: Assistant) -> N
 
 
 @router.message(Command("week"))
-async def cmd_week(message: Message, app_user: User, assistant: Assistant) -> None:
-    await _show_week(message, app_user, assistant)
+async def cmd_week(
+    message: Message, app_user: User, assistant: Assistant, scans: BodyScanService
+) -> None:
+    await _show_week(message, app_user, assistant, scans)
 
 
 @router.message(Command("card"))
@@ -383,10 +393,11 @@ async def btn_today(
 
 @router.message(F.text == BTN_WEEK)
 async def btn_week(
-    message: Message, app_user: User, assistant: Assistant, state: FSMContext
+    message: Message, app_user: User, assistant: Assistant, state: FSMContext,
+    scans: BodyScanService,
 ) -> None:
     await state.clear()
-    await _show_week(message, app_user, assistant)
+    await _show_week(message, app_user, assistant, scans)
 
 
 @router.message(F.text == BTN_HISTORY)
@@ -721,13 +732,15 @@ async def on_photo(
     assistant: Assistant,
     session: AsyncSession,
     state: FSMContext,
+    scans: BodyScanService,
 ) -> None:
-    """Фото = этикетка (FR-27) или блюдо (FR-34): различает vision."""
+    """Фото = этикетка (FR-27), блюдо (FR-34) или бланк InBody (FR-36): различает vision."""
     # Новый снимок отменяет вопрос про вес этикетки и открытую карточку блюда
     # (багрепорт #31); прочие незавершённые шаги по-прежнему держат оборону.
     if await _busy_with_flow(
         message, state,
-        supersedes=(MealStates.awaiting_label_grams.state, MealStates.awaiting_photo.state),
+        supersedes=(MealStates.awaiting_label_grams.state, MealStates.awaiting_photo.state,
+                    MealStates.awaiting_scan.state),
     ):
         return
     await state.clear()
@@ -748,6 +761,17 @@ async def on_photo(
         )
         return
     await session.commit()  # расход vision уже записан своей сессией; тут — пины этикетки
+    if isinstance(result, BodyScanRead):
+        scan, ambiguous, reason = from_reading(result.reading, app_user.timezone)
+        if scan is None:
+            await message.answer(SCAN_REFUSAL[reason or "no_numbers"])
+            return
+        check = await scans.check(app_user, scan, date_ambiguous=ambiguous)
+        await state.set_state(MealStates.awaiting_scan)
+        await state.update_data(scan=check.scan, ambiguous=ambiguous)
+        await message.answer(format_scan_card(check, app_user.timezone),
+                             reply_markup=scan_keyboard(check))
+        return
     if isinstance(result, PlateRead):
         await state.set_state(MealStates.awaiting_photo)
         data = {
@@ -795,6 +819,66 @@ def _photo_text(data: dict) -> str:
 def _photo_kb(data: dict) -> InlineKeyboardMarkup:
     plate = data["plate"]
     return photo_keyboard(plate.ask_fat, data.get("fat"), plate.ask_dressing, data.get("dressing"))
+
+
+@router.callback_query(F.data.startswith(f"{SCAN_PREFIX}:"))
+async def on_scan_btn(
+    callback: CallbackQuery,
+    app_user: User,
+    session: AsyncSession,
+    state: FSMContext,
+    scans: BodyScanService,
+) -> None:
+    """FR-36: «Сохранить» / «Всё верно» на карточке бланка и «Применить цели»."""
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    action = (callback.data or "").split(":", 1)[1]
+    if action == "apply":
+        await callback.answer()
+        try:
+            goal = await scans.apply(app_user)
+        except ValueError:
+            await callback.message.answer("Нужен свежий замер InBody, чтобы пересчитать цели.")
+            return
+        await session.commit()
+        with suppress(TelegramBadRequest):
+            await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(
+            f"✅ Цели обновлены: {goal.daily_kcal:g} ккал · Б {goal.protein_g:g} · "
+            f"Ж {goal.fat_g:g} · У {goal.carb_g:g}.\n"
+            "Прошедшие дни недели остались посчитанными по старой цели."
+        )
+        return
+    data = await state.get_data()
+    scan = data.get("scan")
+    if scan is None:
+        await callback.answer("Карточка устарела — пришли бланк заново.")
+        return
+    await callback.answer()
+    try:
+        saved, updated = await scans.save(
+            app_user, scan, confirmed=action == "confirm",
+            date_ambiguous=bool(data.get("ambiguous")),
+        )
+    except ValueError as exc:
+        text = ("Дата замера в будущем — сними бланк ещё раз." if str(exc) == "future"
+                else "Цифры не сходятся — нажми «Всё верно» или поправь их в мини-аппе.")
+        await callback.message.answer(text)
+        return
+    await session.commit()
+    await state.clear()
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(reply_markup=None)
+    overview = await scans.overview(app_user)
+    head = "💾 Замер обновлён." if updated else "💾 Замер сохранён — он в «Итогах» мини-аппа."
+    prop = overview.proposal
+    if prop is None or not prop.changed:
+        await callback.message.answer(head)
+        return
+    await callback.message.answer(
+        head + "\n\n" + format_goal_proposal(prop), reply_markup=scan_apply_keyboard()
+    )
 
 
 @router.message(MealStates.awaiting_photo, F.text)
@@ -954,6 +1038,7 @@ async def on_text(
         MealStates.awaiting_rename,
         MealStates.awaiting_label_grams,
         MealStates.awaiting_photo,
+        MealStates.awaiting_scan,
         MealStates.awaiting_bug,
         ProfileStates.body,
     )
@@ -1311,8 +1396,10 @@ async def _show_today(message: Message, app_user: User, assistant: Assistant) ->
     await _rich(message, screens.today(await gather(assistant, app_user)))
 
 
-async def _show_week(message: Message, app_user: User, assistant: Assistant) -> None:
-    await _rich(message, screens.week(await gather(assistant, app_user)))
+async def _show_week(
+    message: Message, app_user: User, assistant: Assistant, scans: object | None = None
+) -> None:
+    await _rich(message, screens.week(await gather(assistant, app_user, scans)))
 
 
 async def _show_weight(message: Message, app_user: User, assistant: Assistant) -> None:

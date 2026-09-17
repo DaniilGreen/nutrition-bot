@@ -23,6 +23,7 @@ from app.application.entities import MealItem, Product, User, WeightLog
 from app.application.results import DailyStats, MonthReport, WeightTrend
 from app.bot.ui.kit import sigma_kcal
 from app.domain.goals import Goal, in_goal
+from app.domain.week import WeekBalance
 
 
 @dataclass
@@ -40,6 +41,7 @@ class DayContext:
     trend_kg: float | None  # EMA веса: дневной вес скачет на воде, тренд — сигнал
     local_hour: int  # час у пользователя: «недобор» и советы имеют смысл только к концу дня
     est_kcal_share: int  # % калорий за сегодня, посчитанных ОЦЕНКОЙ, а не по точному весу
+    week_bal: WeekBalance | None = None  # недельный баланс (§6.23); None — не считали
 
     @property
     def items(self) -> list[MealItem]:
@@ -156,8 +158,11 @@ def _est_share(today: DailyStats) -> int:
     return round(100 * est / total)
 
 
-async def gather(assistant: Assistant, user: User) -> DayContext:
-    """Один поход в БД на все разделы демо. Пустые данные (нет веса/продуктов) — не падаем."""
+async def gather(assistant: Assistant, user: User, scans: object | None = None) -> DayContext:
+    """Один поход в БД на все разделы демо. Пустые данные (нет веса/продуктов) — не падаем.
+
+    `scans` (BodyScanService) — только ради пола недели по обмену (§6.23); без него неделя
+    считается с полом без замера."""
     today = await assistant.today(user)
     days, goal = await assistant.day_calories(user, 7)
     week7 = await assistant.month_report(user, days=7)
@@ -180,6 +185,9 @@ async def gather(assistant: Assistant, user: User) -> DayContext:
         trend_kg=_ema(chron),
         est_kcal_share=_est_share(today),
         local_hour=datetime.now(ZoneInfo(today.timezone)).hour,
+        week_bal=await assistant.week_balance(
+            user, 0, bmr_kcal=await scans.bmr(user) if scans is not None else None
+        ),
     )
 
 

@@ -25,11 +25,14 @@ class WeekDay:
 class WeekBalance:
     start: date
     end: date               # воскресенье
+    today: date             # «сегодня» человека (с учётом границы суток)
     goal_kcal: float
     week_goal_kcal: float
     consumed_kcal: float
     balance_kcal: float     # минус — запас, плюс — перебор
-    logged_days: int
+    logged_days: int         # дни с записями по сегодня включительно
+    counted_days: int        # из них вошли в баланс
+    past_logged_days: int    # записанные дни ДО сегодня
     days: list[WeekDay]
     remaining_days: int
     per_day_kcal: float | None   # None — не показываем (нет дней или ниже пола)
@@ -38,7 +41,8 @@ class WeekBalance:
 
     @property
     def average_kcal(self) -> float:
-        return self.consumed_kcal / self.logged_days if self.logged_days else 0.0
+        """Среднее по дням, вошедшим в баланс: сегодняшний неполный день его не тянет."""
+        return self.consumed_kcal / self.counted_days if self.counted_days else 0.0
 
 
 def balance(
@@ -100,11 +104,14 @@ def balance(
     return WeekBalance(
         start=days[0][0],
         end=days[-1][0],
+        today=today,
         goal_kcal=goal_today,
         week_goal_kcal=sum(g for _, _, g in counted),
         consumed_kcal=round(consumed, 1),
         balance_kcal=float(round(bal)),
         logged_days=len(logged_set),
+        counted_days=len(counted),
+        past_logged_days=past_logged,
         days=[WeekDay(d, round(k, 1) if d in logged_set else None,  # type: ignore[arg-type]
                       bool(d in logged_set and k > g))  # type: ignore[operator]
               for d, k, g in days],
@@ -140,6 +147,7 @@ def demo() -> None:
     assert f.per_day_kcal == round(2176 + 1504 / 3)
     assert f.logged_days == 5            # пятница видна в столбиках
     assert f.days[4].kcal == 400
+    assert f.counted_days == 4 and f.past_logged_days == 4 and f.average_kcal == 1800
 
     # AC-MA-50: вторник, понедельник пуст — не в балансе, прочерк; мало записей не считаем
     # (прошёл один день, пропущен один — порог «минус один»).

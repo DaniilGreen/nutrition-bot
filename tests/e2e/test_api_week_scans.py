@@ -294,3 +294,20 @@ async def test_сводка_после_двух_замеров(client, fake_cont
     assert ov["energy"]["proposable"] is True
     assert ov["proposal"]["base"] == "energy"
     assert ov["diary"]["actual_kg"] == -3.0
+
+
+async def test_перепроверка_после_правки(client, fake_container):
+    from dataclasses import replace
+
+    async with client as c:
+        await _login(c)
+        d = await _scan_card(c, fake_container, replace(BLANK, body_fat_kg=91.8))
+        r = await c.post("/api/body-scans/check", headers=_hdr(),
+                         json={"draft_id": d["draft_id"], "fields": {"body_fat_kg": "19.8"}})
+        bad = await c.post("/api/body-scans/check", headers=_hdr(),
+                           json={"draft_id": d["draft_id"], "fields": {"body_fat_kg": "много"}})
+        gone = await c.post("/api/body-scans/check", headers=_hdr(),
+                            json={"draft_id": "нет", "fields": {}})
+    assert r.status_code == 200 and r.json()["bad"] == [] and not r.json()["needs_confirm"]
+    assert r.json()["draft_id"] == d["draft_id"]
+    assert bad.status_code == 400 and gone.status_code == 400

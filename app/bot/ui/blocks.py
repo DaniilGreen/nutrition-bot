@@ -179,3 +179,38 @@ def macro_block(label: str, cons: float, goal: float) -> str:
     return f"<p>{kit.macro_line(label, cons, goal)}<br>{kit.bar(cons, goal, label)}</p>"
 
 
+
+
+def week_balance(d: DayContext, *, sunday_summary: bool = True) -> str:
+    """Недельный баланс (§6.23) — те же правила показа, что у плашки в аппке:
+    не в понедельник и не без прошедших записанных дней."""
+    w = d.week_bal
+    if w is None or not w.goal_kcal or w.verdict == "empty" or w.today == w.start:
+        return ""
+    if not w.start <= w.today <= w.end:
+        return ""
+    if not any(x.kcal is not None and x.day < w.today for x in w.days):
+        return ""
+    if w.verdict == "few_logs":
+        return f"<p>🗓 Неделя: записано {w.logged_days} дн. — для баланса маловато.</p>"
+    if w.today == w.end and sunday_summary:
+        verdict = "в плане ✅" if w.balance_kcal <= 0 else "перебор"
+        return (
+            f"<p>🗓 <b>Неделя {w.start.day}–{w.end.day} {kit.MON[w.end.month - 1]}</b><br/>"
+            f"Цель за {w.counted_days} дн. — {n(w.week_goal_kcal)} · съедено "
+            f"{n(w.consumed_kcal)}<br/>"
+            f"Итог: <b>{_word(w.balance_kcal)}</b>, {verdict}<br/>"
+            f"Записано {w.logged_days} из 7 дней.</p>"
+        )
+    tail = ""
+    if w.floor_hit:
+        tail = "<br/>Неделю уже не догнать — ешь по обычной цели, с понедельника новая."
+    elif w.per_day_kcal is not None:
+        tail = f"<br/>До воскресенья по {n(w.per_day_kcal)} — и неделя сойдётся."
+    return f"<p>🗓 <b>Неделя</b> · {_word(w.balance_kcal)}{tail}</p>"
+
+
+def _word(balance: float) -> str:
+    """Слово вместо знака: минус рядом с «в плане» читается как плохо."""
+    return (f"перебор {n(balance)} ккал" if balance > 0
+            else f"в запасе {n(abs(balance))} ккал")
