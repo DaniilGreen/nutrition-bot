@@ -11,19 +11,33 @@ from zoneinfo import ZoneInfo
 _UTC = ZoneInfo("UTC")
 
 
-def day_bounds_utc(now_utc: datetime, tzname: str) -> tuple[datetime, datetime]:
+def local_date(moment: datetime, tzname: str, day_start: int = 0) -> date:
+    """К какому дню человека относится момент. При `day_start=4` перекус в 00:30
+    — это ещё вчера (§6.5). Единственное место, где считается «чей это день»."""
+    return (moment.astimezone(ZoneInfo(tzname)) - timedelta(hours=day_start)).date()
+
+
+def _day_start_local(now_utc: datetime, tzname: str, day_start: int) -> datetime:
     tz = ZoneInfo(tzname)
-    local = now_utc.astimezone(tz)
-    start_local = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    day = local_date(now_utc, tzname, day_start)
+    # ponytail: сутки на переходе летнего времени считаются как 24 ч; для
+    # Etc/GMT±N (наш случай) перехода нет вовсе.
+    return datetime(day.year, day.month, day.day, day_start, tzinfo=tz)
+
+
+def day_bounds_utc(
+    now_utc: datetime, tzname: str, day_start: int = 0
+) -> tuple[datetime, datetime]:
+    start_local = _day_start_local(now_utc, tzname, day_start)
     end_local = start_local + timedelta(days=1)
     return start_local.astimezone(_UTC), end_local.astimezone(_UTC)
 
 
-def week_bounds_utc(now_utc: datetime, tzname: str) -> tuple[datetime, datetime]:
-    tz = ZoneInfo(tzname)
-    local = now_utc.astimezone(tz)
-    midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
-    start_local = midnight - timedelta(days=midnight.weekday())  # понедельник
+def week_bounds_utc(
+    now_utc: datetime, tzname: str, day_start: int = 0
+) -> tuple[datetime, datetime]:
+    first = _day_start_local(now_utc, tzname, day_start)
+    start_local = first - timedelta(days=first.weekday())  # понедельник
     end_local = start_local + timedelta(days=7)
     return start_local.astimezone(_UTC), end_local.astimezone(_UTC)
 

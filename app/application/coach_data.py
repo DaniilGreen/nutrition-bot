@@ -18,6 +18,8 @@ from app.application.entities import User
 from app.application.ports import MealRepo, ProductRepo, WeightRepo
 from app.application.stats_service import StatsService
 from app.clock import Clock, utcnow
+from app.domain.prefs import day_start
+from app.domain.timeframe import local_date
 
 # Потолок строк в ответе инструмента. Один вопрос «покажи всё» иначе втащит
 # в промпт весь дневник и съест месячный бюджет.
@@ -77,7 +79,7 @@ class CoachData:
     async def meals_on(self, date_str: Any = None) -> dict[str, Any]:
         """Приёмы конкретного дня с позициями: время, что записано, граммовка."""
         day = _parse_day(date_str)
-        today = self._clock().astimezone(ZoneInfo(self._user.timezone)).date()
+        today = local_date(self._clock(), self._user.timezone, day_start(self._user.ui_prefs))
         days_ago = (today - day).days
         if days_ago < 0 or days_ago > 365:
             return {"date": day.isoformat(), "meals": [],

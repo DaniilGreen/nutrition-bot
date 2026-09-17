@@ -91,3 +91,27 @@ def test_tz_from_utc_offset_vietnam() -> None:
     assert local.utcoffset() == timedelta(hours=7)
     assert tz_from_utc_offset(-5) == "Etc/GMT+5"
     assert tz_from_utc_offset(0) == "UTC"
+
+
+def test_граница_суток_в_4_утра():
+    """§6.5: перекус в 00:30 при начале суток в 4:00 — это ещё вчера."""
+    from datetime import UTC, date, datetime
+
+    from app.domain.timeframe import day_bounds_utc, local_date, week_bounds_utc
+
+    tz = "Etc/GMT-7"
+    snack = datetime(2026, 9, 17, 17, 30, tzinfo=UTC)          # 00:30 18.09 по +7
+    assert local_date(snack, tz) == date(2026, 9, 18)
+    assert local_date(snack, tz, 4) == date(2026, 9, 17)
+    start, end = day_bounds_utc(snack, tz, 4)
+    assert start == datetime(2026, 9, 16, 21, 0, tzinfo=UTC)    # 04:00 17.09 по +7
+    assert end == datetime(2026, 9, 17, 21, 0, tzinfo=UTC)
+    assert start <= snack < end
+    # Без настройки — как раньше.
+    assert day_bounds_utc(snack, tz) == (
+        datetime(2026, 9, 17, 17, 0, tzinfo=UTC), datetime(2026, 9, 18, 17, 0, tzinfo=UTC)
+    )
+    # Понедельник 00:30 при начале в 4 — ещё прошлая неделя.
+    monday_night = datetime(2026, 9, 20, 17, 30, tzinfo=UTC)    # пн 21.09 00:30
+    wstart, _ = week_bounds_utc(monday_night, tz, 4)
+    assert wstart == datetime(2026, 9, 13, 21, 0, tzinfo=UTC)   # пн 14.09 04:00

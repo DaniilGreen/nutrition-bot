@@ -1002,6 +1002,17 @@
           }).join(''),
           'Микрофон сразу — быстрее, но клиент спросит доступ на первом же экране.') +
 
+        group('Граница суток',
+          [[0, 'В полночь'], [3, 'В 3:00'], [4, 'В 4:00'], [5, 'В 5:00'], [6, 'В 6:00']]
+            .map(function (o) {
+              var on = (p.day_start || 0) === o[0];
+              return '<div class="pick' + (on ? ' on' : '') + '"' + pk(on) +
+                ' data-daystart="' + o[0] + '"><span class="dot"></span>' +
+                '<span style="flex-grow:1;font-size:var(--f-body-s)">' + esc(o[1]) +
+                '</span></div>';
+            }).join(''),
+          'С какого часа начинается новый день. Перекус после полуночи засчитается во вчера.') +
+
         group('Период в Итогах',
           [[7, 'Неделя'], [30, '30 дней'], [90, '3 месяца']].map(function (o) {
             return '<div class="pick' + ((p.period || 30) === o[0] ? ' on' : '') + '"' + pk((p.period || 30) === o[0]) +
@@ -2131,6 +2142,11 @@
     if (pick.dataset.mic) {
       return patch('/api/settings/prefs',
         { mic_first: pick.dataset.mic === 'true' }, 'Ввод изменён.');
+    }
+    if (pick.dataset.daystart) {
+      state.lastDay = null;   // границы дня сменились — старый день показывать нельзя
+      return patch('/api/settings/prefs',
+        { day_start: Number(pick.dataset.daystart) }, 'Граница суток изменена.');
     }
     if (pick.dataset.defperiod) {
       state.period = null;

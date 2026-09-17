@@ -30,7 +30,15 @@ ALLOWED: dict[str, tuple[tuple[Any, ...], Any]] = {
     # Порядок ленты дня. По умолчанию новое сверху: только что записанное
     # проверяют сразу, а утренний кофе — почти никогда.
     "feed_order": (("new_first", "old_first"), "new_first"),
+    # С какого часа начинаются сутки (§6.5). Перекус в 00:30 — это ещё вчерашний
+    # вечер, а не завтрак: у владельца таких 14 за 90 дней (замер 17.09.2026).
+    "day_start": ((0, 3, 4, 5, 6), 0),
 }
+
+
+def day_start(prefs: object) -> int:
+    """Час начала суток из настроек человека; мусор — полночь."""
+    return int(sanitize(prefs)["day_start"])
 
 
 def defaults() -> dict[str, Any]:
@@ -76,6 +84,9 @@ def demo() -> None:
     assert merge(cur, {"period": 90}) == {**defaults(), "hero": "rings", "period": 90}
     # True/False различаются, хотя True == 1 в питоне.
     assert merge(cur, {"mic_first": True})["mic_first"] is True
+    assert day_start({"day_start": 4}) == 4
+    assert day_start({"day_start": 13}) == 0 and day_start(None) == 0
+    assert sanitize({"day_start": True})["day_start"] == 0   # True == 1, но 1 не в списке
     print("настройки: ок")
 
 

@@ -15,7 +15,8 @@ from app.domain.pace import (
     norm_curve,
     quiet_enough,
 )
-from app.domain.timeframe import day_bounds_utc, week_bounds_utc
+from app.domain.prefs import day_start
+from app.domain.timeframe import day_bounds_utc, local_date, week_bounds_utc
 from app.domain.value_objects import Macros, sum_macros
 
 
@@ -42,7 +43,9 @@ class StatsService:
         записали, а не сегодняшнего.
         """
         user_id = _require_id(user)
-        start, end = day_bounds_utc(self._clock() - timedelta(days=days_ago), user.timezone)
+        start, end = day_bounds_utc(
+            self._clock() - timedelta(days=days_ago), user.timezone, day_start(user.ui_prefs)
+        )
         meals = await self._meals.list_between(user_id, start, end)
         meals.sort(key=lambda m: m.eaten_at)  # хронологически — для списка съеденного в «Сегодня»
         consumed = sum_macros(meal.totals for meal in meals)
@@ -67,10 +70,15 @@ class StatsService:
         """
         user_id = _require_id(user)
         zone = ZoneInfo(user.timezone)
+        start_h = day_start(user.ui_prefs)
         now_local = self._clock().astimezone(zone)
-        today = now_local.date().isoformat()
+        today = local_date(self._clock(), user.timezone, start_h).isoformat()
 
-        rows = await self._meals.hourly_kcal(user_id, days=window_days, tz=user.timezone)
+        # Часы здесь — «часы от начала суток человека» (§6.5): при начале в 4:00
+        # перекус в 00:30 стоит в конце кривой, а не в начале. Наружу — настоящий час.
+        rows = await self._meals.hourly_kcal(
+            user_id, days=window_days, tz=user.timezone, day_start=start_h
+        )
         by_day: dict[str, list[tuple[int, float]]] = {}
         for day_str, hour, kcal in rows:
             by_day.setdefault(day_str, []).append((hour, kcal))
@@ -83,7 +91,8 @@ class StatsService:
 
         today_meals = by_day.get(today, [])
         today_kcal = sum(kcal for _, kcal in today_meals)
-        hour = now_local.hour
+        hour = (now_local.hour - start_h) % 24
+        real_hour = now_local.hour
         norm_kcal = pace.norm[hour] if pace.norm else 0.0
 
         # Точное время последней записи, а не час из сводки: между 15:50 и 16:10
@@ -93,14 +102,16 @@ class StatsService:
         last = recent[0].eaten_at.astimezone(zone) if recent else None
         # Вчерашняя запись про сегодняшний день ничего не говорит: и тишину от неё
         # считать нельзя, и показывать её как «последнюю» было бы враньём.
-        if last is not None and last.date() != now_local.date():
+        if last is not None and local_date(last, user.timezone, start_h) != local_date(
+            now_local, user.timezone, start_h
+        ):
             last = None
         minutes_since = (now_local - last).total_seconds() / 60 if last else None
 
         show = behind(pace, hour, today_kcal, goal.daily_kcal) and quiet_enough(minutes_since)
         if not show:
             return DayPace(
-                show=False, hour=hour, norm_kcal=round(norm_kcal, 1),
+                show=False, hour=real_hour, norm_kcal=round(norm_kcal, 1),
                 today_kcal=round(today_kcal, 1), days_used=pace.days_used,
             )
 
@@ -115,7 +126,7 @@ class StatsService:
             run += per_hour.get(h, 0.0)
             today_cum.append((h, round(run, 1)))
         return DayPace(
-            show=True, hour=hour, norm_kcal=round(norm_kcal, 1),
+            show=True, hour=real_hour, norm_kcal=round(norm_kcal, 1),
             today_kcal=round(today_kcal, 1), days_used=pace.days_used,
             last_at=last.strftime("%H:%M") if last is not None else None,
             norm_points=curve_points(pace.norm, start, hour),
@@ -125,18 +136,19 @@ class StatsService:
     async def day_meals(self, user: User, days_ago: int = 0) -> list[Meal]:
         """Приёмы за день (0=сегодня), свежие первыми — пикер #12 и просмотр дня (вар. A)."""
         ref = self._clock() - timedelta(days=days_ago)
-        start, end = day_bounds_utc(ref, user.timezone)
+        start, end = day_bounds_utc(ref, user.timezone, day_start(user.ui_prefs))
         meals = await self._meals.list_between(_require_id(user), start, end)
         meals.sort(key=lambda m: m.eaten_at, reverse=True)
         return meals
 
     async def last_days(self, user: User, n: int) -> list[tuple[date, float]]:
         """(дата, ккал) за n последних дней, старые→новые — для графика недели и хитмапа."""
-        tz = ZoneInfo(user.timezone)
         out: list[tuple[date, float]] = []
         for days_ago in range(n - 1, -1, -1):
             meals = await self.day_meals(user, days_ago)
-            day = (self._clock() - timedelta(days=days_ago)).astimezone(tz).date()
+            day = local_date(
+                self._clock() - timedelta(days=days_ago), user.timezone, day_start(user.ui_prefs)
+            )
             out.append((day, sum(m.totals.kcal for m in meals)))
         return out
 
@@ -150,19 +162,19 @@ class StatsService:
         Группировка по ЛОКАЛЬНОЙ дате — иначе ужин в 23:30 уехал бы во вчера.
         """
         user_id = _require_id(user)
-        tz = ZoneInfo(user.timezone)
+        start_h = day_start(user.ui_prefs)
         now = self._clock()
-        start, _ = day_bounds_utc(now - timedelta(days=n - 1), user.timezone)
-        _, end = day_bounds_utc(now, user.timezone)
+        start, _ = day_bounds_utc(now - timedelta(days=n - 1), user.timezone, start_h)
+        _, end = day_bounds_utc(now, user.timezone, start_h)
         meals = await self._meals.list_between(user_id, start, end)
 
         by_day: dict[date, list[Meal]] = {}
         for meal in meals:
-            by_day.setdefault(meal.eaten_at.astimezone(tz).date(), []).append(meal)
+            by_day.setdefault(local_date(meal.eaten_at, user.timezone, start_h), []).append(meal)
 
         out: list[tuple[date, Macros, int]] = []
         for days_ago in range(n - 1, -1, -1):
-            day = (now - timedelta(days=days_ago)).astimezone(tz).date()
+            day = local_date(now - timedelta(days=days_ago), user.timezone, start_h)
             todays = by_day.get(day, [])
             out.append((day, sum_macros(m.totals for m in todays), len(todays)))
         return out
@@ -170,25 +182,28 @@ class StatsService:
     async def day_view(self, user: User, days_ago: int = 0) -> tuple[list[Meal], date]:
         """Приёмы за день ХРОНОЛОГИЧЕСКИ + дата дня (в TZ юзера) — для day-view с навигацией."""
         meals = list(reversed(await self.day_meals(user, days_ago)))
-        day = (self._clock() - timedelta(days=days_ago)).astimezone(ZoneInfo(user.timezone)).date()
+        day = local_date(
+            self._clock() - timedelta(days=days_ago), user.timezone, day_start(user.ui_prefs)
+        )
         return meals, day
 
     async def period(self, user: User, days: int) -> Macros:
         """Суммарные КБЖУ за последние `days` дней — для отчёта /month."""
         user_id = _require_id(user)
         now = self._clock()
-        start, _ = day_bounds_utc(now - timedelta(days=days - 1), user.timezone)
-        _, end = day_bounds_utc(now, user.timezone)
+        start_h = day_start(user.ui_prefs)
+        start, _ = day_bounds_utc(now - timedelta(days=days - 1), user.timezone, start_h)
+        _, end = day_bounds_utc(now, user.timezone, start_h)
         meals = await self._meals.list_between(user_id, start, end)
         return sum_macros(m.totals for m in meals)
 
     async def weekly(self, user: User) -> WeeklyStats:
         user_id = _require_id(user)
-        start, end = week_bounds_utc(self._clock(), user.timezone)
+        start, end = week_bounds_utc(self._clock(), user.timezone, day_start(user.ui_prefs))
         meals = await self._meals.list_between(user_id, start, end)
         consumed = sum_macros(meal.totals for meal in meals)
-        tz = ZoneInfo(user.timezone)
-        days_logged = len({meal.eaten_at.astimezone(tz).date() for meal in meals})
+        start_h = day_start(user.ui_prefs)
+        days_logged = len({local_date(m.eaten_at, user.timezone, start_h) for m in meals})
         goal = await self._users.get_goal(user_id) or self._default_goal
         return WeeklyStats(
             consumed=consumed,

@@ -249,7 +249,7 @@ class InMemoryMealRepo:
         return rows[:limit]
 
     async def hourly_kcal(
-        self, user_id: int, *, days: int, tz: str
+        self, user_id: int, *, days: int, tz: str, day_start: int = 0
     ) -> list[tuple[str, int, float]]:
         from collections import defaultdict
         from datetime import timedelta
@@ -261,7 +261,7 @@ class InMemoryMealRepo:
         for m in self._meals:
             if m.user_id != user_id or m.eaten_at < since:
                 continue
-            local = m.eaten_at.astimezone(zone)
+            local = m.eaten_at.astimezone(zone) - timedelta(hours=day_start)
             buckets[(local.date().isoformat(), local.hour)] += m.totals.kcal
         return sorted((d, h, k) for (d, h), k in buckets.items())
 

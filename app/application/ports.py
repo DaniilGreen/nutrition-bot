@@ -140,7 +140,7 @@ class MealRepo(Protocol):
         ...
 
     async def hourly_kcal(
-        self, user_id: int, *, days: int, tz: str
+        self, user_id: int, *, days: int, tz: str, day_start: int = 0
     ) -> list[tuple[str, int, float]]:
         """Калории по дням и часам за окно: (местная дата, местный час, ккал).
 

@@ -389,11 +389,13 @@ class SqlMealRepo:
         ]
 
     async def hourly_kcal(
-        self, user_id: int, *, days: int, tz: str
+        self, user_id: int, *, days: int, tz: str, day_start: int = 0
     ) -> list[tuple[str, int, float]]:
-        """§6.20: калории по местным дням и часам — сырьё для нормы темпа дня."""
+        """§6.20: калории по местным дням и часам — сырьё для нормы темпа дня.
+
+        При `day_start` сутки и часы сдвинуты: час 0 — это начало суток человека."""
         since = datetime.now(UTC) - timedelta(days=days)
-        local = func.timezone(tz, MealORM.eaten_at)
+        local = func.timezone(tz, MealORM.eaten_at) - timedelta(hours=day_start)
         day = func.to_char(local, "YYYY-MM-DD").label("day")
         hour = func.extract("hour", local).label("hour")
         res = await self._s.execute(

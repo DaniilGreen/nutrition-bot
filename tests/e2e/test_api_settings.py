@@ -66,7 +66,7 @@ async def test_частичная_правка_не_сбрасывает_ост�
     # foot_third по умолчанию "weight": в макете панели Е третья ячейка — вес.
     assert r.json()["prefs"] == {"hero": "rings", "period": 7,
                                  "foot_third": "weight", "mic_first": False,
-                                 "feed_order": "new_first"}
+                                 "feed_order": "new_first", "day_start": 0}
 
 
 @pytest.mark.parametrize(
@@ -227,3 +227,35 @@ async def test_негодный_порядок_не_применяется(clien
         r = (await c.patch("/api/settings/prefs", json={"feed_order": "как попало"},
                            headers=_hdr())).json()
     assert r["prefs"]["feed_order"] == "old_first"
+
+
+async def test_граница_суток_двигает_сегодня(client, fake_container):
+    """§6.5: после «сутки с 4:00» перекус в 00:30 считается во вчера."""
+    from datetime import UTC, datetime
+
+    async with client as c:
+        await _login(c)
+        r = await c.patch("/api/settings/prefs", json={"day_start": 4}, headers=_hdr())
+        assert r.json()["prefs"]["day_start"] == 4
+        bad = await c.patch("/api/settings/prefs", json={"day_start": 13}, headers=_hdr())
+    assert bad.json()["prefs"]["day_start"] == 4
+    user = (await fake_container.users.list_active())[0]
+    assert user.ui_prefs["day_start"] == 4
+    from app.application.entities import Meal
+    from app.application.stats_service import StatsService
+    from app.domain.goals import Goal
+    from app.domain.value_objects import Macros
+
+    night = datetime(2026, 9, 17, 17, 30, tzinfo=UTC)       # 00:30 по +7
+    user.timezone = "Etc/GMT-7"
+    await fake_container.meals.add(Meal(
+        user_id=user.id, eaten_at=night, input_type="text", raw_input="сыр",
+        items=[], source_confidence=1.0, totals=Macros(300, 0, 0, 0),
+    ))
+    stats = StatsService(fake_container.meals, fake_container.users,
+                         Goal(2000, 100, 60, 200), clock=lambda: night)
+    assert (await stats.daily(user)).remaining.consumed.kcal == 300
+    yesterday_view = StatsService(fake_container.meals, fake_container.users,
+                                  Goal(2000, 100, 60, 200),
+                                  clock=lambda: datetime(2026, 9, 17, 12, tzinfo=UTC))
+    assert (await yesterday_view.daily(user)).remaining.consumed.kcal == 300
