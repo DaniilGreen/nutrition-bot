@@ -174,6 +174,7 @@ async def test_замер_состава_upsert_по_времени_и_удал�
     assert updated and again.id == first.id and again.weight_kg == 91.9
     assert [s.id for s in await repo.list_for(u.id)] == [first.id]
     assert (await repo.get_at(u.id, at)).device == "InBody270"
+    assert (await repo.list_for(u.id))[0].id == first.id
     assert await repo.delete(u.id, first.id) and not await repo.delete(u.id, first.id)
 
 

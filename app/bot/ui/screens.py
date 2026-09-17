@@ -148,7 +148,7 @@ def week(d: DayContext) -> str:
         )
     a, g = w.avg_macros, d.goal
     return (
-        blocks.week_balance(d, sunday_summary=False)
+        blocks.week_balance(d)
         + "<h3>📈 Неделя · в среднем за день</h3>"
         f"<p><i>{verdict(a, g, final=True)}</i></p>"
         + _bars(a, g)

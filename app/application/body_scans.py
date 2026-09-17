@@ -30,7 +30,7 @@ from app.domain.body_scan import (
     protein_target,
 )
 from app.domain.goals import ACTIVITY_FACTORS, TARGET_FACTORS, Goal, rebalance, set_macro
-from app.domain.prefs import sanitize
+from app.domain.prefs import day_start, sanitize
 from app.domain.timeframe import local_date
 
 FRESH_DAYS = 180
@@ -182,9 +182,10 @@ class BodyScanService:
     async def _weight_from_scan(self, user: User, scan: BodyScan) -> None:
         """Вес замера — в ленту веса, если в тот день веса ещё нет."""
         uid = _require_id(user)
-        day = local_date(scan.measured_at, user.timezone)
+        start_h = day_start(user.ui_prefs)
+        day = local_date(scan.measured_at, user.timezone, start_h)
         history = await self._weights.history(uid, 400)
-        if any(local_date(w.measured_at, user.timezone) == day for w in history):
+        if any(local_date(w.measured_at, user.timezone, start_h) == day for w in history):
             return
         await self._weights.add(
             WeightLog(user_id=uid, measured_at=scan.measured_at, weight_kg=scan.weight_kg)
@@ -280,11 +281,16 @@ class BodyScanService:
         burn = round(bmr * ACTIVITY_FACTORS[sanitize(user.ui_prefs)["activity"]])
 
         spend = diary = since = None
+        start_h = day_start(user.ui_prefs)
+
+        def span(a, b):
+            d0, d1 = local_date(a, zone, start_h), local_date(b, zone, start_h)
+            return d0, [d0 + timedelta(days=i) for i in range((d1 - d0).days)]
+
         win = energy.window([s.measured_at for s in scans])
         if win is not None:
             first = next(s for s in scans if s.measured_at == win[0])
-            d0, d1 = local_date(win[0], zone), local_date(win[1], zone)
-            days = [d0 + timedelta(days=i) for i in range((d1 - d0).days)]
+            _, days = span(win[0], win[1])
             eaten = await self._stats.kcal_by_day(user, days[0], days[-1])
             goals = await self._stats.goals_by_day(user, days)
             full = {d: k for d, k in eaten.items()
@@ -294,16 +300,23 @@ class BodyScanService:
                 d_fat_kg=last.body_fat_kg - first.body_fat_kg,
                 d_lean_kg=last.fat_free_kg - first.fat_free_kg,
             )
-            logged = {d: k for d, k in eaten.items() if k > 0}
-            diary = energy.diary_check(
-                days=len(days), logged_days=len(logged),
-                logged_kcal_total=sum(logged.values()), burn_kcal=burn,
-                actual_weight_kg=round(last.weight_kg - first.weight_kg, 1),
-            )
-            since = d0
-        else:
-            d0 = local_date(last.measured_at, zone)
-            today = local_date(self._clock(), zone)
+        # Сверка «ждали — показали» — по двум последним замерам при любом зазоре:
+        # окно расхода (28–120 дней) здесь ни при чём.
+        if len(scans) >= 2:
+            first = scans[-2]
+            d0, days = span(first.measured_at, last.measured_at)
+            if days:
+                eaten = await self._stats.kcal_by_day(user, days[0], days[-1])
+                logged = {d: k for d, k in eaten.items() if k > 0}
+                diary = energy.diary_check(
+                    days=len(days), logged_days=len(logged),
+                    logged_kcal_total=sum(logged.values()), burn_kcal=burn,
+                    actual_weight_kg=round(last.weight_kg - first.weight_kg, 1),
+                )
+                since = d0
+        if diary is None:
+            d0 = local_date(last.measured_at, zone, start_h)
+            today = local_date(self._clock(), zone, start_h)
             if today > d0:
                 eaten = await self._stats.kcal_by_day(user, d0 + timedelta(days=1), today)
                 logged = {d: k for d, k in eaten.items() if k > 0}

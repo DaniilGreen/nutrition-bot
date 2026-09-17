@@ -142,6 +142,7 @@ def week_json(w: WeekBalance) -> dict[str, Any]:
     return {
         "start": w.start.isoformat(),
         "end": w.end.isoformat(),
+        "today": w.today.isoformat(),
         "goal_kcal": round(w.goal_kcal),
         "week_goal_kcal": round(w.week_goal_kcal),
         "consumed_kcal": round(w.consumed_kcal),

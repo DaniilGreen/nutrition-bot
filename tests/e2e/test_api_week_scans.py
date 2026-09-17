@@ -311,3 +311,26 @@ async def test_перепроверка_после_правки(client, fake_con
     assert r.status_code == 200 and r.json()["bad"] == [] and not r.json()["needs_confirm"]
     assert r.json()["draft_id"] == d["draft_id"]
     assert bad.status_code == 400 and gone.status_code == 400
+
+
+async def test_сверка_по_двум_близким_замерам(client, fake_container):
+    """Замеры в 10 днях: расхода нет (окно короче 28), но «ждали — показали» есть."""
+    from dataclasses import replace
+
+    async with client as c:
+        uid = await _login(c)
+        await _cut_goal(fake_container, uid)
+        for i in range(11):
+            await _eat(fake_container, uid, datetime.now(UTC) - timedelta(days=i, hours=1), 1900)
+        for days_ago, w, f, ffm in ((10, 91.8, 19.8, 72.0), (0, 90.8, 19.0, 71.8)):
+            d = await _scan_card(c, fake_container, replace(
+                BLANK, date_text=(datetime.now(UTC) - timedelta(days=days_ago))
+                .strftime("%d.%m.%Y 00:05"), weight_kg=w, body_fat_kg=f, fat_free_kg=ffm,
+                body_fat_pct=None, water_l=None, bmr_kcal=None, skeletal_muscle_kg=None))
+            r = await c.post("/api/body-scans", headers=_hdr(),
+                             json={"draft_id": d["draft_id"], "fields": {}, "confirmed": True})
+            assert r.status_code == 200, r.text
+        ov = (await c.get("/api/body-scans", headers=_hdr())).json()
+    assert ov["energy"] is None
+    assert ov["diary"]["actual_kg"] == -1.0
+    assert ov["diary"]["verdict"] in {"agree", "less_lost", "more_lost"}

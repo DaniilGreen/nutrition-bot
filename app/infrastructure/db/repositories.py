@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import case, delete, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.entities import Meal, MealItem, Product, User, WeightLog
@@ -626,22 +627,20 @@ class SqlBodyScanRepo:
         self, scan: BodyScan, corrected: list[str] | None = None
     ) -> tuple[BodyScan, bool]:
         assert scan.user_id is not None
-        res = await self._s.execute(
-            select(BodyScanORM).where(
-                BodyScanORM.user_id == scan.user_id,
-                BodyScanORM.measured_at == scan.measured_at,
-            )
-        )
-        orm = res.scalar_one_or_none()
-        updated = orm is not None
-        if orm is None:
-            orm = BodyScanORM(user_id=scan.user_id)
-            self._s.add(orm)
-        for c in _SCAN_COLUMNS:
-            setattr(orm, c, getattr(scan, c))
-        orm.corrected_fields = sorted(corrected or [])
-        await self._s.flush()
-        return _scan_to_domain(orm), updated
+        existed = await self.get_at(scan.user_id, scan.measured_at) is not None
+        # ON CONFLICT, а не «прочитал — решил»: двойной тап по «Сохранить» в боте
+        # иначе давал две вставки и IntegrityError вместо обновления (MA-INV-51).
+        values = {c: getattr(scan, c) for c in _SCAN_COLUMNS}
+        values.update(user_id=scan.user_id, corrected_fields=sorted(corrected or []))
+        stmt = pg_insert(BodyScanORM).values(**values)
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_body_scans_user_time",
+            set_={k: stmt.excluded[k] for k in values if k not in ("user_id", "measured_at")},
+        ).returning(BodyScanORM.id)
+        scan_id = (await self._s.execute(stmt)).scalar_one()
+        orm = await self._s.get(BodyScanORM, scan_id, populate_existing=True)
+        assert orm is not None
+        return _scan_to_domain(orm), existed
 
     async def delete(self, user_id: int, scan_id: int) -> bool:
         res = await self._s.execute(

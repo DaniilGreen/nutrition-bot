@@ -775,7 +775,9 @@
   }
 
   function weekCard(w, ago) {
-    var today = state.lastDay ? state.lastDay.day : '';
+    /* «Сегодня» — от сервера: он знает границу суток и часовой пояс, а день
+       экрана «День» может ещё не прийти, если «Итоги» открыли сразу. */
+    var today = w.today;
     var head = '<div class="wkhead">' +
       '<button class="iconbtn" data-wk="1" aria-label="Предыдущая неделя"' +
         (ago >= 4 ? ' disabled' : '') + '>' + CHEV_L + '</button>' +
@@ -1841,7 +1843,8 @@
     return '<div class="field"><label>Твой расход по дневнику и замерам</label>' +
       '<span class="num">' + n(lo) + '–' + n(hi) + ' ккал</span></div>' +
       (e.proposable
-        ? '<div class="opts"><button data-scanprop="1">Посмотреть новые цели</button></div>'
+        ? '<div class="opts"><button data-scanprop="1">Посмотреть новые цели</button></div>' +
+          '<div id="propslot"></div>'
         : '<div class="mic note">Разброс пока широкий — ещё один замер через месяц, и можно ' +
           'будет предложить цель по расходу.</div>');
   }
@@ -1936,13 +1939,18 @@
       '</section>';
   }
 
+  /* Карточка «было → станет» рисуется там, где нажали: на «Дне» — как карточка
+     записи, в «Итогах» и настройках — в своём слоте. В state она живёт только
+     на «Дне», иначе всплывала бы там позже без контекста. */
   function openProposal() {
     api('/api/body-scans').then(function (o) {
       if (!o.proposal) { toast('Нужен свежий замер InBody.', true); return; }
-      state.proposal = o.proposal;
-      if (state.tab === 'day') return repaintDay();
+      if (state.tab === 'day') { state.proposal = o.proposal; return repaintDay(); }
       var el = document.getElementById('propslot');
-      if (el) el.innerHTML = proposalCard(o.proposal);
+      if (el) {
+        el.innerHTML = proposalCard(o.proposal);
+        el.scrollIntoView({ block: 'nearest' });
+      }
     }).catch(function (e) { toast(e.message, true); });
   }
 
@@ -1954,7 +1962,9 @@
         dropKey('applygoal');
         state.proposal = null;
         toast('Цели обновлены.');
-        return state.tab === 'set' ? renderSettings() : renderDay();
+        if (state.tab === 'set') return renderSettings();
+        if (state.tab === 'tot') return renderTotals();
+        return renderDay();
       })
       .catch(oops)
       .then(function () { state.sending = false; });
@@ -2054,11 +2064,14 @@
   function recheckScan() {
     var sc = state.scan;
     if (!sc) return;
+    /* Номер запроса: два быстрых ухода из полей дают два ответа, и старший не
+       должен затереть младший. */
+    var seq = sc.seq = (sc.seq || 0) + 1;
     send('/api/body-scans/check', {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ draft_id: sc.card.draft_id, fields: sc.edits })
     }).then(function (r) {
-      if (state.scan !== sc) return;
+      if (state.scan !== sc || seq !== sc.seq) return;
       sc.card = r;
       if (!r.needs_confirm) sc.confirmed = false;
       repaintDay();

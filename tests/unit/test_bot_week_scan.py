@@ -98,6 +98,10 @@ def test_воскресная_сводка_по_записанным_дням():
     assert "Цель за 6 дн." in text and "Записано 6 из 7" in text
     assert "в запасе 756 ккал" in text
     assert "Итог" not in blocks.week_balance(d, sunday_summary=False)
+    # /week в воскресенье показывает тот же итог, что вечернее сообщение (§6.23).
+    from app.bot.ui import screens
+    assert "Итог" in blocks.week_balance(d)
+    del screens
 
 
 def _callback(data: str) -> CallbackQuery:
