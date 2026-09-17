@@ -142,6 +142,16 @@
          '</div>');
   }
 
+  /* Скелет — только при заходе на экран. Перерисовка того же экрана (выбор в
+     настройках, дублях, смена периода) идёт поверх живого содержимого: иначе
+     каждый тап гасил экран до скелета и он мигал (MA-INV-32). Ключ сбрасывается
+     при переходе между вкладками — там скелет уместен. */
+  function loadingFor(key) {
+    if (state.screenKey === key) return;
+    state.screenKey = key;
+    loading();
+  }
+
   function failure(e) {
     var hint = e.code === 'init_data_expired'
       ? 'Сессия истекла. Закрой и открой аппку из бота.'
@@ -487,7 +497,7 @@
     if (c.view === 'product') return renderProduct();
     if (c.view === 'dups') return renderDups();
     document.getElementById('title').textContent = 'Продукты';
-    loading();
+    loadingFor('cat:list');
     api('/api/products?limit=' + PAGE + '&offset=' + c.offset +
         (c.q ? '&q=' + encodeURIComponent(c.q) : ''))
       .then(function (d) {
@@ -540,7 +550,7 @@
   }
 
   function renderProduct() {
-    loading();
+    loadingFor('cat:product:' + state.cat.product);
     api('/api/products/' + state.cat.product).then(function (d) {
       var p = d.product;
       document.getElementById('title').textContent = 'Продукт';
@@ -601,7 +611,7 @@
   }
 
   function renderDups() {
-    loading();
+    loadingFor('cat:dups');
     api('/api/products/duplicates/groups').then(function (d) {
       document.getElementById('title').textContent = 'Дубли';
       /* MA-INV-25: человек должен знать заранее, что история не поедет.
@@ -833,7 +843,7 @@
 
   function renderTotals() {
     document.getElementById('title').textContent = 'Итоги';
-    loading();
+    loadingFor('tot');
     var days = activePeriod();
     var nothing = function () { return null; };
     Promise.all([
@@ -1157,7 +1167,7 @@
 
   function renderSettings() {
     document.getElementById('title').textContent = 'Настройки';
-    loading();
+    loadingFor('set');
     Promise.all([
       api('/api/settings'),
       api('/api/body-scans').catch(function () { return null; })
@@ -1574,6 +1584,7 @@
   }
 
   function render() {
+    state.screenKey = null;
     /* Класс на body: только на вкладке AI ввод закреплён снизу, и только там
        нужен запас места под ним. */
     document.body.classList.toggle('ai', state.tab === 'ai');
@@ -2878,9 +2889,17 @@
       return patch('/api/settings/prefs',
         { period: Number(pick.dataset.defperiod) }, 'Период изменён.');
     }
+    if (pick.dataset.group == null) return;
     state.cat.dup = state.cat.dup || {};
     state.cat.dup[pick.dataset.group] = Number(pick.dataset.pick);
-    renderCatalog();
+    /* Выбор — это отметка, а не новые данные: переключаем на месте, без
+       перезагрузки экрана (раньше каждый тап мигал скелетом). */
+    [].forEach.call(root.querySelectorAll('.pick[data-group="' + pick.dataset.group + '"]'),
+      function (x) {
+        var on = x === pick;
+        x.classList.toggle('on', on);
+        x.setAttribute('aria-checked', on ? 'true' : 'false');
+      });
   });
 
   function saveProduct() {
