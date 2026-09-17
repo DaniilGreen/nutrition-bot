@@ -22,6 +22,7 @@ from app.application.ports import (
     VisionPort,
 )
 from app.application.results import (
+    BodyScanRead,
     ClarificationNeeded,
     CorrectionFailed,
     DailyStats,
@@ -59,6 +60,7 @@ from app.domain.portion_answer import parse as parse_portion
 from app.domain.reconcile import Reconciliation, reconcile
 from app.domain.spend import month_limit_reached
 from app.domain.value_objects import Density, Macros, sum_macros
+from app.domain.week import WeekBalance
 
 
 class Assistant:
@@ -184,6 +186,11 @@ class Assistant:
         reading = await self._vision.read_photo(image, caption)
         if reading.kind == "label":
             return await self.read_label(user, image, photo_file_id=photo_file_id)
+        if reading.kind == "body_scan":
+            scan = await self._vision.read_scan(image)
+            if scan is None:
+                return Unknown(reason="не разобрал бланк — сними его ровно и целиком, при свете")
+            return BodyScanRead(reading=scan)
         # Позиция, чьё имя после очистки пусто (одни цифры и знаки), не попала бы
         # в фразу — и карточка показала бы то, что не запишется. Отсекаем здесь.
         reading.components = [c for c in reading.components if clean_name(c.name)]
@@ -408,6 +415,11 @@ class Assistant:
     ) -> list[tuple[int | None, str, float, int]]:
         """Чаще всего съеденное — для чипов быстрой записи (§6.3)."""
         return await self._meals.frequent_items(_require_id(user), days=days, limit=limit)
+
+    async def week_balance(
+        self, user: User, weeks_ago: int = 0, *, bmr_kcal: float | None = None
+    ) -> WeekBalance:
+        return await self._stats.week_balance(user, weeks_ago, bmr_kcal=bmr_kcal)
 
     async def day_pace(self, user: User) -> DayPace:
         """§6.20: темп сегодняшнего дня против личной нормы к этому часу."""

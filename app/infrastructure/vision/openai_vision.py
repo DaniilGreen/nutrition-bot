@@ -12,7 +12,7 @@ from typing import Literal
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
-from app.application.dto import ParsedItem, PlateReading, Unit
+from app.application.dto import ParsedItem, PlateReading, ScanReading, Unit
 from app.domain.plate import FAT_KINDS, MAX_COMPONENTS, Component
 from app.infrastructure.openai_compat import temperature_for, token_counts
 
@@ -35,8 +35,10 @@ SYSTEM_PROMPT = (
 PHOTO_PROMPT = (
     "Ты помогаешь вести дневник питания. На входе — снимок и, может быть, подпись человека.\n"
     "1) kind: 'label' — на снимке упаковка/этикетка с таблицей пищевой ценности; 'dish' — еда "
-    "(блюдо на тарелке, в миске, в контейнере, продукт в руке); 'none' — еды нет.\n"
-    "Для 'label' и 'none' остальные поля оставь пустыми.\n"
+    "(блюдо на тарелке, в миске, в контейнере, продукт в руке); 'body_scan' — распечатка "
+    "анализа состава тела (InBody, Tanita и подобные: вес, мышцы, жир, силуэт человека); "
+    "'none' — ничего из этого.\n"
+    "Для 'label', 'body_scan' и 'none' остальные поля оставь пустыми.\n"
     "2) dish — короткое название по-русски: «паста с курицей в сливочном соусе».\n"
     "3) components — съедобные составляющие (не больше 8), как их записал бы человек в "
     "дневник: КОНКРЕТНО и со способом приготовления («макароны отварные», «куриное филе "
@@ -89,7 +91,7 @@ class PlateComponentOut(BaseModel):
 
 
 class PhotoReadingOut(BaseModel):
-    kind: Literal["label", "dish", "none"]
+    kind: Literal["label", "dish", "body_scan", "none"]
     dish: str
     components: list[PlateComponentOut]
     caption_total_g: float | None
@@ -97,6 +99,51 @@ class PhotoReadingOut(BaseModel):
     fat_kind: Literal["масло подсолнечное", "масло сливочное", "масло оливковое"]
     ask_dressing: bool
     liquid: bool
+
+
+SCAN_PROMPT = (
+    "На фото — распечатка анализа состава тела. Перепиши числа ТОЧНО как напечатаны, "
+    "ничего не пересчитывай и не округляй. Бланк может быть на вьетнамском, русском, "
+    "английском, корейском.\n"
+    "- brand: производитель (InBody, Tanita, …); device: модель, если напечатана (InBody270).\n"
+    "- date_text: дата и время обследования ровно как на бланке («03.05.2026 15:44»); "
+    "language: язык бланка (vi, ru, en, ko, …).\n"
+    "- height_cm, age, sex (male/female — «Nam»/«Nam giới»/«М» = male).\n"
+    "- Таблица «анализ состава тела» (Body Composition Analysis / Phân tích thành phần cơ thể): "
+    "water_l — общая вода (Total Body Water / Tổng lượng nước), protein_kg — белок, "
+    "minerals_kg — минералы (Chất khoáng), body_fat_kg — масса жира (Body Fat Mass / Khối "
+    "lượng mỡ), weight_kg — вес (Weight / Trọng lượng).\n"
+    "- skeletal_muscle_kg — скелетная мышечная масса (SMM / Khối lượng cơ xương).\n"
+    "- body_fat_pct — процент жира (PBF).\n"
+    "- fat_free_kg — безжировая масса (Fat Free Mass / Lượng cơ không mỡ). Если отдельной "
+    "строки нет — null.\n"
+    "- visceral_level — уровень висцерального жира (Visceral Fat Level / Mức mỡ nội tạng), "
+    "только число уровня.\n"
+    "- bmr_kcal — базовый обмен (Basal Metabolic Rate / Tỷ lệ trao đổi chất cơ bản), только "
+    "число, без диапазона в скобках.\n"
+    "Числа в скобках рядом со значением — это нормы; их НЕ бери. Историю замеров внизу "
+    "бланка НЕ бери — только текущий. Поля, которых нет на бланке, — null. Не выдумывай."
+)
+
+
+class ScanReadingOut(BaseModel):
+    brand: str
+    device: str | None
+    date_text: str
+    language: str
+    height_cm: float | None
+    age: int | None
+    sex: Literal["male", "female"] | None
+    weight_kg: float | None
+    skeletal_muscle_kg: float | None
+    body_fat_kg: float | None
+    body_fat_pct: float | None
+    fat_free_kg: float | None
+    water_l: float | None
+    protein_kg: float | None
+    minerals_kg: float | None
+    visceral_level: float | None
+    bmr_kcal: float | None
 
 
 class LabelReading(BaseModel):
@@ -170,6 +217,32 @@ class OpenAiVision:
             ask_dressing=r.ask_dressing,
             liquid=r.liquid,
         )
+
+    async def read_scan(self, image: bytes) -> ScanReading | None:
+        """FR-36: числа с бланка состава тела как напечатаны. Сверку и выводы делает
+        домен (`app/domain/body_scan.py`)."""
+        b64 = base64.b64encode(image).decode()
+        completion = await self._client.beta.chat.completions.parse(
+            model=self._model,
+            temperature=temperature_for(self._model, 0.0),
+            messages=[
+                {"role": "system", "content": SCAN_PROMPT},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Перепиши числа с этого бланка."},
+                        {"type": "image_url",
+                         "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"}},
+                    ],
+                },
+            ],
+            response_format=ScanReadingOut,
+        )
+        await self._meter_usage(completion)
+        r = completion.choices[0].message.parsed
+        if r is None:
+            return None
+        return ScanReading(**r.model_dump())
 
     async def read_label(self, image: bytes) -> ParsedItem | None:
         b64 = base64.b64encode(image).decode()

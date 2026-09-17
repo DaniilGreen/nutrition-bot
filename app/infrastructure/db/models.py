@@ -12,6 +12,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    UniqueConstraint,
     func,
     text,
 )
@@ -141,6 +142,51 @@ class WeightLogORM(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class BodyScanORM(Base):
+    """Замер состава тела с бланка InBody (FR-36). Один бланк — одна строка."""
+
+    __tablename__ = "body_scans"
+    __table_args__ = (UniqueConstraint("user_id", "measured_at", name="uq_body_scans_user_time"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    measured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    weight_kg: Mapped[float] = mapped_column(Float)
+    body_fat_kg: Mapped[float] = mapped_column(Float)
+    fat_free_kg: Mapped[float] = mapped_column(Float)
+    body_fat_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    skeletal_muscle_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    water_l: Mapped[float | None] = mapped_column(Float, nullable=True)
+    protein_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    minerals_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    visceral_level: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bmr_kcal: Mapped[float | None] = mapped_column(Float, nullable=True)
+    height_cm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sex: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    device: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    corrected_fields: Mapped[list] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class GoalHistoryORM(Base):
+    """Цель, действовавшая с момента `valid_from` (§6.23)."""
+
+    __tablename__ = "goal_history"
+    __table_args__ = (Index("ix_goal_history_user_time", "user_id", "valid_from"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    daily_kcal: Mapped[float] = mapped_column(Float)
+    protein_g: Mapped[float] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(16), default="manual")
 
 
 class BugReportORM(Base):

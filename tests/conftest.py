@@ -15,6 +15,7 @@ from app.application.stats_service import StatsService
 from app.application.weight_service import WeightService
 from app.config import Settings
 from tests.fakes import (
+    InMemoryBodyScanRepo,
     InMemoryBugRepo,
     InMemoryMealRepo,
     InMemoryProductRepo,
@@ -77,6 +78,13 @@ class FakeContainer:
     # Порт ассистента: None означает «ключа нет», ровно как в проде.
     coach_port: object = None
     spend: object = None
+    scans: InMemoryBodyScanRepo = field(default_factory=InMemoryBodyScanRepo)
+
+    def body_scans_for(self, session):
+        from app.application.body_scans import BodyScanService
+
+        stats = StatsService(self.meals, self.users, self.settings.default_goal())
+        return BodyScanService(self.scans, self.users, self.weights, stats)
 
     def spend_for(self, session):
         if self.spend is None:

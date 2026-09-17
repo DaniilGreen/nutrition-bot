@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 
-from app.application.dto import ParsedMessage, PlateReading
+from app.application.dto import ParsedMessage, PlateReading, ScanReading
 from app.application.entities import Meal, MealItem, WeightLog
 from app.domain.goals import Goal, Remaining
 from app.domain.value_objects import Macros
@@ -52,6 +52,13 @@ class PlateRead:
     grams: list[float]          # по составляющим, уже с весом от человека, если был
     weighed: bool               # вес назвал человек (подпись) — не «на глаз»
     total_g: float | None = None
+
+
+@dataclass
+class BodyScanRead:
+    """FR-36: на снимке бланк состава тела — дальше его проверяет BodyScanService."""
+
+    reading: ScanReading
 
 
 @dataclass
@@ -169,6 +176,7 @@ Result = (
     | VariantClarificationNeeded
     | LabelRead
     | PlateRead
+    | BodyScanRead
     | WeightLogged
     | WeightTrend
     | DailyStats

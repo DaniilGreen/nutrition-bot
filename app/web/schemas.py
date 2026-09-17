@@ -6,11 +6,16 @@
 """
 from __future__ import annotations
 
+from math import ceil
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from app.application.body_scans import GoalProposal, Overview
 from app.application.entities import Meal, MealItem, User
-from app.domain.goals import Goal, Remaining
+from app.domain import energy
+from app.domain.body_scan import BodyScan, Change
+from app.domain.goals import ACTIVITY_FACTORS, TARGET_FACTORS, Goal, Remaining
+from app.domain.week import WeekBalance
 
 
 def goal_json(goal: Goal) -> dict[str, Any]:
@@ -129,4 +134,103 @@ def product_json(p: Any, uses: int, usual_grams: float | None = None) -> dict[st
         "usual_grams": round(
             usual_grams or p.default_portion_g or p.unit_weight_g or 100.0, 1
         ),
+    }
+
+
+def week_json(w: WeekBalance) -> dict[str, Any]:
+    """Недельный баланс (§6.23)."""
+    return {
+        "start": w.start.isoformat(),
+        "end": w.end.isoformat(),
+        "goal_kcal": round(w.goal_kcal),
+        "week_goal_kcal": round(w.week_goal_kcal),
+        "consumed_kcal": round(w.consumed_kcal),
+        "balance_kcal": round(w.balance_kcal),
+        "logged_days": w.logged_days,
+        "average_kcal": round(w.average_kcal),
+        "days": [
+            {"date": d.day.isoformat(), "kcal": None if d.kcal is None else round(d.kcal),
+             "over": d.over}
+            for d in w.days
+        ],
+        "remaining_days": w.remaining_days,
+        "per_day_kcal": w.per_day_kcal,
+        "floor_hit": w.floor_hit,
+        "verdict": w.verdict,
+    }
+
+
+SCAN_FIELDS = (
+    "weight_kg", "skeletal_muscle_kg", "body_fat_kg", "body_fat_pct", "fat_free_kg",
+    "visceral_level", "bmr_kcal", "water_l", "protein_kg", "minerals_kg",
+    "height_cm", "age",
+)
+
+
+def scan_json(s: BodyScan, tz: str) -> dict[str, Any]:
+    local = s.measured_at.astimezone(ZoneInfo(tz))
+    out: dict[str, Any] = {f: getattr(s, f) for f in SCAN_FIELDS}
+    out.update({
+        "id": s.id,
+        "measured_at": s.measured_at.isoformat(),
+        "date": local.date().isoformat(),
+        "time": local.strftime("%H:%M"),
+        "sex": s.sex,
+        "device": s.device,
+    })
+    return out
+
+
+def change_json(c: Change | None) -> dict[str, Any] | None:
+    if c is None:
+        return None
+    return {
+        "days": c.days, "weight_kg": c.weight_kg, "body_fat_kg": c.body_fat_kg,
+        "fat_free_kg": c.fat_free_kg, "skeletal_muscle_kg": c.skeletal_muscle_kg,
+        "body_fat_pct": c.body_fat_pct, "visceral_level": c.visceral_level,
+        "lean_share": None if c.lean_share is None else round(c.lean_share, 2),
+    }
+
+
+def proposal_json(p: GoalProposal | None) -> dict[str, Any] | None:
+    if p is None:
+        return None
+    return {
+        "current": goal_json(p.current),
+        "proposed": goal_json(p.proposed),
+        "changed": p.changed,
+        "bmr_kcal": round(p.bmr_kcal),
+        "bmr_source": p.bmr_source,
+        "activity": p.activity,
+        "activity_factor": ACTIVITY_FACTORS[p.activity],
+        "target_factor": TARGET_FACTORS.get(p.current.target, 1.0),
+        "burn_kcal": round(p.burn_kcal),
+        "base": p.base,
+        "tdee_kcal": p.tdee_kcal,
+        "fat_free_kg": p.fat_free_kg,
+    }
+
+
+def overview_json(o: Overview, tz: str) -> dict[str, Any]:
+    d, sp = o.diary, o.spend
+    return {
+        "scans": [scan_json(s, tz) for s in o.scans],
+        "change": change_json(o.last_change),
+        "lean_warning": o.lean_warning,
+        "stale_days": o.stale_days,
+        "inbody_bmr": o.inbody_bmr,
+        "formula_bmr": o.formula_bmr,
+        "burn_kcal": o.burn_kcal,
+        "diary": None if d is None else {
+            "verdict": d.verdict, "since": o.diary_since.isoformat() if o.diary_since else None,
+            "deficit_kcal": d.deficit_kcal, "expected_kg": d.expected_kg,
+            "actual_kg": d.actual_kg, "logged_days": d.logged_days, "days": d.days,
+        },
+        "energy": None if sp is None else {
+            "verdict": sp.verdict, "days": sp.days, "logged_days": sp.logged_days,
+            "intake_kcal": sp.intake_kcal, "tdee_kcal": sp.tdee_kcal,
+            "error_kcal": sp.error_kcal, "proposable": sp.proposable,
+            "need_days": ceil(energy.MIN_LOGGED_SHARE * sp.days),
+        },
+        "proposal": proposal_json(o.proposal),
     }

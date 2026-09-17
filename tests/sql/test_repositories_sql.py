@@ -1,13 +1,24 @@
 """Проверка запросов, которые фейк не воспроизводит."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
+from sqlalchemy import update
 
 from app.application.entities import Meal, MealItem, Product, User
+from app.domain.body_scan import BodyScan
+from app.domain.goals import Goal
 from app.domain.value_objects import Density, Macros
-from app.infrastructure.db.repositories import SqlMealRepo, SqlProductRepo, SqlUserRepo
+from app.infrastructure.db.models import MealORM
+from app.infrastructure.db.repositories import (
+    SqlBodyScanRepo,
+    SqlMealRepo,
+    SqlProductRepo,
+    SqlUserRepo,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -148,3 +159,41 @@ async def test_вклад_по_белку_на_живой_базе(session):
     by_kcal = await SqlMealRepo(session).contributions(u.id, days=30, limit=5)
     kcal_row = [r for r in by_kcal if r[1] == "СКЛ творог"][0]
     assert mine[0][2] != kcal_row[2]            # это разные колонки, а не одна
+
+
+async def test_замер_состава_upsert_по_времени_и_удаление(session):
+    """MA-INV-51: второй снимок того же бланка обновляет, а не дублирует."""
+    u = await _user(session, 900010)
+    repo = SqlBodyScanRepo(session)
+    at = datetime(2026, 5, 3, 8, 44, tzinfo=UTC)
+    scan = BodyScan(measured_at=at, weight_kg=91.8, body_fat_kg=19.8, fat_free_kg=72.0,
+                    user_id=u.id, sex="male", age=30, device="InBody270")
+    first, updated = await repo.upsert(scan, ["body_fat_kg"])
+    assert not updated and first.id
+    again, updated = await repo.upsert(replace(scan, weight_kg=91.9))
+    assert updated and again.id == first.id and again.weight_kg == 91.9
+    assert [s.id for s in await repo.list_for(u.id)] == [first.id]
+    assert (await repo.get_at(u.id, at)).device == "InBody270"
+    assert await repo.delete(u.id, first.id) and not await repo.delete(u.id, first.id)
+
+
+async def test_история_целей_пишется_при_смене(session):
+    u = await _user(session, 900011)
+    users = SqlUserRepo(session)
+    await users.set_goal(u.id, Goal(2176, 194, 72, 188, "cut"))
+    await users.set_goal(u.id, Goal(2250, 173, 75, 230, "cut"), "scan")
+    hist = await users.goal_history(u.id)
+    assert [k for _, k in hist] == [2176, 2250]
+    assert (await users.get_goal(u.id)).daily_kcal == 2250
+
+
+async def test_часовая_сводка_со_сдвигом_суток(session):
+    """§6.5: при начале суток в 4:00 перекус в 00:30 — это час 20 вчерашнего дня."""
+    u = await _user(session, 900012)
+    p = await _product(session, "sql_night", "СКЛ ночной сыр")
+    night = datetime.now(UTC).replace(hour=17, minute=30, second=0, microsecond=0)  # 00:30 по +7
+    meal = await _meal(session, u, p, 100)
+    await session.execute(update(MealORM).where(MealORM.id == meal.id).values(eaten_at=night))
+    rows = await SqlMealRepo(session).hourly_kcal(u.id, days=2, tz="Etc/GMT-7", day_start=4)
+    local = night.astimezone(ZoneInfo("Etc/GMT-7")) - timedelta(hours=4)
+    assert (local.date().isoformat(), 20) in {(d, h) for d, h, _ in rows}, rows

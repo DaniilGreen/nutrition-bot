@@ -14,6 +14,7 @@ from fastapi import Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.assistant import Assistant
+from app.application.body_scans import BodyScanService
 from app.application.entities import User
 from app.container import Container
 from app.web.auth import InitDataError, verify_init_data
@@ -54,6 +55,13 @@ async def get_assistant(
     в Container сам, нетестируем — это признак нарушения MA-INV-5."""
     assistant, _ = container.assistant_for(session)
     return assistant
+
+
+async def get_body_scans(
+    container: Annotated[Container, Depends(get_container)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> BodyScanService:
+    return container.body_scans_for(session)
 
 
 async def current_user(
@@ -101,3 +109,4 @@ def _code_for(exc: InitDataError) -> str:
 
 CurrentUser = Annotated[User, Depends(current_user)]
 CurrentAssistant = Annotated[Assistant, Depends(get_assistant)]
+CurrentScans = Annotated[BodyScanService, Depends(get_body_scans)]

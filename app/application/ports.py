@@ -10,8 +10,9 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol
 
-from app.application.dto import ParsedItem, ParsedMessage, PlateReading
+from app.application.dto import ParsedItem, ParsedMessage, PlateReading, ScanReading
 from app.application.entities import Meal, Product, User, WeightLog
+from app.domain.body_scan import BodyScan
 from app.domain.goals import Goal
 from app.domain.value_objects import Density, Macros
 
@@ -37,6 +38,10 @@ class VisionPort(Protocol):
         + вес пачки в unit_weight_g, если есть). None — этикетка не распознана."""
         ...
 
+    async def read_scan(self, image: bytes) -> ScanReading | None:
+        """FR-36: числа с бланка состава тела как напечатаны; None — не прочёл."""
+        ...
+
     async def read_photo(self, image: bytes, caption: str = "") -> PlateReading:
         """FR-34: что на снимке — этикетка, блюдо или ни то ни другое; для блюда —
         составляющие с долями и оценкой граммов. Подпись — слова человека к снимку."""
@@ -50,7 +55,11 @@ class UserRepo(Protocol):
 
     async def get_goal(self, user_id: int) -> Goal | None: ...
 
-    async def set_goal(self, user_id: int, goal: Goal) -> None: ...
+    async def set_goal(self, user_id: int, goal: Goal, source: str = "manual") -> None: ...
+
+    async def goal_history(self, user_id: int) -> list[tuple[datetime, float]]:
+        """(с какого момента, ккал) — цели во времени, старые первыми (§6.23)."""
+        ...
 
     async def set_timezone(self, user_id: int, tzname: str) -> None: ...
 
@@ -229,6 +238,25 @@ class WeightRepo(Protocol):
     async def delete(self, user_id: int, log_id: int) -> WeightLog | None:
         """Удалить свой замер. Без этого опечатку «83,6» вместо «93,6» починить
         нечем, а именно про такой выброс и рассказывает экран веса."""
+        ...
+
+
+class BodyScanRepo(Protocol):
+    """Замеры состава тела (FR-36). Порядок — по времени замера."""
+
+    async def upsert(
+        self, scan: BodyScan, corrected: list[str] | None = None
+    ) -> tuple[BodyScan, bool]:
+        """Сохранить; тот же (user, measured_at) обновляет. Второе — «обновил».
+        `corrected` — поля, которые человек поправил после распознавания (метрика)."""
+        ...
+
+    async def delete(self, user_id: int, scan_id: int) -> bool: ...
+
+    async def get_at(self, user_id: int, measured_at: datetime) -> BodyScan | None: ...
+
+    async def list_for(self, user_id: int) -> list[BodyScan]:
+        """Все замеры человека, старые первыми."""
         ...
 
 

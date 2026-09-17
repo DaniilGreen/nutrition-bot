@@ -7,10 +7,13 @@ from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.entities import Meal, MealItem, Product, User, WeightLog
+from app.domain.body_scan import BodyScan
 from app.domain.goals import Goal
 from app.domain.value_objects import Density, Macros
 from app.infrastructure.db.models import (
+    BodyScanORM,
     BugReportORM,
+    GoalHistoryORM,
     LlmSpendORM,
     MealItemORM,
     MealORM,
@@ -32,6 +35,7 @@ def _user_to_domain(o: UserORM) -> User:
         is_active=o.is_active,
         onboarded_at=o.onboarded_at,
         ui_prefs=dict(o.ui_prefs or {}),
+        created_at=o.created_at,
     )
 
 
@@ -97,7 +101,12 @@ class SqlUserRepo:
             return None
         return Goal(g.daily_kcal, g.protein_g, g.fat_g, g.carb_g, g.target)
 
-    async def set_goal(self, user_id: int, goal: Goal) -> None:
+    async def set_goal(self, user_id: int, goal: Goal, source: str = "manual") -> None:
+        # История — ради недели (§6.23): новая цель не переписывает прошлые дни.
+        self._s.add(GoalHistoryORM(
+            user_id=user_id, valid_from=datetime.now(UTC), daily_kcal=goal.daily_kcal,
+            protein_g=goal.protein_g, source=source[:16],
+        ))
         res = await self._s.execute(select(UserGoalORM).where(UserGoalORM.user_id == user_id))
         g = res.scalar_one_or_none()
         if g is None:
@@ -118,6 +127,14 @@ class SqlUserRepo:
             g.carb_g = goal.carb_g
             g.target = goal.target
         await self._s.flush()
+
+    async def goal_history(self, user_id: int) -> list[tuple[datetime, float]]:
+        res = await self._s.execute(
+            select(GoalHistoryORM.valid_from, GoalHistoryORM.daily_kcal)
+            .where(GoalHistoryORM.user_id == user_id)
+            .order_by(GoalHistoryORM.valid_from)
+        )
+        return [(t, float(k)) for t, k in res.all()]
 
     async def set_timezone(self, user_id: int, tzname: str) -> None:
         orm = await self._s.get(UserORM, user_id)
@@ -579,6 +596,69 @@ class SqlBugRepo:
     ) -> None:
         self._s.add(BugReportORM(user_id=user_id, note=note, context=context))
         await self._s.flush()
+
+
+_SCAN_COLUMNS = (
+    "measured_at", "weight_kg", "body_fat_kg", "fat_free_kg", "body_fat_pct",
+    "skeletal_muscle_kg", "water_l", "protein_kg", "minerals_kg", "visceral_level",
+    "bmr_kcal", "height_cm", "age", "sex", "device",
+)
+
+
+def _scan_to_domain(o: BodyScanORM) -> BodyScan:
+    return BodyScan(id=o.id, user_id=o.user_id, **{c: getattr(o, c) for c in _SCAN_COLUMNS})
+
+
+class SqlBodyScanRepo:
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def get_at(self, user_id: int, measured_at: datetime) -> BodyScan | None:
+        res = await self._s.execute(
+            select(BodyScanORM).where(
+                BodyScanORM.user_id == user_id, BodyScanORM.measured_at == measured_at
+            )
+        )
+        orm = res.scalar_one_or_none()
+        return _scan_to_domain(orm) if orm is not None else None
+
+    async def upsert(
+        self, scan: BodyScan, corrected: list[str] | None = None
+    ) -> tuple[BodyScan, bool]:
+        assert scan.user_id is not None
+        res = await self._s.execute(
+            select(BodyScanORM).where(
+                BodyScanORM.user_id == scan.user_id,
+                BodyScanORM.measured_at == scan.measured_at,
+            )
+        )
+        orm = res.scalar_one_or_none()
+        updated = orm is not None
+        if orm is None:
+            orm = BodyScanORM(user_id=scan.user_id)
+            self._s.add(orm)
+        for c in _SCAN_COLUMNS:
+            setattr(orm, c, getattr(scan, c))
+        orm.corrected_fields = sorted(corrected or [])
+        await self._s.flush()
+        return _scan_to_domain(orm), updated
+
+    async def delete(self, user_id: int, scan_id: int) -> bool:
+        res = await self._s.execute(
+            delete(BodyScanORM).where(
+                BodyScanORM.id == scan_id, BodyScanORM.user_id == user_id
+            )
+        )
+        await self._s.flush()
+        return bool(res.rowcount)
+
+    async def list_for(self, user_id: int) -> list[BodyScan]:
+        res = await self._s.execute(
+            select(BodyScanORM)
+            .where(BodyScanORM.user_id == user_id)
+            .order_by(BodyScanORM.measured_at)
+        )
+        return [_scan_to_domain(o) for o in res.scalars().all()]
 
 
 class SqlWeightRepo:

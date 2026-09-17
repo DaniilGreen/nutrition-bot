@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.assistant import Assistant
+from app.application.body_scans import BodyScanService
 from app.application.coach import Coach, CoachPort
 from app.application.meal_service import MealService
 from app.application.ports import NluPort, SttPort, VisionPort
@@ -19,6 +20,7 @@ from app.clock import Clock, utcnow
 from app.config import Settings
 from app.infrastructure.db.base import Database
 from app.infrastructure.db.repositories import (
+    SqlBodyScanRepo,
     SqlBugRepo,
     SqlMealRepo,
     SqlProductRepo,
@@ -144,6 +146,14 @@ class Container:
             meals,
             SqlWeightRepo(session),
             SqlProductRepo(session),
+        )
+
+    def body_scans_for(self, session: AsyncSession) -> BodyScanService:
+        """Замеры состава (§6.24) и недельный баланс с полом по обмену (§6.23)."""
+        users = SqlUserRepo(session)
+        stats = StatsService(SqlMealRepo(session), users, self.settings.default_goal(), self.clock)
+        return BodyScanService(
+            SqlBodyScanRepo(session), users, SqlWeightRepo(session), stats, self.clock
         )
 
     def assistant_for(self, session: AsyncSession) -> tuple[Assistant, SqlUserRepo]:

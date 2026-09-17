@@ -10,7 +10,8 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import date, datetime
 from typing import Annotated, Any
 from urllib.parse import unquote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -20,10 +21,12 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.assistant import Assistant
+from app.application.body_scans import BodyScanService, ScanCheck, from_reading
 from app.application.coach import LimitReached
 from app.application.dto import Unit
 from app.application.entities import User
 from app.application.results import (
+    BodyScanRead,
     ClarificationNeeded,
     CorrectionFailed,
     DailyStats,
@@ -37,6 +40,7 @@ from app.application.results import (
 )
 from app.container import Container
 from app.domain.audio import filename_for
+from app.domain.body_scan import BodyScan, with_fields
 from app.domain.duplicates import SAFE_SPREAD, Candidate, spread, winner
 from app.domain.goals import Goal
 from app.domain.label_portion import label_grams
@@ -44,17 +48,22 @@ from app.domain.plate import MAX_COMPONENTS
 from app.domain.prefs import merge as merge_prefs
 from app.domain.prefs import sanitize
 from app.domain.value_objects import Density
-from app.web.deps import CurrentAssistant, CurrentUser, current_user, get_session
+from app.web.deps import CurrentAssistant, CurrentScans, CurrentUser, current_user, get_session
 from app.web.errors import ApiError, bad_request, not_found, unavailable
 from app.web.schemas import (
+    SCAN_FIELDS,
     clarify_json,
     goal_json,
     item_json,
     logged_json,
     meal_json,
+    overview_json,
     product_json,
+    proposal_json,
     remaining_json,
+    scan_json,
     user_json,
+    week_json,
 )
 
 log = logging.getLogger(__name__)
@@ -96,7 +105,7 @@ async def me(user: CurrentUser, assistant: CurrentAssistant) -> dict[str, Any]:
 
 @router.get("/day")
 async def day(
-    user: CurrentUser, assistant: CurrentAssistant, days_ago: int = 0
+    user: CurrentUser, assistant: CurrentAssistant, scans: CurrentScans, days_ago: int = 0
 ) -> dict[str, Any]:
     """Экран «День»: панель остатка сверху и лента приёмов (§6.2, §7.2).
 
@@ -121,7 +130,29 @@ async def day(
         # §6.20: полем здесь, а не отдельным эндпоинтом — экран «День» сведён
         # к одному запросу на старте, и второй вернул бы мигание (MA-INV-32).
         "pace": await _pace_json(user, assistant) if days_ago == 0 else None,
+        # §6.23: плашка недели — только на сегодняшнем дне.
+        "week_balance": await _week(user, assistant, scans, 0) if days_ago == 0 else None,
     }
+
+
+async def _week(
+    user: User, assistant: Assistant, scans: BodyScanService, weeks_ago: int
+) -> dict[str, Any] | None:
+    w = await assistant.week_balance(user, weeks_ago, bmr_kcal=await scans.bmr(user))
+    return week_json(w)
+
+
+@router.get("/week")
+async def week(
+    user: CurrentUser, assistant: CurrentAssistant, scans: CurrentScans, weeks_ago: int = 0
+) -> dict[str, Any]:
+    """Недельный баланс (§6.23): текущая и до четырёх прошлых недель."""
+    if not 0 <= weeks_ago <= 4:
+        raise bad_request("bad_week", "Неделя вне диапазона.")
+    goal = await assistant.current_goal(user)
+    if goal.daily_kcal <= 0:
+        return {"week": None}
+    return {"week": await _week(user, assistant, scans, weeks_ago)}
 
 
 async def _pace_json(user: User, assistant: Assistant) -> dict[str, Any] | None:
@@ -328,6 +359,7 @@ async def log_label(
 @router.post("/meals/photo")
 async def log_photo(
     request: Request, user: CurrentUser, assistant: CurrentAssistant, idem: CurrentIdem,
+    scans: CurrentScans,
 ) -> dict[str, Any]:
     """FR-34: снимок → этикетка (как `/meals/label`) или карточка блюда (§6.22).
 
@@ -361,6 +393,8 @@ async def log_photo(
     elif isinstance(result, PlateRead):
         token = drafts.put(_uid(user), result.reading, 0, "фото", "photo", offset)
         out = _plate_json(result, token)
+    elif isinstance(result, BodyScanRead):
+        out = await _scan_draft(request, user, scans, result)
     else:
         out = _result_json(result, user, request, raw_input="фото")
     return idem.remember(out)
@@ -424,6 +458,43 @@ async def commit_photo(
     return idem.remember(out)
 
 
+_SCAN_REFUSAL = {
+    "not_inbody": "Пока понимаю только бланки InBody — у других приборов обмен считается иначе.",
+    "no_numbers": "Не нашёл на бланке вес и жир — сними его ровно и целиком.",
+    "no_date": "Не разобрал дату на бланке — сними верх бланка чётче.",
+}
+
+
+async def _scan_draft(
+    request: Request, user: User, scans: BodyScanService, result: BodyScanRead,
+    *, token: str | None = None,
+) -> dict[str, Any]:
+    scan, ambiguous, reason = from_reading(result.reading, user.timezone)
+    if scan is None:
+        return {"kind": "unknown", "message": _SCAN_REFUSAL[reason or "no_numbers"]}
+    check = await scans.check(user, scan, date_ambiguous=ambiguous)
+    if token is None:
+        token = request.app.state.drafts.put(
+            _uid(user), {"scan": check.scan, "ambiguous": ambiguous, "read": check.scan},
+            0, "бланк", "scan",
+        )
+    return scan_check_json(check, token, user.timezone)
+
+
+def scan_check_json(c: ScanCheck, token: str, tz: str) -> dict[str, Any]:
+    return {
+        "kind": "body_scan",
+        "draft_id": token,
+        "scan": scan_json(c.scan, tz),
+        "bad": sorted(c.bad),
+        "foreign": c.foreign,
+        "date_ambiguous": c.date_ambiguous,
+        "date_problem": c.date_problem,
+        "existing": c.existing is not None,
+        "needs_confirm": c.needs_confirm,
+    }
+
+
 def _plate_json(result: PlateRead, token: str) -> dict[str, Any]:
     """Карточка блюда (§6.22): что увидели и что спросить."""
     r = result.reading
@@ -466,6 +537,83 @@ def _label_json(
         "atwater_warning": atwater,
         "hint": hint,
     }
+
+
+@router.post("/body-scans")
+async def save_scan(
+    body: dict[str, Any], user: CurrentUser, request: Request, scans: CurrentScans,
+    assistant: CurrentAssistant, idem: CurrentIdem,
+) -> dict[str, Any]:
+    """Сохранить замер с карточки (§6.24). Поля — правки человека поверх прочитанного."""
+    if idem.replay is not None:
+        return idem.replay
+    token = str(body.get("draft_id") or "")
+    drafts = request.app.state.drafts
+    draft = drafts.peek(token, _uid(user))
+    if draft is None or draft.kind != "scan":
+        raise bad_request("draft_gone", "Карточка устарела. Сфотографируй бланк ещё раз.")
+    fields = body.get("fields") or {}
+    if not isinstance(fields, dict):
+        raise bad_request("bad_scan", "Поля замера должны быть объектом.")
+    read: BodyScan = draft.payload["read"]
+    try:
+        scan = with_fields(read, fields)
+        if fields.get("date") or fields.get("time"):
+            local = scan.measured_at.astimezone(ZoneInfo(user.timezone))
+            d = date.fromisoformat(str(fields.get("date") or local.date().isoformat()))
+            hh, mm = (int(x) for x in str(fields.get("time") or local.strftime("%H:%M")).split(":"))
+            scan = replace(scan, measured_at=datetime(d.year, d.month, d.day, hh, mm,
+                                                      tzinfo=ZoneInfo(user.timezone)))
+    except (TypeError, ValueError) as exc:
+        raise bad_request("bad_scan", "Числа замера не разобрал — проверь поля.") from exc
+    corrected = [f for f in SCAN_FIELDS if getattr(scan, f) != getattr(read, f)]
+    ambiguous = bool(draft.payload["ambiguous"]) and not (fields.get("date"))
+    try:
+        saved, updated = await scans.save(
+            user, scan, confirmed=bool(body.get("confirmed")),
+            corrected=corrected, date_ambiguous=ambiguous,
+        )
+    except ValueError as exc:
+        if str(exc) == "future":
+            raise bad_request("scan_future", "Дата замера в будущем — проверь дату.") from exc
+        raise ApiError(400, "scan_mismatch",
+                       "Отмеченные числа не сходятся с остальными — сверь с бланком.") from exc
+    drafts.take(token, _uid(user))
+    overview = await scans.overview(user)
+    out = {
+        "kind": "body_scan_saved",
+        "scan": scan_json(saved, user.timezone),
+        "updated": updated,
+        "proposal": proposal_json(overview.proposal),
+    }
+    return idem.remember(out)
+
+
+@router.get("/body-scans")
+async def list_scans(user: CurrentUser, scans: CurrentScans) -> dict[str, Any]:
+    """Всё для «Итогов → Состав тела» и настроек (§6.24)."""
+    return overview_json(await scans.overview(user), user.timezone)
+
+
+@router.delete("/body-scans/{scan_id}")
+async def delete_scan(scan_id: int, user: CurrentUser, scans: CurrentScans) -> dict[str, Any]:
+    if not await scans.delete(user, scan_id):
+        raise not_found("scan_not_found", "Замер не найден.")
+    return {"deleted": True}
+
+
+@router.post("/body-scans/apply-goal")
+async def apply_scan_goal(
+    user: CurrentUser, scans: CurrentScans, idem: CurrentIdem,
+) -> dict[str, Any]:
+    """MA-INV-52: цели по замеру — только этой кнопкой."""
+    if idem.replay is not None:
+        return idem.replay
+    try:
+        goal = await scans.apply(user)
+    except ValueError as exc:
+        raise bad_request("no_scan", "Нужен свежий замер, чтобы пересчитать цели.") from exc
+    return idem.remember({"goal": goal_json(goal)})
 
 
 @router.delete("/meals/{meal_id}")

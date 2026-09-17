@@ -15,6 +15,7 @@ class InMemoryUserRepo:
     def __init__(self) -> None:
         self._users: dict[int, User] = {}
         self._goals: dict[int, Goal] = {}
+        self.history: dict[int, list] = {}
         self._seq = 0
 
     async def get_or_create(
@@ -33,8 +34,14 @@ class InMemoryUserRepo:
     async def get_goal(self, user_id: int) -> Goal | None:
         return self._goals.get(user_id)
 
-    async def set_goal(self, user_id: int, goal: Goal) -> None:
+    async def set_goal(self, user_id: int, goal: Goal, source: str = "manual") -> None:
         self._goals[user_id] = goal
+        self.history.setdefault(user_id, []).append(
+            (datetime.now(UTC), goal.daily_kcal, source)
+        )
+
+    async def goal_history(self, user_id: int) -> list[tuple[datetime, float]]:
+        return [(t, k) for t, k, _ in self.history.get(user_id, [])]
 
     async def set_timezone(self, user_id: int, tzname: str) -> None:
         if user_id in self._users:
@@ -350,6 +357,39 @@ class InMemoryMealRepo:
         return meal
 
 
+class InMemoryBodyScanRepo:
+    def __init__(self) -> None:
+        self.scans: list = []
+        self._seq = 0
+
+    async def get_at(self, user_id, measured_at):
+        return next((x for x in self.scans
+                     if x.user_id == user_id and x.measured_at == measured_at), None)
+
+    async def delete(self, user_id, scan_id):
+        before = len(self.scans)
+        self.scans = [x for x in self.scans if not (x.id == scan_id and x.user_id == user_id)]
+        return len(self.scans) < before
+
+    async def upsert(self, scan, corrected=None):
+        from dataclasses import replace as _replace
+
+        self.corrected = list(corrected or [])
+
+        for i, x in enumerate(self.scans):
+            if x.user_id == scan.user_id and x.measured_at == scan.measured_at:
+                self.scans[i] = _replace(scan, id=x.id)
+                return self.scans[i], True
+        self._seq += 1
+        saved = _replace(scan, id=self._seq)
+        self.scans.append(saved)
+        return saved, False
+
+    async def list_for(self, user_id):
+        return sorted((x for x in self.scans if x.user_id == user_id),
+                      key=lambda x: x.measured_at)
+
+
 class InMemoryWeightRepo:
     def __init__(self) -> None:
         self._logs: list[WeightLog] = []
@@ -426,18 +466,25 @@ class StubVision:
     read_photo (FR-34): без `plate` снимок считается этикеткой — так старые тесты
     этикетки проходят и через общий вход фото."""
 
-    def __init__(self, item: ParsedItem | None, plate: PlateReading | None = None) -> None:
+    def __init__(self, item: ParsedItem | None, plate: PlateReading | None = None,
+                 scan: object | None = None) -> None:
         self._item = item
         self._plate = plate
+        self._scan = scan
         self.photo_calls = 0
         self.seen_caption: str | None = None
 
     async def read_photo(self, image: bytes, caption: str = "") -> PlateReading:
         self.photo_calls += 1
         self.seen_caption = caption
+        if self._scan is not None:
+            return PlateReading(kind="body_scan")
         if self._plate is None:
             return PlateReading(kind="label")
         return deepcopy(self._plate)
+
+    async def read_scan(self, image: bytes):
+        return deepcopy(self._scan)
 
     async def read_label(self, image: bytes) -> ParsedItem | None:
         # копия на каждый скан — независимые «снимки» (для теста дедупа повторного скана)

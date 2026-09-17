@@ -66,7 +66,8 @@ async def test_частичная_правка_не_сбрасывает_ост�
     # foot_third по умолчанию "weight": в макете панели Е третья ячейка — вес.
     assert r.json()["prefs"] == {"hero": "rings", "period": 7,
                                  "foot_third": "weight", "mic_first": False,
-                                 "feed_order": "new_first", "day_start": 0}
+                                 "feed_order": "new_first", "day_start": 0,
+                                 "bmr_source": "inbody", "activity": "medium"}
 
 
 @pytest.mark.parametrize(

@@ -1,7 +1,7 @@
 """Use-case: дневная и недельная статистика, остаток КБЖУ, текущая цель."""
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.application.entities import Meal, User
@@ -18,6 +18,7 @@ from app.domain.pace import (
 from app.domain.prefs import day_start
 from app.domain.timeframe import day_bounds_utc, local_date, week_bounds_utc
 from app.domain.value_objects import Macros, sum_macros
+from app.domain.week import WeekBalance, balance
 
 
 class StatsService:
@@ -196,6 +197,54 @@ class StatsService:
         _, end = day_bounds_utc(now, user.timezone, start_h)
         meals = await self._meals.list_between(user_id, start, end)
         return sum_macros(m.totals for m in meals)
+
+    async def kcal_by_day(
+        self, user: User, first: date, last: date
+    ) -> dict[date, float]:
+        """Съедено по местным дням [first, last] одним запросом. Дни без записей
+        в словарь не попадают — пустой день не ноль (MA-INV-48)."""
+        start_h = day_start(user.ui_prefs)
+        zone = ZoneInfo(user.timezone)
+        lo = datetime(first.year, first.month, first.day, start_h, tzinfo=zone)
+        hi = datetime(last.year, last.month, last.day, start_h, tzinfo=zone) + timedelta(days=1)
+        meals = await self._meals.list_between(_require_id(user), lo, hi)
+        out: dict[date, float] = {}
+        for m in meals:
+            d = local_date(m.eaten_at, user.timezone, start_h)
+            out[d] = out.get(d, 0.0) + m.totals.kcal
+        return out
+
+    async def goals_by_day(self, user: User, days: list[date]) -> dict[date, float]:
+        """Цель, действовавшая в каждый из дней (§6.23): последняя смена до конца дня.
+        До первой записи истории — текущая цель."""
+        current = (await self.current_goal(user)).daily_kcal
+        history = await self._users.goal_history(_require_id(user))
+        start_h = day_start(user.ui_prefs)
+        zone = ZoneInfo(user.timezone)
+        out: dict[date, float] = {}
+        for d in days:
+            end = datetime(d.year, d.month, d.day, start_h, tzinfo=zone) + timedelta(days=1)
+            known = [k for t, k in history if t < end]
+            out[d] = known[-1] if known else current
+        return out
+
+    async def week_balance(
+        self, user: User, weeks_ago: int = 0, *, bmr_kcal: float | None = None
+    ) -> WeekBalance:
+        """Недельный баланс (§6.23)."""
+        start_h = day_start(user.ui_prefs)
+        today = local_date(self._clock(), user.timezone, start_h)
+        monday = today - timedelta(days=today.weekday() + 7 * weeks_ago)
+        days = [monday + timedelta(days=i) for i in range(7)]
+        eaten = await self.kcal_by_day(user, days[0], days[-1])
+        goals = await self.goals_by_day(user, days)
+        first_day = (
+            local_date(user.created_at, user.timezone, start_h) if user.created_at else None
+        )
+        return balance(
+            [(d, eaten.get(d), goals[d]) for d in days],
+            today=today, bmr_kcal=bmr_kcal, first_day=first_day,
+        )
 
     async def weekly(self, user: User) -> WeeklyStats:
         user_id = _require_id(user)
