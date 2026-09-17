@@ -453,11 +453,19 @@
   function renderDay() {
     var onScreen = !!document.getElementById('composer');
     var fresh = state.lastDay && state.shownDay === state.daysAgo;
-    if (!onScreen || !fresh) {
+    if (!onScreen) {
       if (fresh) show(dayHtml(state.lastDay));
       else loadingDay();
+    } else if (!fresh) {
+      /* Листание дней: прошлый день остаётся под приглушением, пока не придёт
+         новый. Скелет схлопывал высоту на каждом шаге — экран мигал. */
+      root.classList.add('working');
     }
-    api('/api/day?days_ago=' + state.daysAgo).then(paintDay).catch(failure);
+    var want = state.daysAgo;
+    api('/api/day?days_ago=' + want).then(function (d) {
+      // Быстрое листание: ответ на уже пролистанный день не рисуем.
+      if (want === state.daysAgo) paintDay(d);
+    }).catch(failure);
   }
 
   /* MA-INV-22: карточка «Записал» живёт 5 секунд, потом уходит сама. Правка
@@ -1421,9 +1429,30 @@
     'Что изменилось за последний месяц?'
   ];
 
+  function bubbleInner(m) {
+    var busy = m.busy
+      ? '<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>' +
+        '<span class="mic" style="margin-left:6px">' + esc(m.busy) + '</span>'
+      : '';
+    return esc(m.text) + busy;
+  }
+
+  /* Поток ответа правит только свой пузырь: полная перерисовка на каждом
+     куске пересоздавала поле ввода — набранный текст пропадал, фокус слетал. */
+  function paintBubble(m) {
+    var i = (state.chat || []).indexOf(m);
+    var el = state.tab === 'ai' && root.querySelector('.bubble[data-i="' + i + '"]');
+    if (!el) return renderAi();
+    el.innerHTML = bubbleInner(m);
+    if (m.busy) el.setAttribute('aria-busy', 'true'); else el.removeAttribute('aria-busy');
+  }
+
   function renderAi() {
     document.getElementById('title').textContent = 'AI';
-    var chat = (state.chat || []).map(function (m) {
+    var input = document.getElementById('ask');
+    var typed = input ? input.value : '';
+    var focused = input && document.activeElement === input;
+    var chat = (state.chat || []).map(function (m, i) {
       /* §4.3: совет, который нельзя выполнить в один тап, остаётся советом.
          Под ответом — кнопки на продукты, которые человек уже ел: у них есть
          и плотность, и своя граммовка, значит запись без модели. */
@@ -1432,13 +1461,9 @@
           '" data-grams="' + a.grams + '">Записать ' + esc(a.name) +
           ' <span class="g">· ' + n(a.grams) + ' г</span></button>';
       }).join('');
-      var busy = m.busy
-        ? '<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>' +
-          '<span class="mic" style="margin-left:6px">' + esc(m.busy) + '</span>'
-        : '';
-      return '<div class="bubble ' + (m.me ? 'me' : 'ai') + '"' +
+      return '<div class="bubble ' + (m.me ? 'me' : 'ai') + '" data-i="' + i + '"' +
           (m.busy ? ' aria-busy="true"' : '') + '>' +
-          esc(m.text) + busy + '</div>' +
+          bubbleInner(m) + '</div>' +
         (acts ? '<div class="chips" style="margin:6px 0 var(--s-3)">' + acts + '</div>' : '');
     }).join('');
     var sug = state.chat && state.chat.length ? '' :
@@ -1471,6 +1496,9 @@
            '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
            'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
            '<path d="M5 12h13M13 6l6 6-6 6"/></svg></button></div>');
+    var again = document.getElementById('ask');
+    if (again && typed) again.value = typed;
+    if (again && focused) again.focus();
     if (!state.budget) {
       api('/api/coach/budget').then(function (d) { state.budget = d; renderAi(); })
         .catch(function () {});
@@ -1503,7 +1531,7 @@
       renderAi();
     };
 
-    streamCoach(text, bubble, function () { renderAi(); })
+    streamCoach(text, bubble, function () { paintBubble(bubble); })
       .then(function (ok) {
         if (ok) return done(null);
         /* Поток не сложился — повторяем обычным запросом. Ассистент, который
@@ -1581,6 +1609,13 @@
       };
       return pump();
     });
+  }
+
+  /* Обновить текущую вкладку, не считая это переходом: без скелета. */
+  function rerender() {
+    if (state.tab === 'cat') return renderCatalog();
+    if (state.tab === 'ai') return renderAi();
+    return render();
   }
 
   function render() {
@@ -2711,12 +2746,12 @@
         dropKey(qid);
         if (stay) {
           toast(r.meal ? 'Записал ' + n(r.meal.kcal) + ' ккал.' : 'Готово.');
-          return render();
+          return rerender();
         }
         return handle(r);
       }).catch(function (err) {
         oops(err);
-        return stay ? render() : renderDay();
+        return stay ? rerender() : renderDay();
       }).then(function () { state.sending = false; });
     }
     if (b.dataset.say) {
