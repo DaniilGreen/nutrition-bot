@@ -2788,7 +2788,15 @@
       });
       return renderCatalog();
     }
-    if (b.dataset.period) { state.period = Number(b.dataset.period); return renderTotals(); }
+    if (b.dataset.period) {
+      state.period = Number(b.dataset.period);
+      /* Кнопка отмечается сразу: экран перерисуется, когда придут данные, и
+         до этого тап не должен выглядеть проигнорированным. */
+      [].forEach.call(root.querySelectorAll('.periods button'), function (x) {
+        x.setAttribute('aria-pressed', x === b ? 'true' : 'false');
+      });
+      return renderTotals();
+    }
     if (b.dataset.ask) return askCoach(b.dataset.ask);
     if (b.id === 'send') {
       var el = document.getElementById('ask');
