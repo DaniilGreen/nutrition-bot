@@ -76,6 +76,9 @@ async def test_вес_числом_пишет_приём_по_цифрам_эт�
     # 150 г × 90 ккал/100 г = 135. Считает приложение, не модель (INV-1).
     assert d["meal"]["kcal"] == pytest.approx(135.0, abs=0.5)
     assert d["meal"]["items"][0]["grams"] == pytest.approx(150.0)
+    # MA-INV-64: как записан приём — видно по `input_type`, иначе лента назовёт
+    # его служебным словом «этикетка».
+    assert d["meal"]["input_type"] == "label"
 
 
 async def test_вся_пачка_берёт_вес_с_упаковки(client, fake_container):

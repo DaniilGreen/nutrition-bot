@@ -794,7 +794,9 @@ async def on_photo(
         if cap_g:  # #5: вес в подписи к фото («этикетка 200 г») → сразу лог, без вопроса
             item.grams = cap_g
             item.unit = Unit.GRAM
-            final = await assistant.continue_meal(app_user, result.draft, raw_input="этикетка")
+            final = await assistant.continue_meal(
+                app_user, result.draft, raw_input="этикетка", input_type="label"
+            )
             await session.commit()
             await _reply_message(message, final, state, app_user, assistant, raw="этикетка")
             return
@@ -979,7 +981,9 @@ async def on_label_grams(
         return
     item.grams = grams
     item.unit = Unit.GRAM
-    result = await assistant.continue_meal(app_user, draft, raw_input="этикетка")
+    result = await assistant.continue_meal(
+        app_user, draft, raw_input="этикетка", input_type="label"
+    )
     await session.commit()
     await state.clear()
     await _reply_message(message, result, state, app_user, assistant, raw="этикетка")
@@ -1004,7 +1008,9 @@ async def on_label_gram_btn(
     item = draft.items[int(data.get("item_index", 0))]
     item.grams = float((callback.data or "label_g:0").split(":", 1)[1])
     item.unit = Unit.GRAM
-    result = await assistant.continue_meal(app_user, draft, raw_input="этикетка")
+    result = await assistant.continue_meal(
+        app_user, draft, raw_input="этикетка", input_type="label"
+    )
     await session.commit()
     await state.clear()
     await _render_after_continue(

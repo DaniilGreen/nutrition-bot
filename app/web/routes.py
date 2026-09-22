@@ -265,7 +265,8 @@ async def clarify(
         item.grams = grams
         item.unit = Unit.GRAM
         result = await assistant.continue_meal(
-            user, draft.payload, raw_input=draft.raw_input, day_offset=draft.day_offset
+            user, draft.payload, raw_input=draft.raw_input, input_type="label",
+            day_offset=draft.day_offset,
         )
     elif draft.kind == "portion":
         # Не хватало веса. Ответ — это вес, а не имя: дописываем его к позиции

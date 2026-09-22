@@ -90,6 +90,9 @@ header h1{font-size:var(--f-t2);font-weight:700;letter-spacing:-.4px;margin:0}
 .meal .t{width:44px;color:var(--text-faint);font-size:var(--f-caption)}
 .meal .n{flex-grow:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font-size:var(--f-body-s)}
+/* Приписка «как записано» не должна уезжать в многоточие вместе с именем:
+   сжимается имя, приписка держит свою ширину. */
+.meal .how{flex:none;white-space:nowrap;color:var(--text-faint);font-size:var(--f-caption-s)}
 .meal .k{font-weight:600;font-size:var(--f-body-s)}
 .items{padding:0 0 var(--s-3) 44px}
 .items .row{display:flex;gap:var(--s-3);padding:5px 0;font-size:var(--f-caption);

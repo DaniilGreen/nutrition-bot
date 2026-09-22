@@ -303,6 +303,23 @@
     return (state.prefs && state.prefs.feed_order) || 'new_first';
   }
 
+  /* Как записан приём: приписка только там, где заголовок сам об этом не
+     говорит. У текста и голоса название и есть сказанное. */
+  var INPUT_MARK = { label: 'этикетка', photo: 'фото' };
+
+  /* Заголовок строки — то, что записано, а не то, что было сказано (MA-INV-64).
+     Фраза ввода не переживает правку веса («паста 10 г» при записанных 15) и
+     у фото её нет вовсе — там стояло служебное слово «этикетка». */
+  function mealTitle(m) {
+    var parts = (m.items || []).map(function (i) {
+      return i.name + (i.grams > 0 ? ' ' + n(i.grams) + ' г' : '');
+    });
+    if (!parts.length) return m.raw_input || '';
+    return parts.length > 2
+      ? parts.slice(0, 2).join(', ') + ' и ещё ' + (parts.length - 2)
+      : parts.join(', ');
+  }
+
   function feed(d) {
     if (!d.meals.length) {
       return '<section class="card" style="margin-top:var(--s-3)">' +
@@ -318,7 +335,9 @@
       var head =
         '<button class="meal" data-meal="' + m.id + '" aria-expanded="' + opened + '">' +
           '<span class="num t">' + esc(m.at) + '</span>' +
-          '<span class="n">' + esc(m.raw_input || m.items.map(function (i) { return i.name; }).join(', ')) + mark + '</span>' +
+          '<span class="n">' + esc(mealTitle(m)) + mark + '</span>' +
+          (INPUT_MARK[m.input_type]
+            ? '<span class="how">· ' + INPUT_MARK[m.input_type] + '</span>' : '') +
           '<span class="num k">' + n(m.kcal) + '</span>' +
         '</button>';
       if (!opened) return head;
