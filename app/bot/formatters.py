@@ -385,6 +385,11 @@ def _num(v: float) -> str:
     return f"{v:g}".replace(".", ",")
 
 
+def _fat(v: float) -> str:
+    """Жир сегмента бланк печатает с одной цифрой после запятой — «12,0», не «12»."""
+    return f"{v:.1f}".replace(".", ",")
+
+
 def format_scan_card(check: object, tz: str) -> str:
     """FR-36: что прочитали с бланка; несошедшееся — с ⚠️ (MA-INV-50)."""
     s = check.scan  # type: ignore[attr-defined]
@@ -408,11 +413,11 @@ def format_scan_card(check: object, tz: str) -> str:
         lines += [
             "",
             "<i>Сегменты, безжировая (жир), кг:</i>",
-            f"Руки {_num(s.lean_arm_l_kg)} ({_num(s.fat_arm_l_kg)}) · "
-            f"{_num(s.lean_arm_r_kg)} ({_num(s.fat_arm_r_kg)})",
-            f"Ноги {_num(s.lean_leg_l_kg)} ({_num(s.fat_leg_l_kg)}) · "
-            f"{_num(s.lean_leg_r_kg)} ({_num(s.fat_leg_r_kg)})",
-            f"Туловище {_num(s.lean_trunk_kg)} ({_num(s.fat_trunk_kg)})",
+            f"Руки {_num(s.lean_arm_l_kg)} ({_fat(s.fat_arm_l_kg)}) · "
+            f"{_num(s.lean_arm_r_kg)} ({_fat(s.fat_arm_r_kg)})",
+            f"Ноги {_num(s.lean_leg_l_kg)} ({_fat(s.fat_leg_l_kg)}) · "
+            f"{_num(s.lean_leg_r_kg)} ({_fat(s.fat_leg_r_kg)})",
+            f"Туловище {_num(s.lean_trunk_kg)} ({_fat(s.fat_trunk_kg)})",
         ]
     notes = []
     if getattr(check, "dropped_segments", False):

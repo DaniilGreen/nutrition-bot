@@ -2016,13 +2016,20 @@
      воспроизводимость сегмента 0.0–0.1 кг, естественная асимметрия 1.5–8%. */
   var SEG_EVEN = 0.05;
 
+  /* Числа сегментов печатаем как на бланке: у конечностей две цифры после
+     запятой, у туловища одна. Общий `n()` тут не годится — он срезает нули и
+     превращает «32,6» в «32,60», а «12,0» в «12». */
+  function segNum(v) {
+    return String(v).replace('.', ',');
+  }
+
   function segCell(key, seg, delta) {
     var lean = seg.lean, fat = seg.fat, total = lean + fat;
     var share = total > 0 ? Math.max(0, Math.min(100, 100 * fat / total)) : 0;
     return '<div class="seg' + (key === 'trunk' ? ' tr' : '') + '">' +
       '<div class="nm">' + esc(SEG_NAME[key]) + '</div>' +
-      '<div class="num v">' + n(lean, 2) + '</div>' +
-      '<div class="num f">жир ' + n(fat, 1) + '</div>' +
+      '<div class="num v">' + segNum(lean) + '</div>' +
+      '<div class="num f">жир ' + segNum(fat.toFixed(1)) + '</div>' +
       '<div class="track split"><i style="width:' + (100 - share) + '%;background:var(--data)"></i>' +
       '<i style="width:' + share + '%;background:var(--fat)"></i></div>' +
       (delta ? '<div class="num f alert">' + esc(delta) + '</div>' : '') + '</div>';
@@ -2126,8 +2133,11 @@
           ' кг · жир ' + n(x.body_fat_pct, 1) + '%</label>' +
           '<button class="linkbtn" data-scandel="' + x.id + '">Удалить</button></div>';
       }).join('') + '</details>';
-    var head = ddmm(last.date) + (o.stale_days != null ? ' · ' + n(o.stale_days) + ' дн. назад' : '') +
-      (last.device ? ' · ' + esc(last.device) : '');
+    var ago = o.stale_days == null ? ''
+      : o.stale_days === 0 ? ' · сегодня'
+      : o.stale_days === 1 ? ' · вчера'
+      : ' · ' + n(o.stale_days) + ' дн. назад';
+    var head = ddmm(last.date) + ago + (last.device ? ' · ' + esc(last.device) : '');
     return '<section class="card comp" style="margin-top:var(--s-3)">' +
       '<div class="cap">Состав тела</div><div class="mic">' + head + '</div>' +
       '<div class="chart">' + body + '</div>' +

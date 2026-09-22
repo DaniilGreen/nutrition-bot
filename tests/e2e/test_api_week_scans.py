@@ -249,7 +249,8 @@ async def test_кривые_сегменты_отбрасываются_а_не_
                           json={"draft_id": d["draft_id"], "fields": {}})
     assert ok.status_code == 200, ok.text
     assert ok.json()["scan"]["segments"] is None
-    assert ok.json()["scan"]["smi"] == 9.4      # индекс сам по себе не пострадал
+    # Индекс уходит вместе с блоком: проверить его больше нечем (MA-INV-58).
+    assert ok.json()["scan"]["smi"] is None
 
 
 async def test_неполные_сегменты_не_сохраняются(client, fake_container):

@@ -187,7 +187,13 @@ def drop_suspect(s: BodyScan) -> BodyScan:
         if v is not None and not lo <= v <= hi:
             patch[name] = None
     if not segments_ok(s):
+        # Индекс проверяется ТОЛЬКО через сегменты конечностей. Нет связного
+        # блока — проверить его нечем, а живые прогоны показали, что модель
+        # читает это число неверно чаще, чем верно (7.9 и 12.2 вместо 9.2).
+        # Неверное число хуже пустого: по нему человек будет следить за
+        # выдуманной динамикой (MA-INV-56).
         patch.update(dict.fromkeys(SEGMENT_FIELDS))
+        patch["smi"] = None
     elif not smi_ok(s):
         # Сегменты сошлись сразу с двумя независимыми суммами — безжировой массой
         # и массой жира; индекс не подтверждён ничем. Значит вероятнее ошибка в
@@ -509,16 +515,21 @@ def demo() -> None:
     assert not segments_ok(bad_leg)
     dropped = drop_suspect(bad_leg)
     assert all(getattr(dropped, f) is None for f in SEGMENT_FIELDS)
-    assert dropped.smi == 9.2 and dropped.weight_kg == 91.6
+    # Индекс уходит вместе с блоком: проверить его больше нечем.
+    assert dropped.smi is None and dropped.weight_kg == 91.6
     assert mismatches(dropped) == set()          # сохранение не блокируется
 
     # Ошибка в последней цифре допуск переживает.
     assert segments_ok(replace(seg, lean_leg_r_kg=10.47))
     # AC-MA-68: прочитаны не все сегменты — блока нет, расхождения нет.
     assert not segments_ok(replace(seg, fat_trunk_kg=None))
-    # AC-MA-69: нет роста — связь не проверяется, числа остаются.
+    # AC-MA-69: нет роста — связь не проверяется, но сегменты связны сами по
+    # себе, поэтому и они, и индекс остаются.
     no_h = replace(seg, height_cm=None)
     assert smi_ok(no_h) and drop_suspect(no_h) == no_h
+    # Бланк без сегментов вовсе: индекс не на чем проверить — не сохраняем.
+    lonely = replace(seg, **dict.fromkeys(SEGMENT_FIELDS))
+    assert drop_suspect(lonely).smi is None
     # Индекс не сходится с конечностями: сегменты подтверждены двумя суммами, а
     # индекс — ничем, значит уносим его, а сегменты остаются.
     conflict = drop_suspect(replace(seg, smi=11.4))
