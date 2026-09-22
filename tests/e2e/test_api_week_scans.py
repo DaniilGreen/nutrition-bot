@@ -21,9 +21,10 @@ from tests.initdata_fixtures import valid
 
 JPEG = b"\xff\xd8\xff\xe0" + b"0" * 500
 
-# Бланк владельца 03.05.2026 — как прочла бы модель.
+# Бланк владельца — как прочла бы модель. Прибор печатает М.Д.Г, внизу история.
 BLANK = ScanReading(
-    brand="InBody", device="InBody270", date_text="03.05.2026 15:44", language="vi",
+    brand="InBody", device="InBody270", date_text="09.20.2026 15:44", language="vi",
+    other_dates=("01.13.26 13:15",),
     height_cm=180, age=30, sex="male", weight_kg=91.8, skeletal_muscle_kg=41.4,
     body_fat_kg=19.8, body_fat_pct=21.6, fat_free_kg=72.0, water_l=52.8,
     protein_kg=14.3, minerals_kg=4.86, visceral_level=9, bmr_kcal=1925,
@@ -111,7 +112,7 @@ async def test_бланк_читается_сходится_и_сохраняе�
         d = await _scan_card(c, fake_container)
         assert d["kind"] == "body_scan"
         assert d["bad"] == [] and not d["needs_confirm"]
-        assert d["scan"]["date"] == "2026-05-03" and d["scan"]["time"] == "15:44"
+        assert d["scan"]["date"] == "2026-09-20" and d["scan"]["time"] == "15:44"
         r = await c.post("/api/body-scans", headers=_hdr(),
                          json={"draft_id": d["draft_id"], "fields": {}})
         assert r.status_code == 200, r.text
@@ -190,14 +191,15 @@ async def test_чужой_бланк_просит_подтверждения(cli
     assert d["foreign"] and d["needs_confirm"]
 
 
-async def test_английская_дата_неоднозначна(client, fake_container):
+async def test_дата_без_подсказок_неоднозначна(client, fake_container):
     """AC-MA-62."""
     from dataclasses import replace
 
     async with client as c:
         await _login(c)
         d = await _scan_card(c, fake_container,
-                             replace(BLANK, date_text="05.03.2026 08:10", language="en"))
+                             replace(BLANK, date_text="05.03.2026 08:10", language="en",
+                                     other_dates=()))
         assert d["date_ambiguous"] and d["needs_confirm"]
         # Человек подтвердил дату полем — сохраняется без «Всё верно».
         ok = await c.post("/api/body-scans", headers=_hdr(), json={
@@ -206,10 +208,54 @@ async def test_английская_дата_неоднозначна(client, fa
     assert ok.json()["scan"]["date"] == "2026-05-03"
 
 
+async def test_история_бланка_решает_порядок_даты(client, fake_container):
+    """AC-MA-64: вьетнамский InBody печатает М.Д — это видно по истории внизу бланка."""
+    from dataclasses import replace
+
+    async with client as c:
+        await _login(c)
+        d = await _scan_card(c, fake_container, replace(
+            BLANK, date_text="05.03.2026 08:10"))
+    assert d["scan"]["date"] == "2026-05-03"
+    assert not d["date_ambiguous"] and not d["needs_confirm"]
+
+
+async def test_несошедшийся_бланк_перечитывается(client, fake_container):
+    """Числа не сошлись — читаем бланк второй раз и берём связное чтение."""
+    from dataclasses import replace
+
+    async with client as c:
+        await _login(c)
+        fake_container.vision = StubVision(
+            None, scans=[replace(BLANK, body_fat_kg=91.8), BLANK])
+        r = await c.post("/api/meals/photo", content=JPEG, headers=_hdr())
+    d = r.json()
+    assert fake_container.vision.scan_calls == 2
+    assert d["bad"] == [] and not d["needs_confirm"]
+    assert d["scan"]["body_fat_kg"] == 19.8
+
+
+async def test_нечитаемая_дата_не_отказ(client, fake_container):
+    """AC-MA-65, MA-INV-55: бланк с хорошими числами из-за даты не выбрасываем."""
+    from dataclasses import replace
+
+    async with client as c:
+        await _login(c)
+        d = await _scan_card(c, fake_container, replace(BLANK, date_text="—"))
+        assert d["kind"] == "body_scan" and d["date_problem"] == "unread"
+        assert d["needs_confirm"]
+        no = await c.post("/api/body-scans", headers=_hdr(),
+                          json={"draft_id": d["draft_id"], "fields": {}})
+        assert no.status_code == 400 and no.json()["error"]["code"] == "scan_mismatch"
+        ok = await c.post("/api/body-scans", headers=_hdr(), json={
+            "draft_id": d["draft_id"], "fields": {"date": "2026-09-20"}})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["scan"]["date"] == "2026-09-20"
+
+
 @pytest.mark.parametrize(("patch", "message"), [
     ({"brand": "Tanita", "device": "BC-545"}, "InBody"),
     ({"weight_kg": None}, "вес"),
-    ({"date_text": "—"}, "дату"),
 ])
 async def test_бланк_отказы(client, fake_container, patch, message):
     from dataclasses import replace
@@ -225,7 +271,7 @@ async def test_дата_в_будущем_отказ(client, fake_container):
 
     async with client as c:
         await _login(c)
-        d = await _scan_card(c, fake_container, replace(BLANK, date_text="03.05.2099 10:00"))
+        d = await _scan_card(c, fake_container, replace(BLANK, date_text="05.03.2099 10:00"))
         r = await c.post("/api/body-scans", headers=_hdr(),
                          json={"draft_id": d["draft_id"], "fields": {}, "confirmed": True})
     assert d["date_problem"] == "future"
@@ -274,13 +320,13 @@ async def test_сводка_после_двух_замеров(client, fake_cont
         uid = await _login(c)
         await _cut_goal(fake_container, uid)
         first = await _scan_card(c, fake_container, replace(
-            BLANK, date_text=(datetime.now(UTC) - timedelta(days=60)).strftime("%d.%m.%Y 08:00")))
+            BLANK, date_text=(datetime.now(UTC) - timedelta(days=60)).strftime("%m.%d.%Y 08:00")))
         await c.post("/api/body-scans", headers=_hdr(),
                      json={"draft_id": first["draft_id"], "fields": {}})
         for i in range(61):
             await _eat(fake_container, uid, datetime.now(UTC) - timedelta(days=i, hours=1), 2100)
         second = await _scan_card(c, fake_container, replace(
-            BLANK, date_text=datetime.now(UTC).strftime("%d.%m.%Y 00:05"),
+            BLANK, date_text=datetime.now(UTC).strftime("%m.%d.%Y 00:05"),
             weight_kg=88.8, body_fat_kg=17.4, fat_free_kg=71.4, body_fat_pct=19.6,
             water_l=52.3, protein_kg=14.2, minerals_kg=4.85, bmr_kcal=1912,
             skeletal_muscle_kg=41.0))
@@ -325,7 +371,7 @@ async def test_сверка_по_двум_близким_замерам(client, 
         for days_ago, w, f, ffm in ((10, 91.8, 19.8, 72.0), (0, 90.8, 19.0, 71.8)):
             d = await _scan_card(c, fake_container, replace(
                 BLANK, date_text=(datetime.now(UTC) - timedelta(days=days_ago))
-                .strftime("%d.%m.%Y 00:05"), weight_kg=w, body_fat_kg=f, fat_free_kg=ffm,
+                .strftime("%m.%d.%Y 00:05"), weight_kg=w, body_fat_kg=f, fat_free_kg=ffm,
                 body_fat_pct=None, water_l=None, bmr_kcal=None, skeletal_muscle_kg=None))
             r = await c.post("/api/body-scans", headers=_hdr(),
                              json={"draft_id": d["draft_id"], "fields": {}, "confirmed": True})

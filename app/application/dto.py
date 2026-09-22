@@ -92,6 +92,9 @@ class ScanReading:
     device: str | None = None
     date_text: str = ""
     language: str = ""
+    # Прочие даты той же распечатки (история замеров внизу бланка): по ним
+    # определяется порядок дня и месяца, когда сама дата неоднозначна (MA-INV-55).
+    other_dates: tuple[str, ...] = ()
     height_cm: float | None = None
     age: int | None = None
     sex: str | None = None

@@ -119,7 +119,7 @@ def _callback(data: str) -> CallbackQuery:
 async def test_сохранение_без_подтверждения_при_расхождении():
     scans = AsyncMock()
     scans.save.side_effect = ValueError("mismatch")
-    state = _State({"scan": SCAN, "ambiguous": False})
+    state = _State({"scan": SCAN, "date_state": "ok"})
     cb = _callback("scan:save")
     await handlers.on_scan_btn(cb, object(), AsyncMock(), state, scans)
     assert scans.save.await_args.kwargs["confirmed"] is False
@@ -136,11 +136,11 @@ async def test_подтверждение_сохраняет_и_предлага
                         bmr_source="inbody", activity="medium", burn_kcal=2647,
                         base="estimate", fat_free_kg=72.0)
     scans.overview.return_value = SimpleNamespace(proposal=prop)
-    state = _State({"scan": SCAN, "ambiguous": True})
+    state = _State({"scan": SCAN, "date_state": "ambiguous"})
     cb = _callback("scan:confirm")
     await handlers.on_scan_btn(cb, object(), AsyncMock(), state, scans)
     kw = scans.save.await_args.kwargs
-    assert kw["confirmed"] is True and kw["date_ambiguous"] is True
+    assert kw["confirmed"] is True and kw["date_state"] == "ambiguous"
     assert state.cleared
     last = cb.bot.await_args_list[-1].args[0]
     assert "Цели по замеру" in last.text and last.reply_markup is not None

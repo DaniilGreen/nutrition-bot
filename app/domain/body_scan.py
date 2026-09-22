@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, fields, replace
 from datetime import datetime
 
@@ -18,9 +19,11 @@ PROTEIN_PER_KG_FFM = {"cut": 2.4, "maintain": 2.0, "bulk": 2.2}
 PROTEIN_FLOOR_PER_KG = 1.6
 
 # Допуски сверки. InBody округляет каждую строку до десятых, поэтому сумма
-# трёх округлённых чисел может разойтись на пару десятых сама по себе.
-TOL_MASS = 0.3
-TOL_PCT = 0.5
+# трёх округлённых чисел может разойтись на пару десятых сама по себе. Ближе к
+# этому пределу и держим: 0.3 кг жира — это 2 800 ккал в расчёте расхода, а
+# лишний флажок стоит человеку одного нажатия раз в месяц.
+TOL_MASS = 0.2
+TOL_PCT = 0.3
 TOL_FFM_PARTS = 0.6
 TOL_BMR = 15.0
 
@@ -113,26 +116,51 @@ def foreign(s: BodyScan, prev: BodyScan | None, last_weight: tuple[datetime, flo
     return False
 
 
-def parse_blank_date(text: str, language: str) -> tuple[tuple[int, int, int] | None, bool]:
-    """Дата с бланка → ((год, месяц, день), неоднозначна ли).
+def _date_order(nums: list[int]) -> str | None:
+    """Порядок чисел в дате по самим числам: `ymd` | `dmy` | `mdy`, None — не решить."""
+    if len(nums) < 3:
+        return None
+    a, b = nums[0], nums[1]
+    if a > 31:
+        return "ymd"
+    if a > 12 and b <= 12:
+        return "dmy"
+    if b > 12 and a <= 12:
+        return "mdy"
+    if a == b <= 12:
+        return "mdy"          # 05.05 — порядок ничего не меняет
+    return None
 
-    Год первым — Г.М.Д. Английский бланк при дне и месяце ≤ 12 — неоднозначен
-    (американский порядок М.Д). Остальные языки — Д.М.Г, как на вьетнамском и
-    русском бланках."""
+
+def parse_blank_date(
+    text: str, language: str, others: Sequence[str] = ()
+) -> tuple[tuple[int, int, int] | None, bool]:
+    """Дата с бланка → ((год, месяц, день), неоднозначна ли). MA-INV-55.
+
+    Порядок дня и месяца задаёт прибор, а не язык бланка: вьетнамский InBody270
+    печатает `09.22.2026`. Поэтому решают числа — а когда обе позиции ≤ 12,
+    прочие даты той же распечатки (история замеров внизу бланка).
+    """
     nums = [int(x) for x in re.findall(r"\d+", text or "")]
     if len(nums) < 3:
         return None, True
+    order = _date_order(nums)
+    if order is None:
+        for other in others:
+            hint = _date_order([int(x) for x in re.findall(r"\d+", other or "")])
+            if hint in ("dmy", "mdy"):
+                order = hint
+                break
+    ambiguous = order is None
+    if order is None:
+        # Ни бланк, ни история не решили. Русские приборы печатают Д.М, прочие — М.Д.
+        order = "dmy" if language.lower().startswith("ru") else "mdy"
     a, b, c = nums[:3]
-    if a > 31:
+    if order == "ymd":
         y, m, d = a, b, c
-        ambiguous = False
     else:
         y = c if c > 99 else 2000 + c
-        d, m = a, b
-        ambiguous = False
-        if language.lower().startswith("en"):
-            m, d = a, b
-            ambiguous = a <= 12 and b <= 12 and a != b
+        d, m = (a, b) if order == "dmy" else (b, a)
     if not (1 <= m <= 12 and 1 <= d <= 31):
         return None, True
     return (y, m, d), ambiguous
@@ -257,12 +285,20 @@ def demo() -> None:
     assert foreign(replace(later, weight_kg=60), None, (datetime(2026, 6, 30), 89.5))
     assert not foreign(owner, None, None)
 
-    # Даты: вьетнамский Д.М.Г, год первым, английский неоднозначен (AC-MA-62).
-    assert parse_blank_date("03.05.2026 15:44", "vi") == ((2026, 5, 3), False)
+    # Даты. AC-MA-63: вьетнамский бланк печатает М.Д.Г — решает число 22, не язык.
+    assert parse_blank_date("09.22.2026 15:26", "vi") == ((2026, 9, 22), False)
     assert parse_blank_date("2026.05.03", "en") == ((2026, 5, 3), False)
-    assert parse_blank_date("05.03.2026", "en") == ((2026, 5, 3), True)
-    assert parse_blank_date("05.23.2026", "en") == ((2026, 5, 23), False)
+    assert parse_blank_date("22.09.2026", "vi") == ((2026, 9, 22), False)
     assert parse_blank_date("31.12.26", "ru") == ((2026, 12, 31), False)
+    # AC-MA-62: обе позиции ≤ 12 и подсказок нет — неоднозначно.
+    assert parse_blank_date("05.03.2026", "en") == ((2026, 5, 3), True)
+    assert parse_blank_date("05.03.2026", "ru") == ((2026, 3, 5), True)
+    # AC-MA-64: история того же бланка решает порядок для всей распечатки.
+    assert parse_blank_date("05.03.2026", "vi", ["01.13.26 13:15"]) == ((2026, 5, 3), False)
+    assert parse_blank_date("05.03.2026", "vi", ["13.01.26 13:15"]) == ((2026, 3, 5), False)
+    assert parse_blank_date("05.03.2026", "vi", ["2026.01.13"]) == ((2026, 5, 3), True)
+    # Одинаковые день и месяц — порядок не важен.
+    assert parse_blank_date("05.05.2026", "vi") == ((2026, 5, 5), False)
     assert parse_blank_date("", "vi") == (None, True)
     assert parse_blank_date("13.13.2026", "vi") == (None, True)
     print("замер состава: ок")

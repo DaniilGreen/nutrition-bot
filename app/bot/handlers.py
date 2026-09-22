@@ -762,13 +762,13 @@ async def on_photo(
         return
     await session.commit()  # расход vision уже записан своей сессией; тут — пины этикетки
     if isinstance(result, BodyScanRead):
-        scan, ambiguous, reason = from_reading(result.reading, app_user.timezone)
+        scan, date_state, reason = from_reading(result.reading, app_user.timezone)
         if scan is None:
             await message.answer(SCAN_REFUSAL[reason or "no_numbers"])
             return
-        check = await scans.check(app_user, scan, date_ambiguous=ambiguous)
+        check = await scans.check(app_user, scan, date_state=date_state)
         await state.set_state(MealStates.awaiting_scan)
-        await state.update_data(scan=check.scan, ambiguous=ambiguous)
+        await state.update_data(scan=check.scan, date_state=date_state)
         await message.answer(format_scan_card(check, app_user.timezone),
                              reply_markup=scan_keyboard(check))
         return
@@ -859,7 +859,7 @@ async def on_scan_btn(
     try:
         saved, updated = await scans.save(
             app_user, scan, confirmed=action == "confirm",
-            date_ambiguous=bool(data.get("ambiguous")),
+            date_state=str(data.get("date_state") or "ok"),
         )
     except ValueError as exc:
         text = ("Дата замера в будущем — сними бланк ещё раз." if str(exc) == "future"

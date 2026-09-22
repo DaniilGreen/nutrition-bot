@@ -362,7 +362,6 @@ def format_photo_card(
 SCAN_REFUSAL = {
     "not_inbody": "Пока понимаю только бланки InBody — у других приборов обмен считается иначе.",
     "no_numbers": "Не нашёл на бланке вес и жир — сними его ровно и целиком, при свете.",
-    "no_date": "Не разобрал дату на бланке — сними верх бланка чётче.",
 }
 
 _SCAN_LINES = (
@@ -410,6 +409,9 @@ def format_scan_card(check: object, tz: str) -> str:
         notes.append("Похоже, бланк не твой: рост, пол, возраст или вес не сходятся с прошлыми.")
     if check.date_ambiguous:  # type: ignore[attr-defined]
         notes.append("Дату можно прочитать двумя способами — проверь её.")
+    if check.date_problem == "unread":  # type: ignore[attr-defined]
+        notes.append("Дату на бланке не разобрал — поставил сегодняшнюю. Другая дата — "
+                     "поправь её в мини-аппе.")
     if check.date_problem == "old":  # type: ignore[attr-defined]
         notes.append("Замеру больше двух лет — точно этот?")
     if check.date_problem == "future":  # type: ignore[attr-defined]

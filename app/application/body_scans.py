@@ -45,12 +45,13 @@ class ScanCheck:
     bad: set[str]
     foreign: bool
     date_ambiguous: bool
-    date_problem: str | None      # future | old | None
+    date_problem: str | None      # future | old | unread | None
     existing: BodyScan | None
 
     @property
     def needs_confirm(self) -> bool:
-        return bool(self.bad) or self.foreign or self.date_ambiguous or self.date_problem == "old"
+        return (bool(self.bad) or self.foreign or self.date_ambiguous
+                or self.date_problem in ("old", "unread"))
 
 
 @dataclass
@@ -87,20 +88,36 @@ class Overview:
     burn_kcal: float | None = None
 
 
-def from_reading(reading: ScanReading, tz: str) -> tuple[BodyScan | None, bool, str | None]:
-    """Прочитанное с бланка → замер. Третье — причина отказа: `not_inbody` (другие
-    приборы считают обмен иначе), `no_numbers` (нет веса или жира), `no_date`."""
+def from_reading(
+    reading: ScanReading, tz: str, *, today: date | None = None
+) -> tuple[BodyScan | None, str, str | None]:
+    """Прочитанное с бланка → (замер, состояние даты, причина отказа).
+
+    Состояние даты: `ok` | `ambiguous` (порядок дня и месяца не решён) |
+    `guessed` (дата не прочиталась, поставлена сегодняшняя). Отказ — только
+    `not_inbody` (другие приборы считают обмен иначе) и `no_numbers`: бланк с
+    хорошими числами из-за даты не выбрасываем, её поправит человек (MA-INV-55).
+    """
     if "inbody" not in f"{reading.brand} {reading.device or ''}".lower():
-        return None, False, "not_inbody"
+        return None, "ok", "not_inbody"
     if not reading.weight_kg or not reading.body_fat_kg:
-        return None, False, "no_numbers"
-    ymd, ambiguous = parse_blank_date(reading.date_text, reading.language or "")
-    if ymd is None:
-        return None, False, "no_date"
+        return None, "ok", "no_numbers"
+    ymd, ambiguous = parse_blank_date(
+        reading.date_text, reading.language or "", reading.other_dates
+    )
+    state = "ambiguous" if ambiguous else "ok"
     hm = re.search(r"(\d{1,2}):(\d{2})", reading.date_text or "")
     hh, mm = (int(hm.group(1)), int(hm.group(2))) if hm else (12, 0)
     if not (0 <= hh < 24 and 0 <= mm < 60):
         hh, mm = 12, 0
+    if ymd is None:
+        # Даты нет — ставим сегодня «сейчас»: полдень на утреннем бланке ушёл бы
+        # в будущее, а это отказ вместо карточки (MA-INV-55).
+        now_local = datetime.now(ZoneInfo(tz))
+        day = today or now_local.date()
+        ymd, state = (day.year, day.month, day.day), "guessed"
+        if (day, hh, mm) >= (now_local.date(), now_local.hour, now_local.minute):
+            hh, mm = now_local.hour, now_local.minute
     fat_free = reading.fat_free_kg or round(reading.weight_kg - reading.body_fat_kg, 1)
     scan = BodyScan(
         measured_at=datetime(*ymd, hh, mm, tzinfo=ZoneInfo(tz)),
@@ -119,7 +136,7 @@ def from_reading(reading: ScanReading, tz: str) -> tuple[BodyScan | None, bool, 
         sex=reading.sex,
         device=(reading.device or reading.brand or "")[:64] or None,
     )
-    return scan, ambiguous, None
+    return scan, state, None
 
 
 class BodyScanService:
@@ -140,7 +157,7 @@ class BodyScanService:
     # --- приём ------------------------------------------------------------
 
     async def check(
-        self, user: User, scan: BodyScan, *, date_ambiguous: bool = False
+        self, user: User, scan: BodyScan, *, date_state: str = "ok"
     ) -> ScanCheck:
         uid = _require_id(user)
         scan = replace(scan, user_id=uid)
@@ -150,6 +167,8 @@ class BodyScanService:
             problem = "future"
         elif (now - scan.measured_at).days > OLD_DAYS:
             problem = "old"
+        elif date_state == "guessed":
+            problem = "unread"      # MA-INV-55: дата не прочиталась, стоит сегодняшняя
         history = [s for s in await self._scans.list_for(uid)
                    if s.measured_at != scan.measured_at]
         prev = max((s for s in history if s.measured_at < scan.measured_at),
@@ -160,17 +179,17 @@ class BodyScanService:
             scan=scan,
             bad=mismatches(scan),
             foreign=foreign(scan, prev, last_weight),
-            date_ambiguous=date_ambiguous,
+            date_ambiguous=date_state == "ambiguous",
             date_problem=problem,
             existing=await self._scans.get_at(uid, scan.measured_at),
         )
 
     async def save(
         self, user: User, scan: BodyScan, *, confirmed: bool,
-        corrected: list[str] | None = None, date_ambiguous: bool = False,
+        corrected: list[str] | None = None, date_state: str = "ok",
     ) -> tuple[BodyScan, bool]:
         """MA-INV-50: несошедшееся сохраняется только с подтверждением."""
-        chk = await self.check(user, scan, date_ambiguous=date_ambiguous)
+        chk = await self.check(user, scan, date_state=date_state)
         if chk.date_problem == "future":
             raise ValueError("future")
         if chk.needs_confirm and not confirmed:

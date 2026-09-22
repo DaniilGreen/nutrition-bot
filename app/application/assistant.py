@@ -10,7 +10,15 @@ from statistics import median
 from zoneinfo import ZoneInfo
 
 from app.application.coach import LimitReached
-from app.application.dto import Intent, ParsedItem, ParsedMessage, PlateReading, Unit
+from app.application.body_scans import from_reading
+from app.application.dto import (
+    Intent,
+    ParsedItem,
+    ParsedMessage,
+    PlateReading,
+    ScanReading,
+    Unit,
+)
 from app.application.entities import Meal, MealItem, Product, User, WeightLog
 from app.application.meal_service import MealService
 from app.application.ports import (
@@ -45,6 +53,7 @@ from app.application.results import (
 )
 from app.application.stats_service import StatsService, _require_id
 from app.application.weight_service import WeightService
+from app.domain.body_scan import mismatches
 from app.domain.consensus import confidence_from_cv, median_cv
 from app.domain.duplicates import Candidate, group
 from app.domain.goals import Goal, Remaining, in_goal, remaining
@@ -190,6 +199,16 @@ class Assistant:
             scan = await self._vision.read_scan(image)
             if scan is None:
                 return Unknown(reason="не разобрал бланк — сними его ровно и целиком, при свете")
+            # Числа бланка связаны между собой (MA-INV-50): не сошлось — значит
+            # что-то прочитано неверно. Перечитываем один раз и берём чтение с
+            # меньшим числом расхождений — дешевле, чем сверять руками.
+            # ponytail: одна попытка и «лучшее из двух»; сводить поля по согласию
+            # двух чтений — если и этого будет мало.
+            gaps = _scan_gaps(scan, user.timezone)
+            if gaps:
+                again = await self._vision.read_scan(image)
+                if again is not None and len(_scan_gaps(again, user.timezone)) < len(gaps):
+                    scan = again
             return BodyScanRead(reading=scan)
         # Позиция, чьё имя после очистки пусто (одни цифры и знаки), не попала бы
         # в фразу — и карточка показала бы то, что не запишется. Отсекаем здесь.
@@ -705,3 +724,9 @@ def _first_unclarified_index(parsed: ParsedMessage) -> int | None:
         if item.unit is Unit.PORTION and item.portion_hint is None:
             return i
     return None
+
+
+def _scan_gaps(reading: ScanReading, tz: str) -> set[str]:
+    """Что на бланке не сходится с остальными числами. Пустое — чтение связное."""
+    scan, _, reason = from_reading(reading, tz)
+    return {reason or "no_scan"} if scan is None else mismatches(scan)

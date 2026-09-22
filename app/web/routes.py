@@ -462,7 +462,6 @@ async def commit_photo(
 _SCAN_REFUSAL = {
     "not_inbody": "Пока понимаю только бланки InBody — у других приборов обмен считается иначе.",
     "no_numbers": "Не нашёл на бланке вес и жир — сними его ровно и целиком.",
-    "no_date": "Не разобрал дату на бланке — сними верх бланка чётче.",
 }
 
 
@@ -470,13 +469,13 @@ async def _scan_draft(
     request: Request, user: User, scans: BodyScanService, result: BodyScanRead,
     *, token: str | None = None,
 ) -> dict[str, Any]:
-    scan, ambiguous, reason = from_reading(result.reading, user.timezone)
+    scan, date_state, reason = from_reading(result.reading, user.timezone)
     if scan is None:
         return {"kind": "unknown", "message": _SCAN_REFUSAL[reason or "no_numbers"]}
-    check = await scans.check(user, scan, date_ambiguous=ambiguous)
+    check = await scans.check(user, scan, date_state=date_state)
     if token is None:
         token = request.app.state.drafts.put(
-            _uid(user), {"scan": check.scan, "ambiguous": ambiguous, "read": check.scan},
+            _uid(user), {"scan": check.scan, "date_state": date_state, "read": check.scan},
             0, "бланк", "scan",
         )
     return scan_check_json(check, token, user.timezone)
@@ -569,8 +568,9 @@ async def check_scan(
         scan = _scan_from_fields(draft.payload["read"], fields, user.timezone)
     except (TypeError, ValueError) as exc:
         raise bad_request("bad_scan", "Число не разобрал — проверь поле.") from exc
-    ambiguous = bool(draft.payload["ambiguous"]) and not fields.get("date")
-    check = await scans.check(user, scan, date_ambiguous=ambiguous)
+    # Дату поправили руками — вопрос к ней снят (MA-INV-55).
+    state = "ok" if fields.get("date") else str(draft.payload["date_state"])
+    check = await scans.check(user, scan, date_state=state)
     return scan_check_json(check, token, user.timezone)
 
 
@@ -594,11 +594,11 @@ async def save_scan(
     except (TypeError, ValueError) as exc:
         raise bad_request("bad_scan", "Числа замера не разобрал — проверь поля.") from exc
     corrected = [f for f in SCAN_FIELDS if getattr(scan, f) != getattr(read, f)]
-    ambiguous = bool(draft.payload["ambiguous"]) and not (fields.get("date"))
+    state = "ok" if fields.get("date") else str(draft.payload["date_state"])
     try:
         saved, updated = await scans.save(
             user, scan, confirmed=bool(body.get("confirmed")),
-            corrected=corrected, date_ambiguous=ambiguous,
+            corrected=corrected, date_state=state,
         )
     except ValueError as exc:
         if str(exc) == "future":

@@ -467,11 +467,15 @@ class StubVision:
     этикетки проходят и через общий вход фото."""
 
     def __init__(self, item: ParsedItem | None, plate: PlateReading | None = None,
-                 scan: object | None = None) -> None:
+                 scan: object | None = None, scans: list | None = None) -> None:
         self._item = item
         self._plate = plate
-        self._scan = scan
+        # `scans` — очередь чтений бланка: второе отдаётся при перечитывании
+        # несошедшегося (§6.24). Последнее повторяется, если запросов больше.
+        self._scans = list(scans) if scans else None
+        self._scan = scan if scans is None else scans[0]
         self.photo_calls = 0
+        self.scan_calls = 0
         self.seen_caption: str | None = None
 
     async def read_photo(self, image: bytes, caption: str = "") -> PlateReading:
@@ -484,6 +488,9 @@ class StubVision:
         return deepcopy(self._plate)
 
     async def read_scan(self, image: bytes):
+        self.scan_calls += 1
+        if self._scans:
+            return deepcopy(self._scans.pop(0) if len(self._scans) > 1 else self._scans[0])
         return deepcopy(self._scan)
 
     async def read_label(self, image: bytes) -> ParsedItem | None:
