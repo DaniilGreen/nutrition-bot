@@ -28,6 +28,11 @@ BLANK = ScanReading(
     height_cm=180, age=30, sex="male", weight_kg=91.8, skeletal_muscle_kg=41.4,
     body_fat_kg=19.8, body_fat_pct=21.6, fat_free_kg=72.0, water_l=52.8,
     protein_kg=14.3, minerals_kg=4.86, visceral_level=9, bmr_kcal=1925,
+    smi=9.4, inbody_score=82,
+    lean_arm_l_kg=4.47, lean_arm_r_kg=4.29, lean_trunk_kg=33.2,
+    lean_leg_l_kg=10.62, lean_leg_r_kg=10.57,
+    fat_arm_l_kg=1.1, fat_arm_r_kg=1.1, fat_trunk_kg=11.2,
+    fat_leg_l_kg=2.6, fat_leg_r_kg=2.6,
 )
 
 
@@ -218,6 +223,71 @@ async def test_история_бланка_решает_порядок_даты(
             BLANK, date_text="05.03.2026 08:10"))
     assert d["scan"]["date"] == "2026-05-03"
     assert not d["date_ambiguous"] and not d["needs_confirm"]
+
+
+async def test_сегменты_и_индекс_доезжают_до_карточки(client, fake_container):
+    """AC-MA-66: связь «индекс × рост² = мышцы конечностей» сошлась."""
+    async with client as c:
+        await _login(c)
+        d = await _scan_card(c, fake_container)
+    assert d["bad"] == [] and not d["needs_confirm"] and not d["dropped_segments"]
+    assert d["scan"]["smi"] == 9.4 and d["scan"]["inbody_score"] == 82
+    assert d["scan"]["segments"]["arm_l"] == {"lean": 4.47, "fat": 1.1}
+    assert d["scan"]["segments"]["trunk"]["lean"] == 33.2
+
+
+async def test_кривые_сегменты_отбрасываются_а_не_блокируют(client, fake_container):
+    """AC-MA-67, MA-INV-57: сохранение не гаснет из-за декоративного блока."""
+    from dataclasses import replace
+
+    async with client as c:
+        await _login(c)
+        d = await _scan_card(c, fake_container, replace(BLANK, lean_leg_r_kg=1.5))
+        assert d["bad"] == [] and not d["needs_confirm"] and d["dropped_segments"]
+        assert d["scan"]["segments"] is None
+        ok = await c.post("/api/body-scans", headers=_hdr(),
+                          json={"draft_id": d["draft_id"], "fields": {}})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["scan"]["segments"] is None
+    assert ok.json()["scan"]["smi"] == 9.4      # индекс сам по себе не пострадал
+
+
+async def test_неполные_сегменты_не_сохраняются(client, fake_container):
+    """AC-MA-68: четыре из пяти всегда провалят сумму — значит их нет."""
+    from dataclasses import replace
+
+    async with client as c:
+        await _login(c)
+        d = await _scan_card(c, fake_container, replace(BLANK, fat_trunk_kg=None))
+    assert d["scan"]["segments"] is None and not d["needs_confirm"]
+
+
+async def test_темп_и_срок_в_итогах(client, fake_container):
+    """AC-MA-72, AC-MA-74 и AC-MA-76 на живом API."""
+    from dataclasses import replace
+
+    async with client as c:
+        uid = await _login(c)
+        await _cut_goal(fake_container, uid)
+        for days_ago, w, f, ffm in ((34, 93.4, 22.8, 70.6), (0, 91.6, 20.9, 70.7)):
+            d = await _scan_card(c, fake_container, replace(
+                BLANK, date_text=(datetime.now(UTC) - timedelta(days=days_ago))
+                .strftime("%m.%d.%Y 08:00"), weight_kg=w, body_fat_kg=f, fat_free_kg=ffm,
+                body_fat_pct=round(f / w * 100, 1), smi=None, skeletal_muscle_kg=None,
+                water_l=None, protein_kg=None, minerals_kg=None, bmr_kcal=None))
+            r = await c.post("/api/body-scans", headers=_hdr(),
+                             json={"draft_id": d["draft_id"], "fields": {}, "confirmed": True})
+            assert r.status_code == 200, r.text
+        one = (await c.get("/api/body-scans", headers=_hdr())).json()
+        assert one["pace"]["fat_kg_per_month"] == -1.7
+        assert one["pace"]["noise_kg_per_month"] == 1.3 and one["pace"]["meaningful"]
+        # Цели по проценту жира нет — срока тоже нет.
+        assert one["forecast"] == {"verdict": "no_target", "target_pct": None, "months": None}
+
+        await c.patch("/api/settings/prefs", headers=_hdr(), json={"target_fat_pct": 15})
+        two = (await c.get("/api/body-scans", headers=_hdr())).json()
+    assert two["forecast"]["verdict"] == "ok"
+    assert 4.5 < two["forecast"]["months"] < 5.5
 
 
 async def test_несошедшийся_бланк_перечитывается(client, fake_container):

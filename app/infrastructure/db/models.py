@@ -41,6 +41,11 @@ class UserORM(Base):
     # Настройки оформления (§6.5). Одной колонкой, а не восемью: они не влияют
     # на данные, только на то, как эти данные нарисованы.
     ui_prefs: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"), default=dict)
+    # Когда последний раз напомнили о замере состава (§6.24). В памяти процесса
+    # отметке не место: деплой перезапускает бота, и напоминание задублируется.
+    scan_nudged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     goal: Mapped[UserGoalORM | None] = relationship(
         back_populates="user", uselist=False, cascade="all, delete-orphan"
@@ -167,6 +172,12 @@ class BodyScanORM(Base):
     age: Mapped[int | None] = mapped_column(Integer, nullable=True)
     sex: Mapped[str | None] = mapped_column(String(8), nullable=True)
     device: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    smi: Mapped[float | None] = mapped_column(Float, nullable=True)
+    inbody_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Десять чисел сегментного анализа читаются только целиком и только на экран:
+    # поштучно по ним не фильтруют и не агрегируют — граница та же, что у
+    # `ui_prefs` в миграции 0010. NULL — «бланк читали без сегментов».
+    segments: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     corrected_fields: Mapped[list] = mapped_column(
         JSONB, default=list, server_default=text("'[]'::jsonb")
     )

@@ -15,9 +15,10 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.application.entities import User
-from app.application.ports import MealRepo, ProductRepo, WeightRepo
+from app.application.ports import BodyScanRepo, MealRepo, ProductRepo, WeightRepo
 from app.application.stats_service import StatsService
 from app.clock import Clock, utcnow
+from app.domain.body_scan import pace
 from app.domain.prefs import day_start
 from app.domain.timeframe import local_date
 
@@ -43,6 +44,7 @@ class CoachData:
         meals: MealRepo,
         weights: WeightRepo,
         products: ProductRepo | None = None,
+        scans: BodyScanRepo | None = None,
         clock: Clock = utcnow,
     ) -> None:
         self._user = user
@@ -50,6 +52,7 @@ class CoachData:
         self._meals = meals
         self._weights = weights
         self._products = products
+        self._scans = scans
         self._clock = clock
 
     @property
@@ -159,6 +162,41 @@ class CoachData:
             if pid in estimated
         ][:10]
         return out
+
+
+    async def body_scans(self, limit: Any = 6) -> dict[str, Any]:
+        """Замеры состава тела и темп между двумя последними (§6.24).
+
+        Отдаём то, что нельзя вывести из веса: сколько ушло жира, а сколько —
+        безжировой массы. На вопрос «не теряю ли мышцы» другого ответа нет.
+        """
+        if self._scans is None:
+            return {"scans": [], "pace": None}
+        rows = await self._scans.list_for(self._uid)
+        rows = rows[-_clamp(limit, 1, 20, 6):]
+        step = pace(rows[-2], rows[-1]) if len(rows) >= 2 else None
+        return {
+            "scans": [
+                {
+                    "date": s.measured_at.date().isoformat(),
+                    "weight_kg": s.weight_kg,
+                    "body_fat_kg": s.body_fat_kg,
+                    "body_fat_pct": s.body_fat_pct,
+                    "fat_free_kg": s.fat_free_kg,
+                    "skeletal_muscle_kg": s.skeletal_muscle_kg,
+                    "smi": s.smi,
+                    "inbody_score": s.inbody_score,
+                }
+                for s in rows
+            ],
+            "pace": None if step is None else {
+                "days": step.days,
+                "fat_kg_per_month": step.fat_kg_per_month,
+                "lean_kg_per_month": step.lean_kg_per_month,
+                # Меньше этого — погрешность прибора, а не изменение.
+                "noise_kg_per_month": step.noise_kg_per_month,
+            },
+        }
 
 
 def _parse_day(value: Any) -> date:

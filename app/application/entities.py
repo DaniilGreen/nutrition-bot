@@ -24,6 +24,7 @@ class User:
     onboarded_at: datetime | None = None  # None → первый запуск, показать визард (FR-24)
     ui_prefs: dict = field(default_factory=dict)  # оформление, §6.5
     created_at: datetime | None = None  # с какого дня считать «N из 7» (§6.23)
+    scan_nudged_at: datetime | None = None  # когда напоминали о замере (§6.24)
 
 
 @dataclass

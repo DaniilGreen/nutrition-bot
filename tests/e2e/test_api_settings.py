@@ -68,7 +68,8 @@ async def test_частичная_правка_не_сбрасывает_ост�
     assert r.json()["prefs"] == {"hero": "rings", "period": 7,
                                  "foot_third": "weight", "mic_first": False,
                                  "feed_order": "new_first", "day_start": 0,
-                                 "bmr_source": "inbody", "activity": "medium"}
+                                 "bmr_source": "inbody", "activity": "medium",
+                                 "target_fat_pct": None}
 
 
 @pytest.mark.parametrize(

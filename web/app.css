@@ -264,6 +264,31 @@ nav button[aria-current="page"]{color:var(--accent)}
   box-shadow:inset 3px 0 0 var(--alert);font-size:var(--f-caption);line-height:1.5}
 .scanwarn.ok{box-shadow:inset 3px 0 0 var(--surface-3);color:var(--text-muted)}
 .scan .primary,.just .primary{max-width:520px}
+/* ── балл, темп и сегменты бланка (§6.24) ────────────────────────────── */
+/* Дельта отделена gap'ом, а не margin-left:auto: прижатый бейдж в строке без
+   потолка уехал бы от числа на сотни пикселей на широком окне. Потолок — в
+   пикселях, не в процентах (web/responsive.md). */
+.score{display:flex;align-items:baseline;gap:var(--s-3);max-width:420px;margin-top:var(--s-2)}
+.score .v{font-size:var(--f-t1);font-weight:700;line-height:1;letter-spacing:-.5px}
+.score .v .unit{font-size:var(--f-caption);color:var(--text-muted);font-weight:400;
+  letter-spacing:0}
+.score .d{font-size:var(--f-caption);color:var(--text-muted)}
+.bwc .faint{color:var(--text-faint)}
+/* Схема тела: слева левая сторона, справа правая, туловище по центру на две
+   строки. ПОТОЛОК ОБЯЗАТЕЛЕН — законная сетка без него и есть третья поломка
+   из web/responsive.md, которую check.mjs не ловит. */
+.segs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--s-2);
+  max-width:420px;margin-top:var(--s-3)}
+.seg{background:var(--surface-2);border-radius:var(--r-sm);padding:var(--s-2);min-width:0;
+  display:flex;flex-direction:column;justify-content:center;gap:2px}
+.seg.tr{grid-row:span 2}
+.seg .nm{font-size:var(--f-micro);color:var(--text-muted);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.seg .v{font-size:var(--f-body);font-weight:700;line-height:1.1}
+.seg .f{font-size:var(--f-micro);color:var(--text-faint)}
+.seg .f.alert{color:var(--alert);margin-top:4px}
+/* .track несёт margin-top:var(--s-3) — в ячейке высотой под 80px это провал. */
+.seg .track{margin-top:4px;height:6px}
 .bw{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:var(--s-3);
   max-width:520px;margin-top:var(--s-3)}
 .bwc .v{font-size:var(--f-t3);font-weight:700;margin:2px 0}

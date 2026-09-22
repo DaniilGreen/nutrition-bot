@@ -372,12 +372,13 @@ _SCAN_LINES = (
     ("fat_free_kg", "Безжировая масса", "кг"),
     ("visceral_level", "Висцеральный жир", "· норма 1–9"),
     ("bmr_kcal", "Базовый обмен", "ккал"),
+    ("smi", "Мышечный индекс", "кг/м²"),
     ("water_l", "Вода", "л"),
     ("protein_kg", "Белок", "кг"),
     ("minerals_kg", "Минералы", "кг"),
 )
 _ALWAYS = {"weight_kg", "skeletal_muscle_kg", "body_fat_kg", "body_fat_pct", "fat_free_kg",
-           "visceral_level", "bmr_kcal", "water_l"}
+           "visceral_level", "bmr_kcal", "water_l", "smi"}
 
 
 def _num(v: float) -> str:
@@ -401,7 +402,22 @@ def format_scan_card(check: object, tz: str) -> str:
             continue
         mark = "⚠️ " if key in bad else ""
         lines.append(f"{mark}{label}: <b>{_num(v)}</b> {unit}")
+    if s.inbody_score is not None:
+        lines.append(f"Балл InBody: <b>{_num(s.inbody_score)}</b> из 100")
+    if s.lean_trunk_kg is not None:
+        lines += [
+            "",
+            "<i>Сегменты, безжировая (жир), кг:</i>",
+            f"Руки {_num(s.lean_arm_l_kg)} ({_num(s.fat_arm_l_kg)}) · "
+            f"{_num(s.lean_arm_r_kg)} ({_num(s.fat_arm_r_kg)})",
+            f"Ноги {_num(s.lean_leg_l_kg)} ({_num(s.fat_leg_l_kg)}) · "
+            f"{_num(s.lean_leg_r_kg)} ({_num(s.fat_leg_r_kg)})",
+            f"Туловище {_num(s.lean_trunk_kg)} ({_num(s.fat_trunk_kg)})",
+        ]
     notes = []
+    if getattr(check, "dropped_segments", False):
+        notes.append("Сегментный анализ не сошёлся с безжировой массой — сохраню без него. "
+                     "На цели он не влияет.")
     if bad:
         notes.append("Отмеченные числа не сходятся с остальными — сверь с бланком. Поправить "
                      "их можно в мини-аппе: сними бланк там.")

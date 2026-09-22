@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.entities import Meal, MealItem, Product, User, WeightLog
-from app.domain.body_scan import BodyScan
+from app.domain.body_scan import SEGMENT_FIELDS, BodyScan
 from app.domain.goals import Goal
 from app.domain.value_objects import Density, Macros
 from app.infrastructure.db.models import (
@@ -37,6 +37,7 @@ def _user_to_domain(o: UserORM) -> User:
         onboarded_at=o.onboarded_at,
         ui_prefs=dict(o.ui_prefs or {}),
         created_at=o.created_at,
+        scan_nudged_at=o.scan_nudged_at,
     )
 
 
@@ -154,6 +155,13 @@ class SqlUserRepo:
         if orm is None:
             return
         orm.ui_prefs = prefs
+        await self._s.flush()
+
+    async def mark_scan_nudged(self, user_id: int, at: datetime) -> None:
+        orm = await self._s.get(UserORM, user_id)
+        if orm is None:
+            return
+        orm.scan_nudged_at = at
         await self._s.flush()
 
 
@@ -602,12 +610,20 @@ class SqlBugRepo:
 _SCAN_COLUMNS = (
     "measured_at", "weight_kg", "body_fat_kg", "fat_free_kg", "body_fat_pct",
     "skeletal_muscle_kg", "water_l", "protein_kg", "minerals_kg", "visceral_level",
-    "bmr_kcal", "height_cm", "age", "sex", "device",
+    "bmr_kcal", "height_cm", "age", "sex", "device", "smi", "inbody_score",
 )
 
 
 def _scan_to_domain(o: BodyScanORM) -> BodyScan:
-    return BodyScan(id=o.id, user_id=o.user_id, **{c: getattr(o, c) for c in _SCAN_COLUMNS})
+    """Сегменты лежат одним JSONB, а в домене они плоские (§6.24 «Данные»).
+
+    Фильтр по известным именам: база может оказаться старше или новее кода.
+    """
+    segments = {k: v for k, v in (o.segments or {}).items() if k in SEGMENT_FIELDS}
+    return BodyScan(
+        id=o.id, user_id=o.user_id,
+        **{c: getattr(o, c) for c in _SCAN_COLUMNS}, **segments,
+    )
 
 
 class SqlBodyScanRepo:
@@ -631,7 +647,10 @@ class SqlBodyScanRepo:
         # ON CONFLICT, а не «прочитал — решил»: двойной тап по «Сохранить» в боте
         # иначе давал две вставки и IntegrityError вместо обновления (MA-INV-51).
         values = {c: getattr(scan, c) for c in _SCAN_COLUMNS}
-        values.update(user_id=scan.user_id, corrected_fields=sorted(corrected or []))
+        # Блок сегментов заменяется целиком: повторный бланк не сливает ключи.
+        segments = {f: getattr(scan, f) for f in SEGMENT_FIELDS if getattr(scan, f) is not None}
+        values.update(user_id=scan.user_id, corrected_fields=sorted(corrected or []),
+                      segments=segments or None)
         stmt = pg_insert(BodyScanORM).values(**values)
         stmt = stmt.on_conflict_do_update(
             constraint="uq_body_scans_user_time",

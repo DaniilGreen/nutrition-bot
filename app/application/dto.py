@@ -108,3 +108,16 @@ class ScanReading:
     minerals_kg: float | None = None
     visceral_level: float | None = None
     bmr_kcal: float | None = None
+    # D-MA-15. Имена совпадают с полями BodyScan — перенос идёт одним словарём.
+    smi: float | None = None
+    inbody_score: float | None = None
+    lean_arm_l_kg: float | None = None
+    lean_arm_r_kg: float | None = None
+    lean_trunk_kg: float | None = None
+    lean_leg_l_kg: float | None = None
+    lean_leg_r_kg: float | None = None
+    fat_arm_l_kg: float | None = None
+    fat_arm_r_kg: float | None = None
+    fat_trunk_kg: float | None = None
+    fat_leg_l_kg: float | None = None
+    fat_leg_r_kg: float | None = None

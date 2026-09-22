@@ -55,6 +55,10 @@ class InMemoryUserRepo:
         if user_id in self._users:
             self._users[user_id].ui_prefs = prefs
 
+    async def mark_scan_nudged(self, user_id: int, at: datetime) -> None:
+        if user_id in self._users:
+            self._users[user_id].scan_nudged_at = at
+
     async def list_active(self) -> list[User]:
         return list(self._users.values())
 

@@ -7,10 +7,13 @@
 """
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, fields, replace
 from datetime import datetime
+
+from app.domain.energy import SCAN_FAT_ERROR_KG, WINDOW_MIN_DAYS
 
 # Белок на кг безжировой массы. В дефиците 2.3–3.1 (Helms 2014, для худых атлетов);
 # при 20%+ жира уместна нижняя граница, 2.4 — с запасом. Пол — 1.6 г/кг ВСЕГО веса
@@ -60,11 +63,55 @@ class BodyScan:
     age: int | None = None
     sex: str | None = None          # male | female
     device: str | None = None
+    smi: float | None = None              # кг/м², мышцы конечностей на рост²
+    inbody_score: float | None = None     # балл прибора, 0–100
+    lean_arm_l_kg: float | None = None
+    lean_arm_r_kg: float | None = None
+    lean_trunk_kg: float | None = None
+    lean_leg_l_kg: float | None = None
+    lean_leg_r_kg: float | None = None
+    fat_arm_l_kg: float | None = None
+    fat_arm_r_kg: float | None = None
+    fat_trunk_kg: float | None = None
+    fat_leg_l_kg: float | None = None
+    fat_leg_r_kg: float | None = None
     id: int | None = None
     user_id: int | None = None
 
 
-NUMERIC = [f.name for f in fields(BodyScan) if f.name in RANGES]
+# Сегменты бланка: безжировая масса и жир по пяти участкам тела. Держим их
+# плоскими полями, а не словарём: `BodyScan` заморожен, и поле-словарь сломало
+# бы hash, а плоские бесплатно проходят через правку, json и `corrected_fields`.
+SEGMENTS = ("arm_l", "arm_r", "trunk", "leg_l", "leg_r")
+LIMBS = ("arm_l", "arm_r", "leg_l", "leg_r")
+SEGMENT_FIELDS = tuple(f"{kind}_{seg}_kg" for kind in ("lean", "fat") for seg in SEGMENTS)
+# Индекс и балл правятся человеком, сегменты — нет (MINIAPP-SPEC §6.24).
+EXTRA_FIELDS = ("smi", "inbody_score")
+
+# Мягкие границы: грубый фильтр мусора («92» вместо «9.2»). В отличие от RANGES
+# флага не дают — число просто не сохраняется (MA-INV-57).
+SOFT_RANGES: dict[str, tuple[float, float]] = {
+    "smi": (3.0, 16.0),
+    "inbody_score": (0.0, 100.0),
+    "lean_arm_l_kg": (0.5, 12), "lean_arm_r_kg": (0.5, 12),
+    "lean_trunk_kg": (8, 60),
+    "lean_leg_l_kg": (2, 30), "lean_leg_r_kg": (2, 30),
+    "fat_arm_l_kg": (0.05, 10), "fat_arm_r_kg": (0.05, 10),
+    "fat_trunk_kg": (0.3, 40),
+    "fat_leg_l_kg": (0.1, 20), "fat_leg_r_kg": (0.1, 20),
+}
+
+# Допуск связи «индекс × рост² = мышцы конечностей». Бюджет округления бланка:
+# четыре сегмента по ±0.05 плюс индекс ±0.05 × рост² — до 0.4; 0.6 покрывает и
+# рост, напечатанный целыми сантиметрами. Перепутанная цифра двигает сумму на
+# килограмм и больше, так что ловить это не мешает.
+TOL_SMI = 0.6
+# Сумма сегментов против целого: голова в сегменты не входит. Коридоры
+# откалиброваны по бланку владельца (безжировая 88.5%, жир 93.8%).
+LEAN_SUM = (0.85, 1.005)
+FAT_SUM = (0.80, 1.02)
+
+NUMERIC = [f.name for f in fields(BodyScan) if f.name in RANGES or f.name in EXTRA_FIELDS]
 
 
 def mismatches(s: BodyScan) -> set[str]:
@@ -93,6 +140,60 @@ def mismatches(s: BodyScan) -> set[str]:
         if not 0.45 <= s.skeletal_muscle_kg / s.fat_free_kg <= 0.65:
             bad |= {"skeletal_muscle_kg", "fat_free_kg"}
     return bad
+
+
+def segments_ok(s: BodyScan) -> bool:
+    """Сегментный блок прочитан связно (MA-INV-58, MA-INV-59).
+
+    Меньше пяти сегментов — то же, что ни одного: четыре из пяти всегда провалят
+    сумму и подсветили бы исправный бланк. Суммы сверяются с целым: голова в
+    сегменты не входит, поэтому не равенство, а коридор.
+    """
+    vals = [getattr(s, f) for f in SEGMENT_FIELDS]
+    if any(v is None for v in vals):
+        return False
+    for name in SEGMENT_FIELDS:
+        lo, hi = SOFT_RANGES[name]
+        if not lo <= getattr(s, name) <= hi:
+            return False
+    lean = sum(getattr(s, f"lean_{seg}_kg") for seg in SEGMENTS)
+    fat = sum(getattr(s, f"fat_{seg}_kg") for seg in SEGMENTS)
+    if s.fat_free_kg > 0 and not LEAN_SUM[0] <= lean / s.fat_free_kg <= LEAN_SUM[1]:
+        return False
+    return not (s.body_fat_kg > 0 and not FAT_SUM[0] <= fat / s.body_fat_kg <= FAT_SUM[1])
+
+
+def smi_ok(s: BodyScan) -> bool:
+    """Индекс × рост² ≈ безжировая масса рук и ног. Одна связь накрывает пять
+    самых трудных для чтения чисел — напечатанных внутри силуэта. Нет участника —
+    связь не проверяется, и оба числа остаются непроверенными."""
+    limbs = [getattr(s, f"lean_{seg}_kg") for seg in LIMBS]
+    if s.smi is None or not s.height_cm or any(v is None for v in limbs):
+        return True
+    return abs(s.smi * (s.height_cm / 100) ** 2 - sum(limbs)) <= TOL_SMI
+
+
+def drop_suspect(s: BodyScan) -> BodyScan:
+    """Не сошедшееся среди новых чисел — обнулить, а не подсвечивать (MA-INV-57).
+
+    Эти числа ни на что не влияют: цена ошибки — кривая картинка раз в месяц, а
+    цена лишнего подтверждения выше — человек натренируется жать «Всё верно» не
+    глядя, и сверка перестанет работать на весе и жире.
+    """
+    patch: dict[str, None] = {}
+    for name in EXTRA_FIELDS:
+        v = getattr(s, name)
+        lo, hi = SOFT_RANGES[name]
+        if v is not None and not lo <= v <= hi:
+            patch[name] = None
+    if not segments_ok(s):
+        patch.update(dict.fromkeys(SEGMENT_FIELDS))
+    elif not smi_ok(s):
+        # Сегменты сошлись сразу с двумя независимыми суммами — безжировой массой
+        # и массой жира; индекс не подтверждён ничем. Значит вероятнее ошибка в
+        # нём, и уносим только его.
+        patch["smi"] = None
+    return replace(s, **patch) if patch else s
 
 
 def foreign(s: BodyScan, prev: BodyScan | None, last_weight: tuple[datetime, float] | None
@@ -230,6 +331,89 @@ def change(a: BodyScan, b: BodyScan) -> Change:
 # На сушке доля безжировой массы в потере больше этой — повод сказать.
 LEAN_SHARE_WARN = 0.35
 
+DAYS_PER_MONTH = 30.44
+# Дальше этого срок не считаем: на два года вперёд конкретное число врёт сильнее,
+# чем помогает.
+MAX_FORECAST_MONTHS = 24.0
+
+
+@dataclass(frozen=True)
+class Pace:
+    """Темп изменения состава между двумя замерами, кг в месяц (MA-INV-60).
+
+    Приводим к месяцу, иначе замеры с неравными промежутками несравнимы.
+    """
+
+    days: int
+    fat_kg_per_month: float
+    lean_kg_per_month: float
+    noise_kg_per_month: float     # ±, шум двух замеров на том же окне
+
+    @property
+    def meaningful(self) -> bool:
+        """Темп жира крупнее собственной погрешности — только тогда это движение."""
+        return abs(self.fat_kg_per_month) > self.noise_kg_per_month
+
+
+def pace(a: BodyScan, b: BodyScan) -> Pace | None:
+    """None — окно короче 28 дней: разница тонет в погрешности прибора.
+
+    Порог общий с окном расхода (`energy`): две константы про одно разойдутся.
+    """
+    days = (b.measured_at - a.measured_at).days
+    if days < WINDOW_MIN_DAYS:
+        return None
+    per_month = DAYS_PER_MONTH / days
+    return Pace(
+        days=days,
+        fat_kg_per_month=round((b.body_fat_kg - a.body_fat_kg) * per_month, 1),
+        lean_kg_per_month=round((b.fat_free_kg - a.fat_free_kg) * per_month, 1),
+        noise_kg_per_month=round(math.sqrt(2) * SCAN_FAT_ERROR_KG * per_month, 1),
+    )
+
+
+@dataclass(frozen=True)
+class Forecast:
+    """Срок до цели по проценту жира. `months` есть только при `ok` (MA-INV-61)."""
+
+    verdict: str        # ok | one_scan | too_soon | no_target | reached | noisy | wrong_way | too_far
+    target_pct: float | None
+    months: float | None = None
+
+
+def forecast(
+    last: BodyScan, p: Pace | None, target_pct: float | None, *, pair: bool = True
+) -> Forecast:
+    """Продолжаем ОБЕ массы, а не только жир: уходящая безжировая сама поднимает
+    процент, и прогноз по одному жиру врал бы в оптимистичную сторону.
+
+    `t = (p·W − F) / (f − p·(f + l))`, где W — вес, F — жир, f и l — темпы.
+    Порядок проверок важен: шум проверяется РАНЬШЕ знака — при темпе 0.2 кг/мес
+    само направление является шумом, и говорить «идёшь не туда» нечестно.
+    """
+    if not pair:
+        return Forecast("one_scan", target_pct)
+    if p is None:
+        return Forecast("too_soon", target_pct)
+    if target_pct is None:
+        return Forecast("no_target", target_pct)
+    if last.weight_kg <= 0:
+        return Forecast("no_target", target_pct)
+    if last.body_fat_kg / last.weight_kg * 100 <= target_pct:
+        return Forecast("reached", target_pct)
+    if not p.meaningful:
+        return Forecast("noisy", target_pct)
+    share = target_pct / 100
+    denom = p.fat_kg_per_month - share * (p.fat_kg_per_month + p.lean_kg_per_month)
+    if denom == 0:
+        return Forecast("wrong_way", target_pct)
+    months = (share * last.weight_kg - last.body_fat_kg) / denom
+    if months <= 0:
+        return Forecast("wrong_way", target_pct)
+    if months > MAX_FORECAST_MONTHS:
+        return Forecast("too_far", target_pct)
+    return Forecast("ok", target_pct, round(months, 1))
+
 
 def demo() -> None:
     at = datetime(2026, 5, 3, 15, 44)
@@ -301,6 +485,89 @@ def demo() -> None:
     assert parse_blank_date("05.05.2026", "vi") == ((2026, 5, 5), False)
     assert parse_blank_date("", "vi") == (None, True)
     assert parse_blank_date("13.13.2026", "vi") == (None, True)
+
+    # --- новые числа бланка (D-MA-15) ------------------------------------
+    # Реальный бланк владельца 22.09.2026 с сегментами.
+    seg = BodyScan(
+        measured_at=datetime(2026, 9, 22, 15, 26), weight_kg=91.6, body_fat_kg=20.9,
+        fat_free_kg=70.7, body_fat_pct=22.8, skeletal_muscle_kg=40.7, water_l=51.8,
+        protein_kg=14.2, minerals_kg=4.75, visceral_level=9, bmr_kcal=1898,
+        height_cm=180, age=30, sex="male", device="InBody270",
+        smi=9.2, inbody_score=82,
+        lean_arm_l_kg=4.47, lean_arm_r_kg=4.29, lean_trunk_kg=32.6,
+        lean_leg_l_kg=10.62, lean_leg_r_kg=10.57,
+        fat_arm_l_kg=1.1, fat_arm_r_kg=1.1, fat_trunk_kg=12.0,
+        fat_leg_l_kg=2.7, fat_leg_r_kg=2.7,
+    )
+    assert mismatches(seg) == set(), mismatches(seg)
+    # AC-MA-66: 9.2 × 1.80² = 29.81 против 29.95 — сходится.
+    assert segments_ok(seg) and smi_ok(seg)
+    assert drop_suspect(seg) == seg
+
+    # AC-MA-67: сдвиг запятой в ноге — весь блок отброшен, но НЕ подсвечен.
+    bad_leg = replace(seg, lean_leg_r_kg=1.5)
+    assert not segments_ok(bad_leg)
+    dropped = drop_suspect(bad_leg)
+    assert all(getattr(dropped, f) is None for f in SEGMENT_FIELDS)
+    assert dropped.smi == 9.2 and dropped.weight_kg == 91.6
+    assert mismatches(dropped) == set()          # сохранение не блокируется
+
+    # Ошибка в последней цифре допуск переживает.
+    assert segments_ok(replace(seg, lean_leg_r_kg=10.47))
+    # AC-MA-68: прочитаны не все сегменты — блока нет, расхождения нет.
+    assert not segments_ok(replace(seg, fat_trunk_kg=None))
+    # AC-MA-69: нет роста — связь не проверяется, числа остаются.
+    no_h = replace(seg, height_cm=None)
+    assert smi_ok(no_h) and drop_suspect(no_h) == no_h
+    # Индекс не сходится с конечностями: сегменты подтверждены двумя суммами, а
+    # индекс — ничем, значит уносим его, а сегменты остаются.
+    conflict = drop_suspect(replace(seg, smi=11.4))
+    assert conflict.smi is None and conflict.lean_trunk_kg == 32.6
+    # Суммы вне коридоров.
+    assert not segments_ok(replace(seg, lean_trunk_kg=20.0, smi=None))
+    assert not segments_ok(replace(seg, fat_trunk_kg=4.0, smi=None))
+    # Балл «820» — мусор, но только он и обнуляется.
+    score = drop_suspect(replace(seg, inbody_score=820))
+    assert score.inbody_score is None and score.lean_trunk_kg == 32.6
+    # Индекс правится человеком, сегмент — нет.
+    edited = with_fields(seg, {"smi": "9,4", "lean_trunk_kg": 1})
+    assert edited.smi == 9.4 and edited.lean_trunk_kg == 32.6
+
+    # --- темп и срок ------------------------------------------------------
+    prev = replace(seg, measured_at=datetime(2026, 8, 19, 8, 0), weight_kg=93.4,
+                   body_fat_kg=22.8, fat_free_kg=70.6, body_fat_pct=24.4)
+    p = pace(prev, seg)
+    # AC-MA-72: за 34 дня жир −1.9 кг → −1.7 в месяц при шуме ±1.3.
+    assert p is not None and (p.days, p.fat_kg_per_month) == (34, -1.7)
+    assert p.lean_kg_per_month == 0.1 and p.noise_kg_per_month == 1.3 and p.meaningful
+    # AC-MA-71: окно короче 28 дней — темпа нет.
+    assert pace(replace(prev, measured_at=datetime(2026, 9, 13)), seg) is None
+
+    # AC-MA-74: до 15% жира при этом темпе — около пяти месяцев.
+    f = forecast(seg, p, 15.0)
+    assert f.verdict == "ok" and 4.5 < f.months < 5.5, f
+    # AC-MA-73: темп внутри погрешности — срока нет, и это проверяется до знака.
+    quiet = pace(replace(prev, body_fat_kg=21.4), seg)
+    assert quiet is not None and not quiet.meaningful
+    assert forecast(seg, quiet, 15.0).verdict == "noisy"
+    assert forecast(seg, quiet, 15.0).months is None
+    # AC-MA-75: жир растёт, а цель ниже.
+    up = pace(replace(prev, body_fat_kg=17.0, fat_free_kg=70.7, weight_kg=87.7), seg)
+    assert forecast(seg, up, 15.0).verdict == "wrong_way"
+    # AC-MA-76 и остальные вырожденные: числа нет ни в одном.
+    for got, verdict in (
+        (forecast(seg, p, 15.0, pair=False), "one_scan"),
+        (forecast(seg, None, 15.0), "too_soon"),
+        (forecast(seg, p, None), "no_target"),
+        (forecast(seg, p, 25.0), "reached"),
+    ):
+        assert got.verdict == verdict and got.months is None, got
+    # Срок дальше двух лет не показываем: на четырёх месяцах окна шум мал, темп
+    # различим, но до 10% при нём больше двух лет.
+    slow = pace(replace(prev, measured_at=datetime(2026, 5, 25), body_fat_kg=22.9,
+                        fat_free_kg=70.7), seg)
+    assert slow is not None and slow.meaningful, slow
+    assert forecast(seg, slow, 10.0).verdict == "too_far"
     print("замер состава: ок")
 
 

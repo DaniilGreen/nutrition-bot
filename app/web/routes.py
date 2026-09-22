@@ -492,6 +492,7 @@ def scan_check_json(c: ScanCheck, token: str, tz: str) -> dict[str, Any]:
         "date_problem": c.date_problem,
         "existing": c.existing is not None,
         "needs_confirm": c.needs_confirm,
+        "dropped_segments": c.dropped_segments,
     }
 
 

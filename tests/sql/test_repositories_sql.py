@@ -178,6 +178,55 @@ async def test_замер_состава_upsert_по_времени_и_удал�
     assert await repo.delete(u.id, first.id) and not await repo.delete(u.id, first.id)
 
 
+async def test_сегменты_бланка_ходят_через_jsonb(session):
+    """§6.24: десять чисел лежат одной колонкой, а в домене они плоские."""
+    u = await _user(session, 900020)
+    repo = SqlBodyScanRepo(session)
+    at = datetime(2026, 9, 22, 8, 26, tzinfo=UTC)
+    scan = BodyScan(
+        measured_at=at, weight_kg=91.6, body_fat_kg=20.9, fat_free_kg=70.7,
+        user_id=u.id, smi=9.2, inbody_score=82,
+        lean_arm_l_kg=4.47, lean_arm_r_kg=4.29, lean_trunk_kg=32.6,
+        lean_leg_l_kg=10.62, lean_leg_r_kg=10.57,
+        fat_arm_l_kg=1.1, fat_arm_r_kg=1.1, fat_trunk_kg=12.0,
+        fat_leg_l_kg=2.7, fat_leg_r_kg=2.7,
+    )
+    saved, _ = await repo.upsert(scan)
+    back = await repo.get_at(u.id, at)
+    assert (back.smi, back.inbody_score) == (9.2, 82)
+    assert (back.lean_arm_l_kg, back.fat_trunk_kg) == (4.47, 12.0)
+
+    # Повторный бланк заменяет блок целиком, а не сливает ключи.
+    thin = replace(scan, lean_arm_l_kg=None, lean_arm_r_kg=None, lean_trunk_kg=None,
+                   lean_leg_l_kg=None, lean_leg_r_kg=None, fat_arm_l_kg=None,
+                   fat_arm_r_kg=None, fat_trunk_kg=None, fat_leg_l_kg=None,
+                   fat_leg_r_kg=None)
+    await repo.upsert(thin)
+    back = await repo.get_at(u.id, at)
+    assert back.lean_arm_l_kg is None and back.fat_trunk_kg is None
+    assert back.smi == 9.2                      # скаляры живут отдельно от блока
+
+    # Замер до миграции 0012: пустая колонка читается без падения.
+    old_scan, _ = await repo.upsert(
+        BodyScan(measured_at=datetime(2026, 5, 3, 8, 44, tzinfo=UTC), weight_kg=91.8,
+                 body_fat_kg=19.8, fat_free_kg=72.0, user_id=u.id)
+    )
+    assert old_scan.lean_trunk_kg is None and old_scan.smi is None
+    assert saved.id != old_scan.id
+
+
+async def test_отметка_напоминания_о_замере(session):
+    """MA-INV-63: дедуп живёт в БД, а не в памяти процесса."""
+    u = await _user(session, 900021)
+    users = SqlUserRepo(session)
+    at = datetime(2026, 9, 22, 13, 0, tzinfo=UTC)
+    await users.mark_scan_nudged(u.id, at)
+    again = await users.get_or_create(
+        telegram_id=u.telegram_id, name=u.name, locale="ru", timezone=u.timezone
+    )
+    assert again.scan_nudged_at == at
+
+
 async def test_история_целей_пишется_при_смене(session):
     u = await _user(session, 900011)
     users = SqlUserRepo(session)

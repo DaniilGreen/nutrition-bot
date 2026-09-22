@@ -1248,6 +1248,18 @@
             }).join(''),
           'От режима зависит раскладка макросов при пересчёте цели.') +
 
+        group('Цель по проценту жира',
+          [[null, 'Не считать'], [20, '20%'], [18, '18%'], [15, '15%'], [12, '12%'],
+           [10, '10%']].map(function (o2) {
+            var on = (p.target_fat_pct == null ? null : Number(p.target_fat_pct)) === o2[0];
+            return '<div class="pick' + (on ? ' on' : '') + '"' + pk(on) +
+              ' data-fatgoal="' + (o2[0] == null ? '' : o2[0]) + '"><span class="dot"></span>' +
+              '<span style="flex-grow:1;font-size:var(--f-body-s)">' + esc(o2[1]) +
+              '</span></div>';
+          }).join(''),
+          'Нужна только для срока в «Итогах»: на калории, белок и расход не влияет. ' +
+          'Процент — в единицах InBody, он ниже, чем показал бы другой метод.') +
+
         bodyGroups(p, g, o) +
 
         group('Цели',
@@ -1407,7 +1419,7 @@
     }).catch(function (e) { toast(e.message, true); });
   }
 
-  function patch(path, body, ok) {
+  function patch(path, body, ok, quiet) {
     return send(path, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -1416,8 +1428,12 @@
       // Настройка обязана подействовать сразу, а не после перезахода:
       // иначе переключатель выглядит сломанным (MA-INV-31).
       if (d && d.prefs) state.prefs = d.prefs;
+      if (state.settings && d && d.prefs) state.settings.prefs = d.prefs;
       toast(ok);
-      renderSettings();
+      // `quiet` — настройка, которая ничего не меняет на этом экране: отметку
+      // мы уже переключили на месте, а перерисовка тут была бы тем самым
+      // миганием, из-за которого настройки и правили.
+      if (!quiet) renderSettings();
     }).catch(function (e) { toast(e.message, true); });
   }
 
@@ -1926,11 +1942,148 @@
           'будет предложить цель по расходу.</div>');
   }
 
+  /* Балл прибора (MA-INV-62): число и разница, без стрелок и цвета. Формула у
+     InBody не опубликована, и стрелка «стало лучше» была бы выдумкой. */
+  function scoreLine(last, prev) {
+    if (last.inbody_score == null) return '';
+    var tail = 'первый замер';
+    if (prev && prev.inbody_score != null) {
+      var d = Math.round(last.inbody_score) - Math.round(prev.inbody_score);
+      tail = d ? signed(d) + ' с прошлого раза' : 'как в прошлый раз';
+    }
+    return '<div class="score"><div class="num v">' + n(last.inbody_score) +
+      '<span class="unit"> из 100</span></div>' +
+      '<div class="num d">' + esc(tail) + '</div></div>' +
+      (prev && prev.inbody_score != null ? '' :
+        '<div class="mic note">Сводная оценка прибора: за каждый килограмм мышц сверх нормы ' +
+        'балл растёт, за килограмм жира — падает. В расчёты не входит.</div>');
+  }
+
+  var FORECAST_WORD = {
+    one_scan: 'Темп и срок появятся после второго замера.',
+    too_soon: 'Между замерами меньше месяца — темп считаю от 28 дней: короче разница тонет ' +
+              'в погрешности прибора.',
+    no_target: 'Поставь цель по проценту жира в настройках — посчитаю срок.',
+    reached: 'Цель по проценту жира уже достигнута.',
+    noisy: 'Темп пока не отличить от погрешности прибора — срок посчитаю после следующего ' +
+           'замера.',
+    wrong_way: 'Жир прибавляется — срок до цели не считаю.',
+    too_far: 'При нынешнем темпе до цели больше двух лет — срок не показываю, он всё равно ' +
+             'сдвинется.'
+  };
+
+  function months(m) {
+    var whole = Math.round(m);
+    var word = whole % 10 === 1 && whole % 100 !== 11 ? 'месяц'
+      : (whole % 10 > 1 && whole % 10 < 5 && (whole % 100 < 10 || whole % 100 > 20))
+        ? 'месяца' : 'месяцев';
+    return whole + ' ' + word;
+  }
+
+  /* Темп и срок (§6.24). Число темпа показываем всегда, срок — только когда
+     темп крупнее собственной погрешности (MA-INV-61). */
+  function paceBlock(o) {
+    var p = o.pace, f = o.forecast;
+    if (!p) {
+      var why = f && FORECAST_WORD[f.verdict];
+      return why ? '<div class="mic note">' + esc(why) + '</div>' : '';
+    }
+    var tile = function (label, v, tone) {
+      var quiet = Math.abs(v) <= p.noise_kg_per_month;
+      return '<div class="bwc"><div class="mic">' + label + '</div>' +
+        '<div class="num v" style="color:' + tone + '">' + signed(v, 1) + '</div>' +
+        '<div class="mic">кг в месяц</div>' +
+        '<div class="mic faint">' + (quiet ? 'в пределах шума' : 'шум ±' +
+          n(p.noise_kg_per_month, 1)) + '</div></div>';
+    };
+    var line = '';
+    if (f && f.verdict === 'ok') {
+      line = '<div class="cap note">До ' + n(f.target_pct) + '% жира при нынешнем темпе — ещё ' +
+        'около <b>' + months(f.months) + '</b>.</div>' +
+        '<div class="mic note">Оценка по последним двум замерам, без учёта замедления. ' +
+        'Каждый новый замер её пересчитывает.</div>';
+    } else if (f && FORECAST_WORD[f.verdict]) {
+      line = '<div class="mic note">' + esc(FORECAST_WORD[f.verdict]) + '</div>';
+    }
+    return '<div class="mic note">Темп за ' + n(p.days) + ' дн.</div>' +
+      '<div class="bw">' + tile('Жир', p.fat_kg_per_month, 'var(--fat)') +
+      tile('Безжировая', p.lean_kg_per_month, 'var(--data)') + '</div>' + line;
+  }
+
+  var SEG_NAME = { arm_l: 'Л. рука', arm_r: 'П. рука', trunk: 'Туловище',
+                   leg_l: 'Л. нога', leg_r: 'П. нога' };
+  /* Ниже этого разница сторон — погрешность прибора, а не наблюдение:
+     воспроизводимость сегмента 0.0–0.1 кг, естественная асимметрия 1.5–8%. */
+  var SEG_EVEN = 0.05;
+
+  function segCell(key, seg, delta) {
+    var lean = seg.lean, fat = seg.fat, total = lean + fat;
+    var share = total > 0 ? Math.max(0, Math.min(100, 100 * fat / total)) : 0;
+    return '<div class="seg' + (key === 'trunk' ? ' tr' : '') + '">' +
+      '<div class="nm">' + esc(SEG_NAME[key]) + '</div>' +
+      '<div class="num v">' + n(lean, 2) + '</div>' +
+      '<div class="num f">жир ' + n(fat, 1) + '</div>' +
+      '<div class="track split"><i style="width:' + (100 - share) + '%;background:var(--data)"></i>' +
+      '<i style="width:' + share + '%;background:var(--fat)"></i></div>' +
+      (delta ? '<div class="num f alert">' + esc(delta) + '</div>' : '') + '</div>';
+  }
+
+  /* Сегменты: на первом экране — одна строка-вердикт, десять чисел под тапом.
+     Схема тела сеткой, а не SVG: viewBox с процентной шириной раздувается по
+     высоте на широком окне (web/responsive.md), а смысл всё равно несёт текст. */
+  function segBlock(last, prev) {
+    var seg = last.segments;
+    var smi = last.smi == null ? '' : 'Мышечный индекс <b class="num">' + n(last.smi, 1) + '</b>' +
+      (prev && prev.smi != null
+        ? ' <span class="num g">(' + signed(last.smi - prev.smi, 1) + ')</span>' : '');
+    if (!seg) {
+      return smi ? '<div class="mic note" style="color:var(--text)">' + smi + '</div>' +
+        '<div class="mic">Мышцы рук и ног на рост, кг/м². Порог дефицита 7,0 — он для ' +
+        'пожилых, смотрим на динамику.</div>' : '';
+    }
+    var arms = Math.abs(seg.arm_l.lean - seg.arm_r.lean) /
+      Math.max(0.1, (seg.arm_l.lean + seg.arm_r.lean) / 2);
+    var legs = Math.abs(seg.leg_l.lean - seg.leg_r.lean) /
+      Math.max(0.1, (seg.leg_l.lean + seg.leg_r.lean) / 2);
+    var worst = Math.max(arms, legs);
+    var verdict = worst <= SEG_EVEN
+      ? 'слева и справа ровно, разница до ' + Math.round(worst * 100) + '%'
+      : (arms >= legs ? 'руки' : 'ноги') + ' расходятся на ' + Math.round(worst * 100) + '%';
+    var moved = [];
+    var cells = ['arm_l', 'trunk', 'arm_r', 'leg_l', 'leg_r'].map(function (k) {
+      var d = '';
+      if (prev && prev.segments && prev.segments[k]) {
+        var df = seg[k].fat - prev.segments[k].fat;
+        /* Сдвинулось заметнее шума: 5% сегмента, но не меньше 0.3 кг — одно
+           правило и для руки в 4 кг, и для туловища в 33. */
+        if (Math.abs(df) >= Math.max(0.3, 0.05 * (seg[k].lean + seg[k].fat))) {
+          d = signed(df, 1) + ' кг жира';
+          moved.push(SEG_NAME[k].toLowerCase() + ' ' + signed(df, 1) + ' кг жира');
+        }
+      }
+      return segCell(k, seg[k], d);
+    }).join('');
+    return '<details class="scanlist segs-wrap"><summary class="mic">' +
+      (smi ? smi + ' · ' : '') + 'Сегменты: ' + esc(verdict) + '</summary>' +
+      (last.smi != null ? '<div class="mic note">Мышцы рук и ног на рост, кг/м². Порог ' +
+        'дефицита 7,0 — он для пожилых, смотрим на динамику.</div>' : '') +
+      '<div class="mic note">' + (moved.length
+        ? 'С прошлого раза: ' + esc(moved.join(', ')) + '.'
+        : prev && prev.segments
+          ? 'С прошлого раза сегменты не сдвинулись заметнее шума.'
+          : 'В прошлом замере сегментов не было.') + '</div>' +
+      '<div class="mic">Безжировая масса, кг · под ней жир · полоса — доля жира в сегменте</div>' +
+      '<div class="segs">' + cells + '</div>' +
+      '<div class="mic note">Прибор меряет сопротивление тканей, а не силу: по этим числам ' +
+      'нельзя сказать, что рука слабее или что сегмент потерял мышцу. Вода и гликоген ' +
+      'считаются здесь безжировой массой.</div></details>';
+  }
+
   function compCard(o) {
     if (!o || !o.scans || !o.scans.length) return '';
     var scans = o.scans, last = scans[scans.length - 1], prev = scans[scans.length - 2];
     var c = o.change;
-    var body = compChart(scans);
+    var body = scoreLine(last, prev) + paceBlock(o) + compChart(scans);
     if (prev) {
       body += '<div class="rows">' +
         compRow('Вес', prev.weight_kg, last.weight_kg, 'кг', 1) +
@@ -1962,7 +2115,7 @@
           'водой; добирай белок и не бросай силовые, дефицит можно смягчить.</div>';
       }
     }
-    body += diaryBlock(o) + energyBlock(o);
+    body += segBlock(last, prev) + diaryBlock(o) + energyBlock(o);
     if (o.stale_days > 180) {
       body += '<div class="attn">Замер ' + n(Math.round(o.stale_days / 30)) +
         ' мес. назад — пора обновить. Пока цели считаются без него.</div>';
@@ -1973,8 +2126,11 @@
           ' кг · жир ' + n(x.body_fat_pct, 1) + '%</label>' +
           '<button class="linkbtn" data-scandel="' + x.id + '">Удалить</button></div>';
       }).join('') + '</details>';
+    var head = ddmm(last.date) + (o.stale_days != null ? ' · ' + n(o.stale_days) + ' дн. назад' : '') +
+      (last.device ? ' · ' + esc(last.device) : '');
     return '<section class="card comp" style="margin-top:var(--s-3)">' +
-      '<div class="cap">Состав тела</div><div class="chart">' + body + '</div>' +
+      '<div class="cap">Состав тела</div><div class="mic">' + head + '</div>' +
+      '<div class="chart">' + body + '</div>' +
       '<div class="mic note">Сравнивай замеры, сделанные в одинаковых условиях: утром, ' +
       'натощак, без тренировки накануне.</div></section>';
   }
@@ -2057,12 +2213,13 @@
     ['fat_free_kg', 'Безжировая масса', 'кг'],
     ['visceral_level', 'Висцеральный жир', 'ур.'],
     ['bmr_kcal', 'Базовый обмен', 'ккал'],
+    ['smi', 'Мышечный индекс', 'кг/м²'],
     ['water_l', 'Вода', 'л'],
     ['protein_kg', 'Белок', 'кг'],
     ['minerals_kg', 'Минералы', 'кг']
   ];
   var SCAN_ALWAYS = { weight_kg: 1, skeletal_muscle_kg: 1, body_fat_kg: 1, body_fat_pct: 1,
-                      fat_free_kg: 1, visceral_level: 1, bmr_kcal: 1, water_l: 1 };
+                      fat_free_kg: 1, visceral_level: 1, bmr_kcal: 1, water_l: 1, smi: 1 };
 
   function scanValue(sc, key) {
     return sc.edits[key] != null ? sc.edits[key] : sc.card.scan[key];
@@ -2128,6 +2285,7 @@
       (c.existing ? '<div class="mic" style="margin-top:6px;color:var(--text)">Такой замер уже ' +
         'есть — сохраню поверх.</div>' : '') +
       '<div class="sfs">' + dateRow + rows + '</div>' +
+      scanExtras(sc) +
       '<div class="mic" style="margin-top:var(--s-3);line-height:1.5">Остальное с бланка не ' +
         'сохраняю — на расчёты не влияет.</div>' +
       scanWarn(sc) +
@@ -2138,6 +2296,31 @@
       '<div class="mic" style="margin-top:var(--s-3);line-height:1.5">Сравнивай замеры, ' +
         'сделанные в одинаковых условиях: утром, натощак, без тренировки накануне.</div>' +
       '</section>';
+  }
+
+  /* Балл и сегменты на карточке бланка. Сегменты не правятся: десять полей
+     ввода на телефоне ради чисел, от которых не зависит ни одна цель, не
+     окупаются — при расхождении честнее переснять бланк.
+     ponytail: понадобится правка — эти числа идут в SCAN_ROWS, а блок
+     раскрывается отдельным экраном, а не внутри карточки. */
+  function scanExtras(sc) {
+    var c = sc.card, s = c.scan, out = '';
+    if (s.inbody_score != null) {
+      out += '<div class="mic note" style="color:var(--text)">Балл InBody <b class="num">' +
+        n(s.inbody_score) + '</b> из 100</div>';
+    }
+    if (s.segments) {
+      out += '<details class="scanlist"><summary class="mic">Сегменты · сходятся с ' +
+        'безжировой</summary><div class="segs">' +
+        ['arm_l', 'trunk', 'arm_r', 'leg_l', 'leg_r'].map(function (k) {
+          return segCell(k, s.segments[k], '');
+        }).join('') + '</div></details>';
+    } else if (c.dropped_segments) {
+      out += '<div class="mic note" style="color:var(--alert);line-height:1.5">Сегментный ' +
+        'анализ не сошёлся с безжировой массой — сохраню без него. На цели он не влияет; ' +
+        'нужен — пересними бланк целиком, при свете.</div>';
+    }
+    return out;
   }
 
   function recheckScan() {
@@ -2923,6 +3106,18 @@
     }
     if (pick.dataset.activity) {
       return patch('/api/settings/prefs', { activity: pick.dataset.activity }, 'Активность изменена.');
+    }
+    if (pick.dataset.fatgoal != null) {
+      /* Отметка, а не новые данные: переключаем на месте и не перерисовываем
+         экран — тап по настройке не должен мигать (MA-INV-32). */
+      [].forEach.call(root.querySelectorAll('.pick[data-fatgoal]'), function (x) {
+        var on = x === pick;
+        x.classList.toggle('on', on);
+        x.setAttribute('aria-checked', on ? 'true' : 'false');
+      });
+      return patch('/api/settings/prefs',
+        { target_fat_pct: pick.dataset.fatgoal === '' ? null : Number(pick.dataset.fatgoal) },
+        'Цель по проценту жира изменена.', true);
     }
     if (pick.dataset.daystart) {
       state.lastDay = null;   // границы дня сменились — старый день показывать нельзя

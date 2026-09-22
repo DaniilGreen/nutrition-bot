@@ -146,6 +146,7 @@ class Container:
             meals,
             SqlWeightRepo(session),
             SqlProductRepo(session),
+            SqlBodyScanRepo(session),
         )
 
     def body_scans_for(self, session: AsyncSession) -> BodyScanService:

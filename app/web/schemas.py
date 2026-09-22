@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from app.application.body_scans import GoalProposal, Overview
 from app.application.entities import Meal, MealItem, User
 from app.domain import energy
-from app.domain.body_scan import BodyScan, Change
+from app.domain.body_scan import SEGMENTS, BodyScan, Change
 from app.domain.goals import ACTIVITY_FACTORS, TARGET_FACTORS, Goal, Remaining
 from app.domain.week import WeekBalance
 
@@ -166,7 +166,7 @@ def week_json(w: WeekBalance) -> dict[str, Any]:
 SCAN_FIELDS = (
     "weight_kg", "skeletal_muscle_kg", "body_fat_kg", "body_fat_pct", "fat_free_kg",
     "visceral_level", "bmr_kcal", "water_l", "protein_kg", "minerals_kg",
-    "height_cm", "age",
+    "height_cm", "age", "smi", "inbody_score",
 )
 
 
@@ -180,6 +180,12 @@ def scan_json(s: BodyScan, tz: str) -> dict[str, Any]:
         "time": local.strftime("%H:%M"),
         "sex": s.sex,
         "device": s.device,
+        # Сегменты — вложенным объектом: фронт рисует схему тела пятью слотами,
+        # а обратно правкой полей они не возвращаются (§6.24).
+        "segments": None if s.lean_trunk_kg is None else {
+            seg: {"lean": getattr(s, f"lean_{seg}_kg"), "fat": getattr(s, f"fat_{seg}_kg")}
+            for seg in SEGMENTS
+        },
     })
     return out
 
@@ -236,4 +242,16 @@ def overview_json(o: Overview, tz: str) -> dict[str, Any]:
             "need_days": ceil(energy.MIN_LOGGED_SHARE * sp.days),
         },
         "proposal": proposal_json(o.proposal),
+        "pace": None if o.pace is None else {
+            "days": o.pace.days,
+            "fat_kg_per_month": o.pace.fat_kg_per_month,
+            "lean_kg_per_month": o.pace.lean_kg_per_month,
+            "noise_kg_per_month": o.pace.noise_kg_per_month,
+            "meaningful": o.pace.meaningful,
+        },
+        "forecast": None if o.forecast is None else {
+            "verdict": o.forecast.verdict,
+            "target_pct": o.forecast.target_pct,
+            "months": o.forecast.months,
+        },
     }

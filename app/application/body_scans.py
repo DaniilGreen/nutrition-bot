@@ -18,14 +18,21 @@ from app.application.stats_service import StatsService, _require_id
 from app.clock import Clock, utcnow
 from app.domain import energy
 from app.domain.body_scan import (
+    EXTRA_FIELDS,
     LEAN_SHARE_WARN,
+    SEGMENT_FIELDS,
     BodyScan,
     Change,
+    Forecast,
+    Pace,
     change,
     cunningham,
+    drop_suspect,
+    forecast,
     foreign,
     mifflin,
     mismatches,
+    pace,
     parse_blank_date,
     protein_target,
 )
@@ -35,6 +42,10 @@ from app.domain.timeframe import local_date
 
 FRESH_DAYS = 180
 OLD_DAYS = 730
+# Напоминание о замере (MA-INV-63). 35 дней, а не 180: на 180 цели уже пять
+# месяцев как считаются по формуле, напоминать там поздно.
+NUDGE_AFTER_DAYS = 35
+NUDGE_EVERY_DAYS = 30
 
 
 @dataclass
@@ -47,6 +58,9 @@ class ScanCheck:
     date_ambiguous: bool
     date_problem: str | None      # future | old | unread | None
     existing: BodyScan | None
+    # Сегменты прочитались, но не сошлись и потому отброшены (MA-INV-57):
+    # карточка обязана сказать об этом, иначе блок просто молча исчезает.
+    dropped_segments: bool = False
 
     @property
     def needs_confirm(self) -> bool:
@@ -82,6 +96,8 @@ class Overview:
     diary_since: date | None = None
     spend: energy.Expenditure | None = None
     proposal: GoalProposal | None = None
+    pace: Pace | None = None
+    forecast: Forecast | None = None
     stale_days: int | None = None
     formula_bmr: float | None = None
     inbody_bmr: float | None = None
@@ -135,6 +151,8 @@ def from_reading(
         age=reading.age,
         sex=reading.sex,
         device=(reading.device or reading.brand or "")[:64] or None,
+        # Имена полей совпадают с бланком — список один, в домене.
+        **{f: getattr(reading, f, None) for f in SEGMENT_FIELDS + EXTRA_FIELDS},
     )
     return scan, state, None
 
@@ -160,7 +178,11 @@ class BodyScanService:
         self, user: User, scan: BodyScan, *, date_state: str = "ok"
     ) -> ScanCheck:
         uid = _require_id(user)
-        scan = replace(scan, user_id=uid)
+        # MA-INV-57: индекс, балл и сегменты не подсвечиваются, а отбрасываются.
+        read = replace(scan, user_id=uid)
+        scan = drop_suspect(read)
+        dropped = (any(getattr(read, f) is not None for f in SEGMENT_FIELDS)
+                   and scan.lean_trunk_kg is None)
         now = self._clock()
         problem = None
         if scan.measured_at > now + timedelta(hours=1):
@@ -182,6 +204,7 @@ class BodyScanService:
             date_ambiguous=date_state == "ambiguous",
             date_problem=problem,
             existing=await self._scans.get_at(uid, scan.measured_at),
+            dropped_segments=dropped,
         )
 
     async def save(
@@ -212,6 +235,29 @@ class BodyScanService:
 
     async def delete(self, user: User, scan_id: int) -> bool:
         return await self._scans.delete(_require_id(user), scan_id)
+
+    # --- напоминание ---------------------------------------------------------
+
+    async def nudge_due(self, user: User) -> BodyScan | None:
+        """Замер, о несвежести которого пора напомнить; None — не пора.
+
+        Без единого замера не напоминаем вовсе: напоминать не о чем, а прибор
+        есть не у всех — это была бы реклама фичи, а не напоминание.
+        """
+        scans = await self._scans.list_for(_require_id(user))
+        if not scans:
+            return None
+        last = scans[-1]
+        now = self._clock()
+        if (now - last.measured_at).days < NUDGE_AFTER_DAYS:
+            return None
+        nudged = user.scan_nudged_at
+        if nudged is not None and (now - nudged).days < NUDGE_EVERY_DAYS:
+            return None
+        return last
+
+    async def mark_nudged(self, user: User) -> None:
+        await self._users.mark_scan_nudged(_require_id(user), self._clock())
 
     # --- цели ---------------------------------------------------------------
 
@@ -291,6 +337,12 @@ class BodyScanService:
         zone = user.timezone
         stale = (self._clock() - last.measured_at).days
         last_change = change(scans[-2], last) if len(scans) >= 2 else None
+        # Темп и срок — по последней паре, как и «было → стало»: окно расхода
+        # выбирает свою пару под другую задачу, и два «за период» на одном
+        # экране спорили бы между собой.
+        step = pace(scans[-2], last) if len(scans) >= 2 else None
+        target = sanitize(user.ui_prefs)["target_fat_pct"]
+        ahead = forecast(last, step, target, pair=len(scans) >= 2)
         lean_warn = bool(
             last_change and last_change.lean_share is not None
             and last_change.lean_share > LEAN_SHARE_WARN
@@ -352,4 +404,5 @@ class BodyScanService:
             proposal=await self.proposal(user, spend) if stale <= FRESH_DAYS else None,
             stale_days=stale, formula_bmr=self._formula(last, weight),
             inbody_bmr=cunningham(last.fat_free_kg), burn_kcal=burn,
+            pace=step, forecast=ahead,
         )

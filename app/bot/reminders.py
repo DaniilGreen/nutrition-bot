@@ -1,21 +1,32 @@
-"""Вечернее напоминание-итог: фоновая asyncio-задача шлёт сводку дня в ~21:00 локально.
+"""Вечерние напоминания: фоновая asyncio-задача шлёт сводку дня и, раз в месяц,
+напоминание о замере состава.
 
-Дедуп по локальной дате в памяти процесса (для 2 пользователей и одного инстанса
-достаточно; при горизонтальном масштабировании вынести в Redis/БД).
+Дедуп итога — по локальной дате в памяти процесса (для 2 пользователей и одного
+инстанса достаточно; при горизонтальном масштабировании вынести в Redis/БД).
+Дедуп напоминания о замере — в БД (`users.scan_nudged_at`): оно редкое, а деплой
+перезапускает бота по нескольку раз в день, и память процесса его задублировала
+бы (MA-INV-63).
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 from contextlib import suppress
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from aiogram.types import InputRichMessage
 
+from app.application.body_scans import FRESH_DAYS
 from app.bot.ui import gather, screens
 from app.container import Container
 from app.domain.timeframe import reminder_due
+
+
+def _local_date(moment: datetime | None, tzname: str) -> date | None:
+    """Когда напоминали — по местному календарю человека, а не по UTC."""
+    return None if moment is None else moment.astimezone(ZoneInfo(tzname)).date()
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +50,32 @@ async def run_reminder_loop(
         await asyncio.sleep(interval_sec)
 
 
+NUDGE_HOUR = 20     # вечер, а не утро: замер делают натощак, нужно время спланировать
+
+
+async def _nudge(bot: Bot, container: Container, session: object, user: object) -> None:
+    """Раз в месяц — «пора на замер» (§6.24). Молчим, если замеров нет вовсе."""
+    scans = container.body_scans_for(session)
+    last = await scans.nudge_due(user)
+    if last is None:
+        return
+    days = (container.clock() - last.measured_at).days
+    local = last.measured_at.astimezone(ZoneInfo(user.timezone))
+    why = ("Цели уже считаются по формуле, а не по твоему составу тела."
+           if days > FRESH_DAYS else
+           "Обмен и белок считаются от безжировой массы, а за месяц она сдвигается.")
+    with suppress(Exception):
+        await bot.send_message(
+            chat_id=user.telegram_id,
+            text=(f"📋 <b>Пора на замер</b>\n\n"
+                  f"Последний бланк InBody — {local:%d.%m}, {days} дн. назад. {why}\n\n"
+                  "Сходи утром, натощак, без тренировки накануне, и пришли бланк фото — "
+                  "прочитаю."),
+            parse_mode="HTML",
+        )
+        await scans.mark_nudged(user)
+
+
 async def _tick(
     bot: Bot, container: Container, hour: int, minute: int, sent: dict[int, date]
 ) -> None:
@@ -46,6 +83,13 @@ async def _tick(
         assistant, users = container.assistant_for(session)
         now = container.clock()
         for user in await users.list_active():
+            # Напоминание о замере — своя ветка: она не зависит от того, писал ли
+            # человек сегодня в дневник, и уходит раньше вечернего итога.
+            nudge_due_now, _ = reminder_due(
+                now, user.timezone, NUDGE_HOUR, _local_date(user.scan_nudged_at, user.timezone)
+            )
+            if nudge_due_now:
+                await _nudge(bot, container, session, user)
             due, today = reminder_due(
                 now, user.timezone, hour, sent.get(user.telegram_id), minute
             )

@@ -70,6 +70,10 @@ class UserRepo(Protocol):
         выше — домен собирает итоговый набор, репозиторий его просто кладёт."""
         ...
 
+    async def mark_scan_nudged(self, user_id: int, at: datetime) -> None:
+        """Отметить, что о замере напомнили (§6.24, MA-INV-63)."""
+        ...
+
     async def list_active(self) -> list[User]: ...
 
 

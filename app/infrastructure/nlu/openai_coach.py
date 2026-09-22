@@ -117,6 +117,25 @@ TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "body_scans",
+            "description": (
+                "Замеры состава тела с бланка InBody: вес, жир (кг и %), безжировая масса, "
+                "скелетные мышцы, мышечный индекс, балл прибора; плюс темп изменения жира и "
+                "безжировой массы в месяц с погрешностью прибора. Этим отвечают на вопросы "
+                "«теряю ли мышцы» и «из чего ушёл вес»."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Сколько замеров, 1–20."}
+                },
+                "required": ["limit"],
+            },
+        },
+    },
 ]
 
 
@@ -127,6 +146,7 @@ class CoachData(Protocol):
     async def meals_on(self, date_str: Any = None) -> Any: ...
     async def top_products(self, days: Any = 30, by: Any = "kcal") -> Any: ...
     async def weight_log(self, limit: Any = 14) -> Any: ...
+    async def body_scans(self, limit: Any = 6) -> Any: ...
     async def accuracy(self, days: Any = 30) -> Any: ...
 
 
@@ -308,6 +328,8 @@ async def _run(data: CoachData | None, call: Any) -> str:
             result = await data.top_products(args.get("days", 30), args.get("by", "kcal"))
         elif name == "weight_log":
             result = await data.weight_log(args.get("limit", 14))
+        elif name == "body_scans":
+            result = await data.body_scans(args.get("limit", 6))
         elif name == "accuracy":
             result = await data.accuracy(args.get("days", 30))
         else:

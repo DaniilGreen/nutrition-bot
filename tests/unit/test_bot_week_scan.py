@@ -151,3 +151,44 @@ async def test_устаревшая_карточка_бланка():
     cb = _callback("scan:save")
     await handlers.on_scan_btn(cb, object(), AsyncMock(), _State({}), scans)
     scans.save.assert_not_awaited()
+
+
+# --- напоминание о замере (MA-INV-63) ---------------------------------------
+
+
+def _scan_service(scans, user, now):
+    """Сервис на фейках: для правил напоминания нужны только замеры и часы."""
+    from app.application.body_scans import BodyScanService
+    from tests.fakes import InMemoryBodyScanRepo, InMemoryUserRepo, InMemoryWeightRepo
+
+    repo = InMemoryBodyScanRepo()
+    repo.scans = list(scans)
+    users = InMemoryUserRepo()
+    users._users[user.id] = user  # noqa: SLF001 — фейку негде посеять пользователя
+    return BodyScanService(repo, users, InMemoryWeightRepo(), object(), lambda: now), users
+
+
+async def test_напоминание_о_замере_по_возрасту_и_отметке():
+    from app.application.entities import User
+
+    now = datetime(2026, 10, 27, 13, 0, tzinfo=UTC)
+    user = User(id=1, telegram_id=1, name="Д", locale="ru", timezone="Asia/Ho_Chi_Minh")
+    fresh = replace(SCAN, measured_at=now - timedelta(days=10), user_id=1)
+    stale = replace(SCAN, measured_at=now - timedelta(days=36), user_id=1)
+
+    # Свежий замер — молчим.
+    svc, _ = _scan_service([fresh], user, now)
+    assert await svc.nudge_due(user) is None
+    # Замеров нет вовсе — тоже молчим: напоминать не о чем.
+    svc, _ = _scan_service([], user, now)
+    assert await svc.nudge_due(user) is None
+    # Старше 35 дней — пора.
+    svc, users = _scan_service([stale], user, now)
+    assert await svc.nudge_due(user) is not None
+    # Напомнили — и следующие тридцать дней молчим, даже после перезапуска бота.
+    await svc.mark_nudged(user)
+    assert users._users[1].scan_nudged_at == now  # noqa: SLF001
+    assert await svc.nudge_due(users._users[1]) is None  # noqa: SLF001
+    later = replace(users._users[1], scan_nudged_at=now - timedelta(days=31))  # noqa: SLF001
+    svc, _ = _scan_service([stale], later, now)
+    assert await svc.nudge_due(later) is not None
