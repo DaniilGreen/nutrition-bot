@@ -205,3 +205,63 @@ async def test_нефункциональный_вызов_пропускает�
     text, _ = await OpenAiCoach(client, "gpt-5.1").ask("q", "фон", data)
     assert data.seen == [("day_totals", (7,))]
     assert text == "Ответил."
+
+
+# --- расход по раундам, своей сессией (AI-PRINCIPLES §2, 28.09.2026) ----------
+
+
+class MeterSpy:
+    def __init__(self):
+        self.notes: list[tuple[int, int]] = []
+
+    async def note(self, *, model, input_tokens, output_tokens, cached_tokens=0):
+        self.notes.append((input_tokens, output_tokens))
+
+
+async def test_расход_пишется_после_каждого_раунда():
+    """Раньше — одной строкой в конце. Теперь каждый раунд записан сразу: оборви
+    человек ответ на третьем раунде, первые два уже учтены."""
+    client = FakeClient([
+        _resp(calls=[_call("day_totals", {"days": 7})], tin=500, tout=20),
+        _resp(content="Готово.", tin=1400, tout=60),
+    ])
+    meter = MeterSpy()
+    _, usage = await OpenAiCoach(client, "gpt-5.1", meter).ask("q", "цифры", FakeData())
+    assert meter.notes == [(500, 20), (1400, 60)]
+    assert usage.input_tokens == 1900          # итог для показа — прежний
+
+
+def _event(content=None, usage=None, tool=None):
+    delta = SimpleNamespace(content=content, tool_calls=[tool] if tool else None)
+    return SimpleNamespace(choices=[SimpleNamespace(delta=delta)] if (content or tool) else [],
+                           usage=usage)
+
+
+class StreamClient:
+    def __init__(self, rounds):
+        self._rounds = list(rounds)
+        self.chat = SimpleNamespace(completions=self)
+
+    async def create(self, **kwargs):
+        events = self._rounds.pop(0)
+
+        async def gen():
+            for e in events:
+                yield e
+        return gen()
+
+
+async def test_оборванный_поток_не_теряет_оплаченный_раунд():
+    tool = SimpleNamespace(index=0, id="c1", type="function",
+                           function=SimpleNamespace(name="day_totals", arguments="{}"))
+    client = StreamClient([
+        [_event(tool=tool), _event(usage=SimpleNamespace(prompt_tokens=700, completion_tokens=15))],
+        [_event(content="Начинаю ответ"), _event(content="…")],
+    ])
+    meter = MeterSpy()
+    stream = OpenAiCoach(client, "gpt-5.1", meter).stream("q", "цифры", FakeData())
+    async for chunk in stream:
+        if chunk.kind == "delta":
+            break                              # человек закрыл аппку посреди второго раунда
+    await stream.aclose()
+    assert meter.notes == [(700, 15)]          # первый раунд уже учтён

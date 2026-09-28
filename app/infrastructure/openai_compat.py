@@ -31,6 +31,23 @@ def temperature_for(model: str, temperature: float) -> float | Omit:
     return temperature if supports_temperature(model) else omit
 
 
+# Подтверждено живым вызовом gpt-5.1 28.09.2026 (SDK 3.17). `reasoning_effort` закреплён явно:
+# у gpt-5.1 по умолчанию и так none, но у части новых моделей по умолчанию medium — сотни
+# оплачиваемых токенов рассуждений на каждый вызов, заметить которые можно только по счёту.
+# `prompt_cache_retention`: встроенный кэш живёт минуты, а записи еды разнесены на часы —
+# первый вызов каждой записи иначе платил полную цену за ~12k токенов промпта.
+_GPT5_EXTRAS = {"reasoning_effort": "none", "prompt_cache_retention": "24h"}
+
+
+def request_extras(model: str, cache_key: str | None = None) -> dict:
+    """Поля `extra_body` для вызова модели. У не-gpt-5 рассуждений нет, и параметр дал бы 400."""
+    extras = dict(_GPT5_EXTRAS) if model.startswith(_NO_CUSTOM_TEMPERATURE) else {}
+    if cache_key:
+        # Ключ группирует запросы с одинаковым префиксом на один узел кэша.
+        extras["prompt_cache_key"] = cache_key
+    return extras
+
+
 def token_counts(usage: object) -> tuple[int, int, int]:
     """(вход, из них из кэша, выход) из объекта usage любого вызова.
 

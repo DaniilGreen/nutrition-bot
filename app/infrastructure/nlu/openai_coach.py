@@ -151,9 +151,23 @@ class CoachData(Protocol):
 
 
 class OpenAiCoach:
-    def __init__(self, client: AsyncOpenAI, model: str) -> None:
+    def __init__(self, client: AsyncOpenAI, model: str, meter: object | None = None) -> None:
         self._client = client
         self._model = model
+        # Расход пишется после КАЖДОГО раунда своей сессией (AI-PRINCIPLES §2). Раньше он
+        # уходил одной строкой в конце ответа через транзакцию запроса, и оборванный поток
+        # терял уже оплаченные раунды.
+        self._meter = meter
+
+    async def _note(self, tokens_in: int, cached: int, tokens_out: int) -> None:
+        """Сбой счётчика не роняет ответ: недосчитать цент дешевле, чем потерять ответ."""
+        if self._meter is None:
+            return
+        try:
+            await self._meter.note(model=self._model, input_tokens=tokens_in,
+                                   output_tokens=tokens_out, cached_tokens=cached)
+        except Exception:  # noqa: BLE001
+            log.warning("не удалось записать расход ассистента", exc_info=True)
 
     async def ask(
         self, question: str, facts: str, data: CoachData | None = None
@@ -180,6 +194,7 @@ class OpenAiCoach:
             tokens_in += add_in
             cached += add_cached
             tokens_out += add_out
+            await self._note(add_in, add_cached, add_out)
 
             msg = resp.choices[0].message
             text = (msg.content or "").strip()
@@ -237,13 +252,14 @@ class OpenAiCoach:
 
             said: list[str] = []
             calls: dict[int, dict[str, str]] = {}
+            round_in = round_cached = round_out = 0
             async for event in await self._client.chat.completions.create(**kwargs):
                 u = getattr(event, "usage", None)
                 if u is not None:
                     add_in, add_cached, add_out = token_counts(u)
-                    tokens_in += add_in
-                    cached += add_cached
-                    tokens_out += add_out
+                    round_in += add_in
+                    round_cached += add_cached
+                    round_out += add_out
                 if not getattr(event, "choices", None):
                     continue
                 delta = event.choices[0].delta
@@ -263,6 +279,13 @@ class OpenAiCoach:
                     if fn is not None:
                         slot["name"] += fn.name or ""
                         slot["args"] += fn.arguments or ""
+
+            # Раунд закончился — его токены записаны сразу: закроет человек аппку на
+            # следующем раунде, этот уже учтён.
+            tokens_in += round_in
+            cached += round_cached
+            tokens_out += round_out
+            await self._note(round_in, round_cached, round_out)
 
             if not calls:
                 break

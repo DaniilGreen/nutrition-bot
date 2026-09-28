@@ -44,7 +44,9 @@ def build_nlu(settings: Settings, meter: object | None = None) -> NluPort:
         from app.infrastructure.nlu.openai_nlu import OpenAiNlu
 
         return OpenAiNlu(
-            AsyncOpenAI(api_key=settings.openai_api_key, max_retries=settings.openai_max_retries),
+            # max_retries=0: у разбора свой цикл повторов, вложенные повторы SDK превращали
+            # одну попытку в 3 × 5 запросов (AI-PRINCIPLES §1).
+            AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0),
             settings.openai_model,
             sample_k=settings.sample_k,
             # AI-PRINCIPLES §2: разбор — основная статья трат, и до 08.09.2026
@@ -64,7 +66,10 @@ def build_stt(settings: Settings, meter: object | None = None) -> SttPort | None
     from app.infrastructure.stt.whisper_client import OpenAiStt
 
     return OpenAiStt(
-        AsyncOpenAI(api_key=settings.openai_api_key, max_retries=settings.openai_max_retries),
+        AsyncOpenAI(
+            api_key=settings.openai_api_key, max_retries=settings.openai_max_retries,
+            timeout=settings.openai_timeout_s,
+        ),
         settings.openai_stt_model,
         meter,
     )
@@ -79,13 +84,16 @@ def build_vision(settings: Settings, meter: object | None = None) -> VisionPort 
     from app.infrastructure.vision.openai_vision import OpenAiVision
 
     return OpenAiVision(
-        AsyncOpenAI(api_key=settings.openai_api_key, max_retries=settings.openai_max_retries),
-        settings.openai_model,
+        AsyncOpenAI(
+            api_key=settings.openai_api_key, max_retries=settings.openai_max_retries,
+            timeout=settings.openai_timeout_s,
+        ),
+        settings.vision_model,
         meter,
     )
 
 
-def build_coach_port(settings: Settings) -> CoachPort | None:
+def build_coach_port(settings: Settings, meter: object | None = None) -> CoachPort | None:
     """Ассистент вкладки AI доступен только при наличии ключа; иначе None —
     молча притворяться работающим хуже, чем честно сказать «недоступен»."""
     if not settings.openai_api_key:
@@ -95,8 +103,12 @@ def build_coach_port(settings: Settings) -> CoachPort | None:
     from app.infrastructure.nlu.openai_coach import OpenAiCoach
 
     return OpenAiCoach(
-        AsyncOpenAI(api_key=settings.openai_api_key, max_retries=settings.openai_max_retries),
+        AsyncOpenAI(
+            api_key=settings.openai_api_key, max_retries=settings.openai_max_retries,
+            timeout=settings.openai_timeout_s,
+        ),
         settings.coach_model,
+        meter,
     )
 
 
@@ -123,7 +135,7 @@ class Container:
             nlu=build_nlu(settings, SpendMeter(db.session_factory, "nlu")),
             stt=build_stt(settings, SpendMeter(db.session_factory, "stt")),
             vision=build_vision(settings, SpendMeter(db.session_factory, "vision")),
-            coach_port=build_coach_port(settings),
+            coach_port=build_coach_port(settings, SpendMeter(db.session_factory, "coach")),
         )
 
     def spend_for(self, session: AsyncSession) -> SqlSpendRepo:

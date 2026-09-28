@@ -14,15 +14,22 @@ from tests.initdata_fixtures import valid
 class StubCoach:
     """Вместо модели: возвращает заданный ответ и заданный расход."""
 
-    def __init__(self, text="Белка мало.", tokens=(1000, 200)):
+    def __init__(self, text="Белка мало.", tokens=(1000, 200), spend=None):
         self.text, self.tokens = text, tokens
         self.seen_facts = None
         self.seen_data = None      # §6.21: чем модель могла бы воспользоваться
+        # Как настоящий адаптер: расход пишет он сам, своей сессией (AI-PRINCIPLES §2).
+        self.spend = spend
 
     async def ask(self, question, facts, data=None):
         self.seen_facts = facts
         self.seen_data = data
-        return self.text, Usage("gpt-5.1", self.tokens[0], self.tokens[1])
+        usage = Usage("gpt-5.1", self.tokens[0], self.tokens[1])
+        if self.spend is not None:
+            await self.spend.add(user_id=None, model=usage.model, purpose="coach",
+                                 input_tokens=usage.input_tokens,
+                                 output_tokens=usage.output_tokens, cost_usd=usage.cost_usd)
+        return self.text, usage
 
 
 @pytest.fixture
@@ -81,8 +88,8 @@ async def test_лимит_проверяется_до_запроса(client, fak
 
 
 async def test_расход_копится_между_запросами(client, fake_container):
-    fake_container.coach_port = StubCoach()
     fake_container.spend = InMemorySpendRepo()
+    fake_container.coach_port = StubCoach(spend=fake_container.spend)
     async with client as c:
         first = (await c.post("/api/coach", json={"question": "а"}, headers=_hdr())).json()
         second = (await c.post("/api/coach", json={"question": "б"}, headers=_hdr())).json()

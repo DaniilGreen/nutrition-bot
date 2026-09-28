@@ -114,16 +114,9 @@ class Coach:
             if self._meals is not None and self._weights is not None
             else None
         )
+        # Расход уже записан адаптером по раундам (AI-PRINCIPLES §2); здесь только итог
+        # для показа. Писать ещё раз — двойной учёт.
         text, usage = await self._port.ask(question, facts, data)
-
-        await self._spend.add(
-            user_id=user.id,
-            model=usage.model,
-            purpose="coach",
-            input_tokens=usage.input_tokens,
-            output_tokens=usage.output_tokens,
-            cost_usd=usage.cost_usd,
-        )
         return CoachAnswer(
             text=text,
             spent_usd=spent + usage.cost_usd,
@@ -170,12 +163,7 @@ class Coach:
 
         text = "".join(parts).strip()
         if usage is not None:
-            await self._spend.add(
-                user_id=user.id, model=usage.model, purpose="coach",
-                input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
-                cost_usd=usage.cost_usd,
-            )
-            spent += usage.cost_usd
+            spent += usage.cost_usd   # записан адаптером по раундам, здесь — только показ
         yield CoachChunk(
             kind="end", text=text, spent_usd=spent, limit_usd=self._limit,
             actions=await self._actions(user, text),

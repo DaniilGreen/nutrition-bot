@@ -111,16 +111,18 @@ async def test_преамбула_перед_инструментом_отмен
     assert ev[-1]["text"] == "Во вторник был фо бо."   # преамбулы в итоге нет
 
 
-async def test_расход_пишется_один_раз_и_по_всем_раундам(client, fake_container):
+async def test_сервис_не_пишет_расход_второй_раз(client, fake_container):
+    """Расход ассистента пишет адаптер после каждого раунда своей сессией
+    (AI-PRINCIPLES §2). Сервис только показывает итог: запиши он ещё раз — учёт
+    удвоится, и лимит сработает вдвое раньше."""
     fake_container.coach_port = StubStream(tokens=(2800, 900))
     spend = InMemorySpendRepo()
     fake_container.spend = spend
     async with client as c:
         r = await c.post("/api/coach/stream", json={"question": "q"}, headers=_hdr())
     end = _events(r.text)[-1]
-    assert end["spent_usd"] > 0
-    total = await spend.spent_this_month(purpose="coach")
-    assert total == pytest.approx(end["spent_usd"], abs=1e-6)
+    assert end["spent_usd"] > 0                          # показ итога — как был
+    assert await spend.spent_this_month(purpose="coach") == 0
 
 
 @pytest.mark.parametrize("body", [{}, {"question": "  "}])

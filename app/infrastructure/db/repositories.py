@@ -206,7 +206,9 @@ class SqlProductRepo:
         return _product_to_domain(orm)
 
     async def all_keys(self) -> list[str]:
-        res = await self._s.execute(select(ProductORM.canonical_key))
+        # По id, то есть в порядке добавления: так список в промпте только дописывается в
+        # конец, и кэш промпта не сбивается от каждого нового продукта.
+        res = await self._s.execute(select(ProductORM.canonical_key).order_by(ProductORM.id))
         return list(res.scalars().all())
 
     async def list_all(self) -> list[Product]:

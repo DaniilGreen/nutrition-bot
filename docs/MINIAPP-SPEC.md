@@ -1028,7 +1028,8 @@ AI ────────────── (корень: Разбор; вл�
 | Пункт | Контрол | По умолчанию | БД |
 |---|---|---|---|
 | Модель | переход | `gpt-5.1` (`config.openai_model`) | **не делать пользовательской.** Смена модели меняет плотности, которые пиннятся навсегда (`INV-2`) — это инженерная ручка, не настройка. Оставить строкой **только для чтения** |
-| Лимит в месяц | значение `$5` | — | **не делать сейчас:** учёта расходов нет вообще, нужна новая таблица `llm_usage`. Вернуться, когда учёт появится, и показывать **потрачено**, а не лимит |
+| Потрачено за месяц | значение «$X из $Y» | — | ✅ `llm_spend` + потолок. **Видят все**: без этой строки отказ ассистента по лимиту нечем объяснить |
+| Лимит на ИИ | выбор $10 / 15 / 20 / 25 / 30 / 50 | `AI_MONTH_LIMIT_USD` | ✅ `app_settings` (28.09.2026). **Только владелец** (`users.role = 'owner'`): группа рисуется у него одного, а `PATCH /api/settings/ai-limit` проверяет роль на сервере (MA-INV-65). Отметка переключается на месте, экран не перерисовывается (MA-INV-32). Число с центами для месячного бюджета не нужно |
 | Тон | переход (Сухой / Подробный) | «Сухой» | **новое**, `ui_prefs` — строка в промпт ассистента. Дёшево |
 
 **О ПРИЛОЖЕНИИ**
@@ -2271,6 +2272,11 @@ per_day_kcal|null, floor_hit, verdict}`. `/api/day` отдаёт тот же о�
 собирается из его позиций с граммовкой; способ ввода — припиской. Фраза ввода хранится, но
 заголовком не служит: она не переживает правку веса и отсутствует у фото.
 
+**MA-INV-65. Лимит на ИИ меняет только владелец, и проверяет это сервер.** Роль — колонка
+`users.role`; скрытая в интерфейсе кнопка защитой не считается, поэтому `PATCH
+/api/settings/ai-limit` отвечает не владельцу 403 `owner_only`, а значение вне $1–100 — 400
+`bad_limit`. Новый потолок действует со следующего платного вызова, без перезапуска.
+
 **MA-INV-57. Новые числа бланка ничего не решают.** Мышечный индекс, балл и сегменты не входят
 в обмен, белок, расход и цели, не попадают в `mismatches` и не гасят сохранение. Цена их ошибки
 — кривая картинка; цена лишнего подтверждения — обесцененный MA-INV-50 на весе и жире.
@@ -2568,6 +2574,7 @@ mime: `voice.webm` / `voice.mp4` / `voice.ogg`. Потолок размера �
 | `POST /api/meals/photo` | **НЕТ** (§6.22): `Assistant.read_photo`. Тело — сырой JPEG ≤ 4 МБ, `?days_ago=`, подпись — заголовок `X-Caption` (percent-encoded, не в адресе: он попадает в журнал доступа), `Idempotency-Key`. Ответ — этикетка (`kind:"label"`, как выше) или `{kind:"photo", draft_id, dish, weighed, total_g, components:[{i,name,grams}], ask_fat, fat_kind, ask_dressing, liquid}`, или `{kind:"unknown", message}`. 400 `empty_image`/`image_too_big`, 429 `rate_limited` (6/мин) / `ai_limit`, 503 `vision_off` |
 | `POST /api/meals/photo/commit` | **НЕТ** (§6.22): `{draft_id, components:[{i, grams}] (≤ 8), fat, dressing, weighed}` + `Idempotency-Key` → `Assistant.log_photo` → тот же union, что `/api/meals`. 400 `draft_gone`/`empty_plate`/`bad_grams` (черновик при этом не сгорает) |
 | `GET /api/week` | **НЕТ** (§6.23): `StatsService.week_balance`. `?weeks_ago=0..12` → объект недели; 400 `bad_week` |
+| `PATCH /api/settings/ai-limit` | **НЕТ** (§6.5, MA-INV-65): `{usd}` → `{limit_usd, spent_usd}`. Только владелец (`users.role = 'owner'`): остальным 403 `owner_only`; не число или вне 1–100 — 400 `bad_limit`. Значение — в `app_settings`, действует со следующего платного вызова. `GET /api/settings` отдаёт владельцу ещё блок `ai_limit: {usd, options}` |
 | `POST /api/body-scans` | **НЕТ** (§6.24): `{draft_id, fields:{…}, confirmed}` + `Idempotency-Key` → `{scan, updated, goal_proposal}`; 400 `draft_gone`/`bad_scan`/`scan_mismatch` (несошлось и не подтверждено) |
 | `GET /api/body-scans` | **НЕТ** (§6.24): `{scans:[…], changes, reconcile, energy, goal_proposal, pace, forecast}` для «Итогов» и настроек. В каждом замере — `smi`, `inbody_score` и `segments` (объект на пять сегментов либо `null`); `pace` — кг в месяц по жиру и безжировой со своей погрешностью; `forecast` — `{verdict, target_pct, months}`, срок только при `verdict = "ok"` |
 | `DELETE /api/body-scans/{id}` | **НЕТ** (§6.24): удалить свой замер; 404 `scan_not_found` |

@@ -16,13 +16,15 @@ from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
 from app.domain.consensus import SAMPLE_TEMPERATURE
 from app.infrastructure.nlu.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.infrastructure.nlu.schema import NluResult
-from app.infrastructure.openai_compat import temperature_for, token_counts
+from app.infrastructure.openai_compat import request_extras, temperature_for, token_counts
 
 # AI-PRINCIPLES §1: сеть моргает, и разбор еды не должен от этого теряться.
 # Ретраим всё одинаково — разбираться, что именно отвалилось, дороже, чем повторить.
 RETRIES = 2
 BACKOFF_S = 1.0
 TIMEOUT_S = 30.0
+# Один ключ на все вызовы разбора: префикс у них общий (схема + системный промпт + каталог).
+CACHE_KEY = "burnfat-nlu"
 
 
 log = logging.getLogger(__name__)
@@ -76,6 +78,7 @@ class OpenAiNlu:
             # gpt-5.x отвергает явную temperature (400) — там параметр не шлём вовсе
             temperature=temperature_for(self._model, temperature),
             timeout=self._timeout,
+            extra_body=request_extras(self._model, CACHE_KEY) or None,
         )
         await self._meter_usage(completion)
         parsed = completion.choices[0].message.parsed
@@ -104,18 +107,23 @@ class OpenAiNlu:
         self, text: str, known_keys: Sequence[str]
     ) -> list[ParsedMessage]:
         first = await self._parse_at(text, known_keys, 0.0)
-        # Сэмплируем ТОЛЬКО когда есть что оценивать (meal с не-стейтед позициями) — иначе
-        # один вызов: вес/статистика/коррекция/готовые КБЖУ оценки не требуют.
-        if (
-            self._k <= 1
-            or first.intent is not Intent.MEAL
-            or not any(_needs_estimate(i) for i in first.items)
-        ):
+        # INV-12: сэмплируем только НОВЫЙ продукт. У знакомого плотность берётся из каталога
+        # (INV-2), и медиана сэмплов выбрасывалась бы — до 28.09.2026 это были 82% вызовов
+        # разбора. Позицию с вариантами тоже не сэмплируем: после выбора её переразберут.
+        # Вес, статистика, коррекция и названные КБЖУ оценки не требуют вовсе.
+        known = set(known_keys)
+        todo = [
+            i for i in first.items
+            if _needs_estimate(i) and i.canonical_key not in known and not i.clarify_options
+        ]
+        if self._k <= 1 or first.intent is not Intent.MEAL or not todo:
             return [first]
         extra = await asyncio.gather(
-            *[self._parse_at(text, known_keys, SAMPLE_TEMPERATURE) for _ in range(self._k - 1)]
+            *[self._parse_at(text, known_keys, SAMPLE_TEMPERATURE) for _ in range(self._k - 1)],
+            return_exceptions=True,
         )
-        return [first, *extra]
+        # Упавший сэмпл не отменяет уже оплаченные: медиане хватит остальных.
+        return [first, *(s for s in extra if isinstance(s, ParsedMessage))]
 
 
 def _needs_estimate(item: ParsedItem) -> bool:

@@ -16,12 +16,16 @@ from dataclasses import dataclass
 # $/1M токенов: (вход, выход)
 PRICES: dict[str, tuple[float, float]] = {
     "gpt-5.1": (1.25, 10.00),
+    # developers.openai.com/api/docs/pricing, 28.09.2026 — кандидат на разбор (пакет Б).
+    "gpt-5.4-mini": (0.75, 4.50),
     "gpt-4.1": (2.00, 8.00),
     "gpt-4.1-mini": (0.40, 1.60),
     "whisper-1": (0.006, 0.0),  # за минуту, не за токен — считается отдельно
 }
 
-DEFAULT_PRICE = (2.00, 8.00)  # неизвестная модель: считаем дороже, а не дешевле
+# Неизвестная модель: считаем дороже, а не дешевле. Выход — выше любого известного: у
+# gpt-5.x он $10, и прежние $8 занижали бы как раз главную статью.
+DEFAULT_PRICE = (2.00, 15.00)
 
 # $/1M токенов входа, прочитанных из кэша промпта. У OpenAI кэш включается сам
 # на префиксе от 1024 токенов, и у разбора он срабатывает почти всегда: промпт
@@ -29,9 +33,20 @@ DEFAULT_PRICE = (2.00, 8.00)  # неизвестная модель: счита�
 # и счётчик завышал разбор в разы. Модели нет в словаре — кэш по полной цене.
 CACHED_PRICES: dict[str, float] = {
     "gpt-5.1": 0.125,
+    "gpt-5.4-mini": 0.075,
     "gpt-4.1": 0.50,
     "gpt-4.1-mini": 0.10,
 }
+
+
+def _by_prefix(table: dict, model: str, default):
+    """Цена по самому длинному ключу, с которого начинается имя модели.
+
+    Снапшот с датой (`gpt-5.1-2025-11-13`) иначе падал на цену по умолчанию, и счётчик
+    врал в неизвестную сторону. Самый длинный — чтобы `gpt-4.1-mini` не взял цену `gpt-4.1`.
+    """
+    best = max((k for k in table if model.startswith(k)), key=len, default=None)
+    return table[best] if best is not None else default
 
 
 @dataclass(frozen=True)
@@ -43,9 +58,9 @@ class Usage:
 
     @property
     def cost_usd(self) -> float:
-        pin, pout = PRICES.get(self.model, DEFAULT_PRICE)
+        pin, pout = _by_prefix(PRICES, self.model, DEFAULT_PRICE)
         cached = min(max(self.cached_tokens, 0), self.input_tokens)
-        pcached = CACHED_PRICES.get(self.model, pin)
+        pcached = _by_prefix(CACHED_PRICES, self.model, pin)
         return (
             (self.input_tokens - cached) * pin + cached * pcached + self.output_tokens * pout
         ) / 1_000_000
@@ -73,6 +88,13 @@ def demo() -> None:
     assert abs(c.cost_usd - (0.125 + 0.1125)) < 1e-9, c.cost_usd
     # Кэш больше входа — мусор провайдера; не уходим в минус.
     assert Usage("gpt-5.1", 10, 0, cached_tokens=99).cost_usd >= 0
+    # Снапшот с датой — цена своего семейства, а не по умолчанию.
+    snap = Usage("gpt-5.1-2025-11-13", 1_000_000, 100_000, cached_tokens=900_000)
+    assert abs(snap.cost_usd - c.cost_usd - 1.0) < 1e-9, snap.cost_usd
+    # Самый длинный префикс: mini не берёт цену старшей модели.
+    assert Usage("gpt-4.1-mini", 1_000_000, 0).cost_usd == 0.40
+    assert abs(Usage("gpt-5.4-mini", 1_000_000, 0, cached_tokens=1_000_000).cost_usd
+               - 0.075) < 1e-9
     assert not month_limit_reached(4.99, 5.0)
     assert month_limit_reached(5.0, 5.0)      # ровно лимит — уже стоп
     assert month_limit_reached(7.3, 5.0)
