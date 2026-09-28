@@ -258,10 +258,16 @@ class Assistant:
         )
 
     async def _ensure_budget(self) -> None:
-        """MA-INV-45: проверка ДО vision-вызова — иначе лимит ничего не ограничивает."""
-        if self._spend is None or self._limit <= 0:
+        """MA-INV-45: проверка ДО vision-вызова — иначе лимит ничего не ограничивает.
+
+        Потолок читается из базы при каждой проверке (MA-INV-65): владелец поднял его в
+        настройках — действует со следующего вызова, без перезапуска."""
+        if self._spend is None:
             return
-        if month_limit_reached(await self._spend.spent_this_month(), self._limit):
+        limit = await self._spend.month_limit(self._limit)
+        if limit <= 0:
+            return
+        if month_limit_reached(await self._spend.spent_this_month(), limit):
             raise LimitReached
 
     async def answer_portion(

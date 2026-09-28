@@ -92,6 +92,7 @@ class Coach:
         self._port = port
         self._spend = spend
         self._stats = stats
+        self._default_limit = limit_usd
         self._limit = limit_usd
         self._weights = weights
         self._products = products
@@ -133,6 +134,9 @@ class Coach:
         # Весь расход, а не только ассистента: лимит, который видит часть трат,
         # не ограничивает ничего (AI-PRINCIPLES §2).
         spent = await self._spend.spent_this_month()
+        # Потолок — из базы при каждой проверке (MA-INV-65); значение из окружения — только
+        # запасное. Запоминаем, чтобы ответ показал тот же потолок, по которому проверяли.
+        self._limit = await self._spend.month_limit(self._default_limit)
         if month_limit_reached(spent, self._limit):
             raise LimitReached
         return spent

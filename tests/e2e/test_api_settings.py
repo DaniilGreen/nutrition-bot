@@ -282,3 +282,62 @@ async def test_смена_белка_в_форме_двигает_углевод
     assert r["moved"] == {"protein_g": -100, "carb_g": 104}
     assert r["low_protein"] is True
     assert same["changed"] == "none"
+
+
+# --- лимит на ИИ: только владелец (MA-INV-65, 28.09.2026) --------------------
+
+
+async def _as_owner(c, fake_container) -> int:
+    uid = await _login(c)
+    fake_container.users._users[uid].role = "owner"   # noqa: SLF001 — роль ставится в базе
+    return uid
+
+
+async def test_не_владелец_не_видит_и_не_меняет_лимит(client):
+    async with client as c:
+        await _login(c)
+        d = (await c.get("/api/settings", headers=_hdr())).json()
+        r = await c.patch("/api/settings/ai-limit", json={"usd": 50}, headers=_hdr())
+    assert "ai_limit" not in d                    # группа не рисуется
+    assert d["coach"]["limit_usd"] == 15.0        # но траты и потолок видны: отказ объясним
+    assert r.status_code == 403 and r.json()["error"]["code"] == "owner_only"
+
+
+async def test_владелец_меняет_лимит_и_он_действует_сразу(client, fake_container):
+    async with client as c:
+        await _as_owner(c, fake_container)
+        before = (await c.get("/api/settings", headers=_hdr())).json()
+        r = await c.patch("/api/settings/ai-limit", json={"usd": 20}, headers=_hdr())
+        after = (await c.get("/api/settings", headers=_hdr())).json()
+    assert before["ai_limit"] == {"usd": 15.0, "options": [10, 15, 20, 25, 30, 50]}
+    assert r.status_code == 200 and r.json()["limit_usd"] == 20.0
+    assert after["coach"]["limit_usd"] == 20.0 and after["ai_limit"]["usd"] == 20.0
+
+
+async def test_полоска_бюджета_во_вкладке_ai_видит_новый_потолок(client, fake_container):
+    async with client as c:
+        await _as_owner(c, fake_container)
+        await c.patch("/api/settings/ai-limit", json={"usd": 30}, headers=_hdr())
+        budget = (await c.get("/api/coach/budget", headers=_hdr())).json()
+    assert budget["limit_usd"] == 30.0
+
+
+@pytest.mark.parametrize("usd", [0, 0.5, 101, -5, "много", None, "nan"])
+async def test_лимит_вне_границ_отклоняется(client, fake_container, usd):
+    async with client as c:
+        await _as_owner(c, fake_container)
+        r = await c.patch("/api/settings/ai-limit", json={"usd": usd}, headers=_hdr())
+    assert r.status_code == 400 and r.json()["error"]["code"] == "bad_limit"
+
+
+async def test_проверка_бюджета_берёт_потолок_из_базы():
+    """Поднятый владельцем потолок снимает отказ со следующего вызова, без перезапуска."""
+    from app.application.coach import Coach, LimitReached
+    from tests.fakes import InMemorySpendRepo
+
+    spend = InMemorySpendRepo(preloaded_usd=16.0)
+    coach = Coach(port=None, spend=spend, stats=None, limit_usd=15.0)
+    with pytest.raises(LimitReached):
+        await coach.ensure_budget()
+    await spend.set_month_limit(20.0)
+    assert await coach.ensure_budget() == 16.0

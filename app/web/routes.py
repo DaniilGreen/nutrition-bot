@@ -1266,10 +1266,12 @@ async def coach_budget(
     """Сколько бюджета осталось. Нужен настройкам: без счётчика строка «Лимит»
     была бы декоративной, а таких мы не выкатываем (MA-INV-31)."""
     container: Container = request.app.state.container
-    spent = await container.spend_for(session).spent_this_month()
+    spend = container.spend_for(session)
     return {
-        "spent_usd": round(spent, 4),
-        "limit_usd": container.settings.ai_month_limit_usd,
+        "spent_usd": round(await spend.spent_this_month(), 4),
+        # Из базы, как и проверка бюджета (MA-INV-65): иначе полоска во вкладке AI
+        # показывала бы потолок из окружения после того, как владелец его поднял.
+        "limit_usd": await spend.month_limit(container.settings.ai_month_limit_usd),
         "available": container.coach_port is not None,
     }
 
@@ -1301,18 +1303,53 @@ async def settings(
     """Всё, что показывает экран настроек, одним запросом (§6.5)."""
     container: Container = request.app.state.container
     goal = await assistant.current_goal(user)
-    spent = await container.spend_for(session).spent_this_month()
-    return {
+    spend = container.spend_for(session)
+    spent = await spend.spent_this_month()
+    limit = await spend.month_limit(container.settings.ai_month_limit_usd)
+    out: dict[str, Any] = {
         "goal": goal_json(goal),
         "timezone": user.timezone,
         "prefs": sanitize(user.ui_prefs),
+        # Траты и потолок видят все: иначе отказ ассистента по лимиту нечем объяснить.
         "coach": {
             "model": container.settings.coach_model,
-            "limit_usd": container.settings.ai_month_limit_usd,
+            "limit_usd": limit,
             "spent_usd": round(spent, 4),
             "available": container.coach_port is not None,
         },
     }
+    if user.role == OWNER:
+        # Менять — только владельцу (MA-INV-65); остальным группа не рисуется вовсе.
+        out["ai_limit"] = {"usd": limit, "options": list(LIMIT_OPTIONS)}
+    return out
+
+
+OWNER = "owner"
+LIMIT_OPTIONS = (10, 15, 20, 25, 30, 50)
+LIMIT_RANGE = (1.0, 100.0)
+
+
+@router.patch("/settings/ai-limit")
+async def edit_ai_limit(
+    body: dict[str, Any], user: CurrentUser, request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, Any]:
+    """Месячный потолок трат на модель — только владелец (MA-INV-65).
+
+    Роль проверяется здесь, а не в интерфейсе: скрытая кнопка защитой не считается.
+    """
+    if user.role != OWNER:
+        raise ApiError(403, "owner_only", "Лимит меняет только владелец.")
+    try:
+        usd = float(body.get("usd"))
+    except (TypeError, ValueError):
+        usd = float("nan")
+    if not LIMIT_RANGE[0] <= usd <= LIMIT_RANGE[1]:     # NaN сюда тоже не пройдёт
+        raise bad_request("bad_limit", "Лимит — от $1 до $100 в месяц.")
+    container: Container = request.app.state.container
+    spend = container.spend_for(session)
+    await spend.set_month_limit(usd)
+    return {"limit_usd": usd, "spent_usd": round(await spend.spent_this_month(), 4)}
 
 
 @router.patch("/settings/prefs")

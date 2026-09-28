@@ -12,6 +12,7 @@ from app.domain.body_scan import SEGMENT_FIELDS, BodyScan
 from app.domain.goals import Goal
 from app.domain.value_objects import Density, Macros
 from app.infrastructure.db.models import (
+    AppSettingORM,
     BodyScanORM,
     BugReportORM,
     GoalHistoryORM,
@@ -737,6 +738,9 @@ class SqlWeightRepo:
         )
 
 
+LIMIT_KEY = "ai_month_limit_usd"
+
+
 class SqlSpendRepo:
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
@@ -761,6 +765,21 @@ class SqlSpendRepo:
                 cost_usd=cost_usd,
             )
         )
+        await self._s.flush()
+
+    async def month_limit(self, default: float) -> float:
+        row = await self._s.get(AppSettingORM, LIMIT_KEY)
+        try:
+            return float(row.value) if row is not None else default
+        except (TypeError, ValueError):
+            return default          # мусор в строке — не повод отключать лимит
+
+    async def set_month_limit(self, usd: float) -> None:
+        stmt = pg_insert(AppSettingORM).values(key=LIMIT_KEY, value=usd)
+        await self._s.execute(stmt.on_conflict_do_update(
+            index_elements=[AppSettingORM.key],
+            set_={"value": stmt.excluded.value, "updated_at": func.now()},
+        ))
         await self._s.flush()
 
     async def spent_this_month(self, *, purpose: str | None = None) -> float:

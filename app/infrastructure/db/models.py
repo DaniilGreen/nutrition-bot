@@ -217,6 +217,19 @@ class BugReportORM(Base):
     )
 
 
+class AppSettingORM(Base):
+    """Настройки всей инсталляции, а не человека (§6.5). Первая — месячный потолок трат на
+    модель: платит владелец за всех, поэтому в строке `users` ему не место."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict | float | int | str] = mapped_column(JSONB)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class LlmSpendORM(Base):
     """Один вызов LLM — одна строка. Агрегат не дал бы разобраться, что съело бюджет."""
 

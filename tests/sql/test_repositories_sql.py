@@ -247,3 +247,15 @@ async def test_часовая_сводка_со_сдвигом_суток(sessio
     rows = await SqlMealRepo(session).hourly_kcal(u.id, days=2, tz="Etc/GMT-7", day_start=4)
     local = night.astimezone(ZoneInfo("Etc/GMT-7")) - timedelta(hours=4)
     assert (local.date().isoformat(), 20) in {(d, h) for d, h, _ in rows}, rows
+
+
+async def test_потолок_трат_хранится_в_настройках_инсталляции(session):
+    """MA-INV-65: пусто — значение из окружения; задан — он; повторная запись обновляет."""
+    from app.infrastructure.db.repositories import SqlSpendRepo
+
+    spend = SqlSpendRepo(session)
+    assert await spend.month_limit(15.0) == 15.0
+    await spend.set_month_limit(20.0)
+    assert await spend.month_limit(15.0) == 20.0
+    await spend.set_month_limit(25.0)
+    assert await spend.month_limit(15.0) == 25.0

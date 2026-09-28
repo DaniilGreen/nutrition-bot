@@ -1318,10 +1318,16 @@
 
         group('Ассистент',
           row('Модель', d.coach.model) +
-          row('Потрачено за месяц', '$' + n(d.coach.spent_usd, 2) + ' из $' + n(d.coach.limit_usd, 2)),
+          /* id — чтобы смена лимита обновила строку на месте, без перерисовки экрана. */
+          '<div class="field"><label>Потрачено за месяц</label>' +
+            '<span class="num" id="coach-spent" style="font-size:var(--f-body-s);' +
+            'color:var(--text-muted)">' + esc(spentLine(d.coach.spent_usd, d.coach.limit_usd)) +
+            '</span></div>',
           d.coach.available
             ? 'Лимит жёсткий: при исчерпании ассистент отвечает отказом, а не молча хуже.'
             : 'Ключ не настроен — вкладка AI недоступна.') +
+
+        limitGroup(d) +
 
         '<div class="pager"><button id="toDay">Назад</button></div>');
     }).catch(failure);
@@ -1436,6 +1442,69 @@
             !!r.low_protein);
       renderSettings();
     }).catch(function (e) { toast(e.message, true); });
+  }
+
+  var MONTHS_IN = ['январе', 'феврале', 'марте', 'апреле', 'мае', 'июне', 'июле',
+                   'августе', 'сентябре', 'октябре', 'ноябре', 'декабре'];
+
+  /* Лимит на ИИ (§6.5, MA-INV-65). Сервер отдаёт блок `ai_limit` только владельцу — у
+     остальных группы нет вовсе. Права проверяет сервер: скрытая кнопка защитой не
+     считается. Кнопки — тем же способом, что цель по жиру: отметка на месте, без
+     перерисовки экрана (MA-INV-32). */
+  function limitGroup(d) {
+    var lim = d.ai_limit;
+    if (!lim) return '';
+    var cur = Number(lim.usd);
+    return group('Лимит на ИИ',
+      lim.options.map(function (v) {
+        var on = v === cur;
+        return '<div class="pick' + (on ? ' on' : '') + '"' + pk(on) +
+          ' data-ailimit="' + v + '"><span class="dot"></span>' +
+          '<span style="flex-grow:1;font-size:var(--f-body-s)">$' + v + ' в месяц</span></div>';
+      }).join(''),
+      limitNote(d.coach.spent_usd, cur));
+  }
+
+  function spentLine(spent, limit) {
+    return '$' + n(spent, 2) + ' из $' + n(limit, 2);
+  }
+
+  function limitNote(spent, limit) {
+    return 'Потрачено ' + spentLine(spent, limit) + ' в ' + MONTHS_IN[new Date().getMonth()] +
+      '. Новый лимит действует сразу. При исчерпании отказывают только ассистент и фото; ' +
+      'запись текстом и голосом — никогда.';
+  }
+
+  /* Отметка переключается сразу, а тексты с цифрами — по ответу сервера: показывать
+     новый потолок, который не сохранился, хуже, чем подождать полсекунды. Отказ —
+     отметка возвращается туда, где была. */
+  function saveLimit(pick) {
+    var picks = root.querySelectorAll('.pick[data-ailimit]');
+    var before = root.querySelector('.pick[data-ailimit].on');
+    var mark = function (el) {
+      [].forEach.call(picks, function (x) {
+        var on = x === el;
+        x.classList.toggle('on', on);
+        x.setAttribute('aria-checked', on ? 'true' : 'false');
+      });
+    };
+    mark(pick);
+    return send('/api/settings/ai-limit', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ usd: Number(pick.dataset.ailimit) })
+    }).then(function (r) {
+      if (state.settings && state.settings.coach) state.settings.coach.limit_usd = r.limit_usd;
+      var spent = document.getElementById('coach-spent');
+      if (spent) spent.textContent = spentLine(r.spent_usd, r.limit_usd);
+      var note = pick.closest('section') && pick.closest('section').nextElementSibling;
+      if (note) note.textContent = limitNote(r.spent_usd, r.limit_usd);
+      state.budget = null;       // полоска бюджета во вкладке AI перечитает потолок
+      toast('Лимит: $' + n(r.limit_usd) + ' в месяц.');
+    }).catch(function (e) {
+      if (before) mark(before);
+      toast(e.message, true);
+    });
   }
 
   function patch(path, body, ok, quiet) {
@@ -3136,6 +3205,7 @@
     if (pick.dataset.activity) {
       return patch('/api/settings/prefs', { activity: pick.dataset.activity }, 'Активность изменена.');
     }
+    if (pick.dataset.ailimit) return saveLimit(pick);
     if (pick.dataset.fatgoal != null) {
       /* Отметка, а не новые данные: переключаем на месте и не перерисовываем
          экран — тап по настройке не должен мигать (MA-INV-32). */

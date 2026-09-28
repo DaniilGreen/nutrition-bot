@@ -521,8 +521,15 @@ class InMemorySpendRepo:
 
     def __init__(self, preloaded_usd: float = 0.0) -> None:
         self._rows: list[tuple[str, float]] = []
+        self.limit: float | None = None
         if preloaded_usd:
             self._rows.append(("coach", preloaded_usd))
+
+    async def month_limit(self, default: float) -> float:
+        return default if self.limit is None else self.limit
+
+    async def set_month_limit(self, usd: float) -> None:
+        self.limit = usd
 
     async def add(
         self, *, user_id, model, purpose, input_tokens, output_tokens, cost_usd

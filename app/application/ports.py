@@ -279,6 +279,14 @@ class SpendRepo(Protocol):
         cost_usd: float,
     ) -> None: ...
 
+    async def month_limit(self, default: float) -> float:
+        """Потолок трат на месяц: заданный владельцем, иначе `default` из окружения."""
+        ...
+
+    async def set_month_limit(self, usd: float) -> None:
+        """Сохранить потолок. Права проверяет вызывающий (MA-INV-65)."""
+        ...
+
     async def spent_this_month(self, *, purpose: str | None = None) -> float:
         """Потрачено с первого числа текущего месяца, в долларах.
 
