@@ -447,7 +447,8 @@ class StubNlu:
         self._i += 1
         return self._responses[idx]
 
-    async def parse_samples(self, text: str, known_keys: object) -> list[ParsedMessage]:
+    async def parse_samples(self, text: str, known_keys: object, *, force: bool = False
+                            ) -> list[ParsedMessage]:
         return [await self.parse(text, known_keys)]  # один сэмпл → поведение как до D-15
 
 
@@ -456,11 +457,14 @@ class SamplingStubNlu:
 
     def __init__(self, samples: list[ParsedMessage]) -> None:
         self._samples = list(samples)
+        self.forced = False            # просил ли сервис сэмплы принудительно (INV-12)
 
     async def parse(self, text: str, known_keys: object) -> ParsedMessage:
         return self._samples[0]
 
-    async def parse_samples(self, text: str, known_keys: object) -> list[ParsedMessage]:
+    async def parse_samples(self, text: str, known_keys: object, *, force: bool = False
+                            ) -> list[ParsedMessage]:
+        self.forced = self.forced or force
         return list(self._samples)
 
 

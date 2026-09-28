@@ -1489,11 +1489,15 @@
       });
     };
     mark(pick);
+    /* Номер запроса: два быстрых нажатия — два ответа, и старший не должен затереть
+       тексты младшего, когда придёт вторым. */
+    var seq = state.limitSeq = (state.limitSeq || 0) + 1;
     return send('/api/settings/ai-limit', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ usd: Number(pick.dataset.ailimit) })
     }).then(function (r) {
+      if (seq !== state.limitSeq) return;
       if (state.settings && state.settings.coach) state.settings.coach.limit_usd = r.limit_usd;
       var spent = document.getElementById('coach-spent');
       if (spent) spent.textContent = spentLine(r.spent_usd, r.limit_usd);
@@ -1502,7 +1506,7 @@
       state.budget = null;       // полоска бюджета во вкладке AI перечитает потолок
       toast('Лимит: $' + n(r.limit_usd) + ' в месяц.');
     }).catch(function (e) {
-      if (before) mark(before);
+      if (seq === state.limitSeq && before) mark(before);
       toast(e.message, true);
     });
   }

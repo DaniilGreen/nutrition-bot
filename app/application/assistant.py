@@ -127,6 +127,11 @@ class Assistant:
         # Заменяет фейковый ретрай при temperature=0 (был почти no-op). Адаптер сам решает k:
         # для не-meal/стейтед — один сэмпл. Фейки возвращают один сэмпл → поведение тестов цело.
         samples = await self._nlu.parse_samples(text, known_keys=known_keys)
+        if len(samples) == 1 and await self._becomes_new_product(samples[0], known_keys):
+            # Ключ знакомый, а продукт чужой — запись создаст новый; одна оценка его плотности
+            # пиннится навсегда (INV-2), значит нужна медиана (INV-12). Редкий случай: лишний
+            # один вызов дешевле плотности наугад.
+            samples = await self._nlu.parse_samples(text, known_keys=known_keys, force=True)
         parsed = _consolidate(samples)
         parsed.photo = photo
         parsed.weight_guessed = weight_guessed
@@ -256,6 +261,21 @@ class Assistant:
             user, text, input_type="photo", day_offset=day_offset,
             photo=True, weight_guessed=not weighed,
         )
+
+    async def _becomes_new_product(self, parsed: ParsedMessage, known_keys: list[str]) -> bool:
+        """Есть ли позиция, которую адаптер счёл знакомой по ключу, а запись создаст заново.
+
+        Только ключи из каталога: новый ключ адаптер видел сам, и если не сэмплировал — значит
+        сэмплирование выключено (k = 1), и форсировать его — лишний вызов впустую."""
+        if parsed.intent is not Intent.MEAL:
+            return False
+        known = set(known_keys)
+        for item in parsed.items:
+            if item.total_kcal or item.clarify_options or item.canonical_key not in known:
+                continue
+            if not await self._meals.resolves_to_existing(item):
+                return True
+        return False
 
     async def _ensure_budget(self) -> None:
         """MA-INV-45: проверка ДО vision-вызова — иначе лимит ничего не ограничивает.

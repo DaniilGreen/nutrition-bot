@@ -104,14 +104,16 @@ class OpenAiNlu:
         return await self._parse_at(text, known_keys, 0.0)
 
     async def parse_samples(
-        self, text: str, known_keys: Sequence[str]
+        self, text: str, known_keys: Sequence[str], *, force: bool = False
     ) -> list[ParsedMessage]:
         first = await self._parse_at(text, known_keys, 0.0)
         # INV-12: сэмплируем только НОВЫЙ продукт. У знакомого плотность берётся из каталога
         # (INV-2), и медиана сэмплов выбрасывалась бы — до 28.09.2026 это были 82% вызовов
         # разбора. Позицию с вариантами тоже не сэмплируем: после выбора её переразберут.
         # Вес, статистика, коррекция и названные КБЖУ оценки не требуют вовсе.
-        known = set(known_keys)
+        # `force` — сервис выяснил, что знакомый по ключу продукт на деле чужой, и запись
+        # создаст новый (ключ совпал, имя нет): тогда сэмплы нужны, как любому новому.
+        known = set() if force else set(known_keys)
         todo = [
             i for i in first.items
             if _needs_estimate(i) and i.canonical_key not in known and not i.clarify_options
@@ -123,7 +125,11 @@ class OpenAiNlu:
             return_exceptions=True,
         )
         # Упавший сэмпл не отменяет уже оплаченные: медиане хватит остальных.
-        return [first, *(s for s in extra if isinstance(s, ParsedMessage))]
+        ok = [s for s in extra if isinstance(s, ParsedMessage)]
+        if len(ok) < len(extra):
+            log.warning("сэмплы согласия: %d из %d упали, медиана по %d",
+                        len(extra) - len(ok), len(extra), len(ok) + 1)
+        return [first, *ok]
 
 
 def _needs_estimate(item: ParsedItem) -> bool:

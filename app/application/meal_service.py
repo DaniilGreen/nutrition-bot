@@ -360,6 +360,19 @@ class MealService:
                     return (updated, old_grams)
         return None
 
+    async def resolves_to_existing(self, parsed_item: ParsedItem) -> bool:
+        """Возьмёт ли запись эту позицию из каталога — та же логика, что `_resolve_product`,
+        без создания продукта. Нужна разбору, чтобы решить, сэмплировать ли (INV-12): ключ
+        мог совпасть, а продукт оказаться чужим — тогда будет новый продукт, и его плотности
+        нужна медиана, а не одна оценка."""
+        key = _canonical_key(parsed_item.canonical_key, parsed_item.name)
+        existing = await self._products.get_by_key(key)
+        if existing is not None and _names_compatible(parsed_item.name, existing.display_name):
+            return True
+        if parsed_item.from_label:
+            return False
+        return best_product_match(parsed_item.name, await self._products.list_all()) is not None
+
     async def _resolve_product(self, parsed_item: ParsedItem) -> Product:
         key = _canonical_key(parsed_item.canonical_key, parsed_item.name)
         existing = await self._products.get_by_key(key)

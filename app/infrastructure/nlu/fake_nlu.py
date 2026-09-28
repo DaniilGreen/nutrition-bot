@@ -16,7 +16,7 @@ _GRAMS_RE = re.compile(r"(\d+)\s*(?:г|гр|грамм|g)\b", re.IGNORECASE)
 
 class FakeNlu:
     async def parse_samples(
-        self, text: str, known_keys: Sequence[str]
+        self, text: str, known_keys: Sequence[str], *, force: bool = False
     ) -> list[ParsedMessage]:
         return [await self.parse(text, known_keys)]  # фолбэк без LLM — один сэмпл
 
