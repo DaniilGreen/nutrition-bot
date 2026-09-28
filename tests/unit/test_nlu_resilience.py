@@ -100,7 +100,7 @@ async def test_каждый_сэмпл_считается_отдельно():
         portion_large_g=None, unit_weight_g=None, kcal_per_100g=45.0,
         zero_calorie=False, protein_per_100g=2.0, fat_per_100g=2.0, carb_per_100g=4.0,
         total_kcal=None, total_protein=None, total_fat=None, total_carb=None,
-        clarify_options=None, confidence=0.9,
+        clarify_options=None, clarify_kcal_per_100g=None, confidence=0.9,
     )
     resp = _ok()
     resp.choices[0].message.parsed.items = [item]
@@ -131,7 +131,7 @@ def _meal(key: str, *, options=None):
         portion_large_g=None, unit_weight_g=None, kcal_per_100g=45.0,
         zero_calorie=False, protein_per_100g=2.0, fat_per_100g=2.0, carb_per_100g=4.0,
         total_kcal=None, total_protein=None, total_fat=None, total_carb=None,
-        clarify_options=options, confidence=0.9,
+        clarify_options=options, clarify_kcal_per_100g=None, confidence=0.9,
     )
     resp = _ok()
     resp.choices[0].message.parsed.items = [item]
@@ -197,3 +197,24 @@ async def test_параметры_кэша_уходят_у_gpt5_и_не_уход
 
     await OpenAiNlu(Spy(fails=0), "gpt-5.1", sample_k=1).parse("курица", [])
     assert seen["extra_body"]["prompt_cache_retention"] == "24h"
+
+
+# --- порог вопроса — у приложения (FR-20, 28.09.2026) ------------------------
+
+
+async def test_варианты_с_малой_разницей_не_спрашиваются_и_сэмплируются():
+    """Грудка отварная 137 / гриль 165 — разница 1.2×: вопроса нет. И раз вопроса нет,
+    новый продукт идёт в сэмплы, а не пиннится по одной оценке."""
+    resp = _meal("chicken_breast_x", options=["отварная", "гриль"])
+    resp.choices[0].message.parsed.items[0].clarify_kcal_per_100g = [137, 165]
+    client = FlakyClient(fails=0, response=resp)
+    samples = await OpenAiNlu(client, "gpt-5.1", sample_k=3).parse_samples("грудка", [])
+    assert samples[0].items[0].clarify_options is None
+    assert len(samples) == 3
+
+
+async def test_варианты_с_большой_разницей_спрашиваются():
+    resp = _meal("tofu_x", options=["мягкий", "плотный"])
+    resp.choices[0].message.parsed.items[0].clarify_kcal_per_100g = [55, 145]
+    parsed = await OpenAiNlu(FlakyClient(fails=0, response=resp), "gpt-5.1").parse("тофу", [])
+    assert parsed.items[0].clarify_options == ["мягкий", "плотный"]

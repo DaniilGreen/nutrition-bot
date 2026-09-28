@@ -54,6 +54,7 @@ from app.application.results import (
 from app.application.stats_service import StatsService, _require_id
 from app.application.weight_service import WeightService
 from app.domain.body_scan import mismatches
+from app.domain.clarify import worth_asking_portion
 from app.domain.consensus import confidence_from_cv, median_cv
 from app.domain.duplicates import Candidate, group
 from app.domain.goals import Goal, Remaining, in_goal, remaining
@@ -743,11 +744,19 @@ def _consolidate(samples: list[ParsedMessage]) -> ParsedMessage:
 
 
 def _first_unclarified_index(parsed: ParsedMessage) -> int | None:
-    """Первый продукт с порцией без размера — для него и зададим вопрос."""
+    """Первый продукт с порцией без размера — для него и зададим вопрос.
+
+    Где размер ничего не меняет (вода, чёрный кофе, разница порций < 40 ккал), вопроса нет:
+    пишем среднюю порцию (FR-21)."""
     for i, item in enumerate(parsed.items):
         if item.total_kcal:
             continue  # FR-22: явные КБЖУ названы — размер/грамовка не нужны
         if item.unit is Unit.PORTION and item.portion_hint is None:
+            if not worth_asking_portion(
+                item.zero_calorie, item.kcal_per_100g, item.portion_options
+            ):
+                item.portion_hint = "medium"
+                continue
             return i
     return None
 

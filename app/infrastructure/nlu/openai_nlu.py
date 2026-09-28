@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from openai import AsyncOpenAI
 
 from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
+from app.domain.clarify import worth_asking_variant
 from app.domain.consensus import SAMPLE_TEMPERATURE
 from app.infrastructure.nlu.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.infrastructure.nlu.schema import NluResult
@@ -177,7 +178,15 @@ def _to_dto(result: NluResult) -> ParsedMessage:
                 total_protein=i.total_protein,
                 total_fat=i.total_fat,
                 total_carb=i.total_carb,
-                clarify_options=i.clarify_options or None,
+                # Порог «стоит ли спрашивать» — у приложения (FR-20): варианты, разница которых
+                # меньше 1.25×, отбрасываются здесь, до решения о сэмплах — иначе позиция
+                # без вопроса осталась бы и без медианы.
+                clarify_options=(
+                    i.clarify_options
+                    if i.clarify_options
+                    and worth_asking_variant(i.clarify_options, i.clarify_kcal_per_100g)
+                    else None
+                ),
                 confidence=i.confidence,
             )
             for i in result.items
