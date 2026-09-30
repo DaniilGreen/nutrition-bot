@@ -17,7 +17,12 @@ from app.domain.clarify import worth_asking_variant
 from app.domain.consensus import SAMPLE_TEMPERATURE
 from app.infrastructure.nlu.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.infrastructure.nlu.schema import NluResult
-from app.infrastructure.openai_compat import request_extras, temperature_for, token_counts
+from app.infrastructure.openai_compat import (
+    out_of_credits,
+    request_extras,
+    temperature_for,
+    token_counts,
+)
 
 # AI-PRINCIPLES §1: сеть моргает, и разбор еды не должен от этого теряться.
 # Ретраим всё одинаково — разбираться, что именно отвалилось, дороже, чем повторить.
@@ -59,6 +64,8 @@ class OpenAiNlu:
             try:
                 return await self._parse_once(text, known_keys, temperature)
             except Exception as exc:  # noqa: BLE001 — таймаут/сеть/429 ретраим одинаково
+                if out_of_credits(exc):
+                    raise  # пустой баланс — повтор не поможет (NFR-4)
                 last = exc
                 log.warning("разбор не удался, попытка %d из %d: %s",
                             attempt + 1, 1 + RETRIES, exc)

@@ -218,3 +218,43 @@ async def test_варианты_с_большой_разницей_спраши�
     resp.choices[0].message.parsed.items[0].clarify_kcal_per_100g = [55, 145]
     parsed = await OpenAiNlu(FlakyClient(fails=0, response=resp), "gpt-5.1").parse("тофу", [])
     assert parsed.items[0].clarify_options == ["мягкий", "плотный"]
+
+
+# --- пустой баланс OpenAI (NFR-4, 30.09.2026) ---------------------------------
+
+
+def _no_credits():
+    import httpx
+    from openai import RateLimitError
+
+    resp = httpx.Response(429, request=httpx.Request("POST", "https://api.openai.com/v1/x"))
+    return RateLimitError("You have no credits remaining", response=resp, body={
+        "message": "You have no credits remaining", "type": "insufficient_quota",
+        "code": "credit_balance_exhausted"})
+
+
+def test_пустой_баланс_отличается_от_перегрузки():
+    import httpx
+    from openai import RateLimitError
+
+    from app.infrastructure.openai_compat import out_of_credits
+
+    assert out_of_credits(_no_credits())
+    resp = httpx.Response(429, request=httpx.Request("POST", "https://api.openai.com/v1/x"))
+    tpm = RateLimitError("Rate limit reached", response=resp,
+                         body={"type": "tokens", "code": "rate_limit_exceeded"})
+    assert not out_of_credits(tpm)
+    assert not out_of_credits(TimeoutError())
+
+
+async def test_пустой_баланс_не_повторяется():
+    client = FlakyClient(fails=0)
+
+    async def broke(**kwargs):
+        client.tries += 1
+        raise _no_credits()
+
+    client.parse = broke
+    with pytest.raises(Exception, match="no credits"):
+        await OpenAiNlu(client, "gpt-5.1").parse("гречка 200 г", [])
+    assert client.tries == 1

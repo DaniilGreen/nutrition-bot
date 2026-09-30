@@ -31,6 +31,7 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher(storage=MemoryStorage())
+    dp["container"] = container  # error-handler шлёт владельцу алерт о балансе (NFR-4)
     middleware = ServicesMiddleware(container)
     dp.message.middleware(middleware)
     dp.callback_query.middleware(middleware)

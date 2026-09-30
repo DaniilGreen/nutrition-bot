@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from contextlib import suppress
 from datetime import datetime
 from html import escape
@@ -105,6 +106,7 @@ from app.domain.plate import split as plate_split
 from app.domain.portion_answer import parse as parse_portion
 from app.domain.timeframe import tz_from_longitude, tz_from_utc_offset
 from app.domain.value_objects import Density
+from app.infrastructure.openai_compat import out_of_credits
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -113,15 +115,50 @@ logger = logging.getLogger(__name__)
 # --- надёжность: единый перехват ошибок ---------------------------------------
 
 
+NO_CREDITS_ALERT_EVERY_S = 6 * 3600
+_no_credits_alerted_at: float | None = None
+
+
+async def _alert_owner_no_credits(bot: Bot, container: object | None) -> None:
+    """Владельцу — одно сообщение о пустом балансе, не чаще раза в 6 часов (NFR-4).
+
+    ponytail: отметка в памяти процесса — после рестарта бота придёт ещё одно. Потолок —
+    лишнее сообщение на деплой, хранить отметку в базе ради этого не стоит."""
+    global _no_credits_alerted_at
+    now = time.monotonic()
+    if container is None or (
+        _no_credits_alerted_at is not None
+        and now - _no_credits_alerted_at < NO_CREDITS_ALERT_EVERY_S
+    ):
+        return
+    _no_credits_alerted_at = now
+    async with container.db.session_factory() as session:  # type: ignore[attr-defined]
+        _, users = container.assistant_for(session)  # type: ignore[attr-defined]
+        owners = [u for u in await users.list_active() if u.role == "owner"]
+    for owner in owners:
+        with suppress(Exception):
+            await bot.send_message(
+                owner.telegram_id,
+                "🔌 <b>Закончился баланс OpenAI</b>\n\nРазбор еды, голос и фото не работают, "
+                "пока не пополнишь: platform.openai.com → Settings → Billing.",
+            )
+
+
 @router.errors()
-async def on_error(event: ErrorEvent) -> bool:
+async def on_error(event: ErrorEvent, bot: Bot, container: object | None = None) -> bool:
     logger.exception("Unhandled error in handler", exc_info=event.exception)
     target = event.update.message
     if target is None and event.update.callback_query is not None:
         maybe = event.update.callback_query.message
         target = maybe if isinstance(maybe, Message) else None
+    if out_of_credits(event.exception):
+        with suppress(Exception):
+            await _alert_owner_no_credits(bot, container)
     if target is not None:
-        if isinstance(event.exception, RateLimitError):  # баг #16: 429 от OpenAI (лимит TPM)
+        if out_of_credits(event.exception):
+            text = ("🔌 Нейронка временно недоступна. Запиши чуть позже — "
+                    "владелец уже знает.")
+        elif isinstance(event.exception, RateLimitError):  # баг #16: 429 от OpenAI (лимит TPM)
             text = "⏳ ИИ перегружен. Подожди ~10 секунд и повтори — данные не потеряны."
         else:
             text = "⚠️ Что-то пошло не так. Попробуй ещё раз через пару секунд."

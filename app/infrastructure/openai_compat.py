@@ -67,3 +67,12 @@ def token_counts(usage: object) -> tuple[int, int, int]:
         num(details, "cached_tokens") if details is not None else 0,
         num(usage, "completion_tokens"),
     )
+
+
+# Кончились деньги на аккаунте — 429, как и перегрузка, но повтор тут ничего не даст (NFR-4).
+_NO_CREDITS = {"insufficient_quota", "credit_balance_exhausted"}
+
+
+def out_of_credits(exc: BaseException) -> bool:
+    """Отказ OpenAI из-за пустого баланса, а не временной перегрузки."""
+    return bool({getattr(exc, "code", None), getattr(exc, "type", None)} & _NO_CREDITS)
