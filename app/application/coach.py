@@ -10,9 +10,10 @@
 """
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from app.application.coach_data import CoachData
 from app.application.entities import User
@@ -24,8 +25,29 @@ from app.application.ports import (
     WeightRepo,
 )
 from app.application.stats_service import StatsService
+from app.clock import Clock, utcnow
 from app.domain.mentions import Candidate, mentioned
 from app.domain.spend import Usage, month_limit_reached
+
+# Реплика открытого разговора: (роль, текст). Роль — "user" или "assistant" (MA-INV-66).
+Turn = tuple[str, str]
+HISTORY_TURNS = 6
+HISTORY_CHARS = 2000
+
+
+def clean_history(raw: Any) -> list[Turn]:
+    """История от клиента — недоверенный ввод (MA-INV-66): последние 6 реплик, роли только
+    user/assistant, каждая не длиннее 2000 символов, пустые и кривые выбрасываются."""
+    if not isinstance(raw, list):
+        return []
+    turns: list[Turn] = []
+    for item in raw:
+        if not isinstance(item, dict) or item.get("role") not in ("user", "assistant"):
+            continue
+        text = str(item.get("text") or "").strip()[:HISTORY_CHARS]
+        if text:
+            turns.append((item["role"], text))
+    return turns[-HISTORY_TURNS:]
 
 
 @dataclass
@@ -50,11 +72,13 @@ class CoachPort(Protocol):
     """
 
     async def ask(
-        self, question: str, facts: str, data: Any | None = None
+        self, question: str, facts: str, data: Any | None = None,
+        history: Sequence[Turn] = (),
     ) -> tuple[str, Usage]: ...
 
     def stream(
-        self, question: str, facts: str, data: Any | None = None
+        self, question: str, facts: str, data: Any | None = None,
+        history: Sequence[Turn] = (),
     ) -> AsyncIterator[CoachChunk]:
         """То же самое, но кусками. Адаптер отдаёт delta/tool/reset и в конце
         один chunk с `usage` — расход по ВСЕМ раундам (MA-INV-40)."""
@@ -88,8 +112,10 @@ class Coach:
         weights: WeightRepo | None = None,
         products: ProductRepo | None = None,
         scans: BodyScanRepo | None = None,
+        clock: Clock = utcnow,
     ) -> None:
         self._port = port
+        self._clock = clock
         self._spend = spend
         self._stats = stats
         self._default_limit = limit_usd
@@ -101,23 +127,18 @@ class Coach:
         # там уже есть product_id и медианная граммовка.
         self._meals = meals
 
-    async def ask(self, user: User, question: str) -> CoachAnswer:
+    async def ask(
+        self, user: User, question: str, history: Sequence[Turn] = ()
+    ) -> CoachAnswer:
         # Проверка ДО запроса. После — это «превысил и узнал», то есть лимит,
         # который ничего не ограничивает.
         spent = await self.ensure_budget()
 
         facts = await self._facts(user)
-        # Инструменты выдаём только когда есть чем их обслужить: без репозиториев
-        # модель получит вызовы, на которые нечем ответить (§6.21).
-        data = (
-            CoachData(user, self._stats, self._meals, self._weights, self._products,
-                      self._scans)
-            if self._meals is not None and self._weights is not None
-            else None
-        )
+        data = self._data(user)
         # Расход уже записан адаптером по раундам (AI-PRINCIPLES §2); здесь только итог
         # для показа. Писать ещё раз — двойной учёт.
-        text, usage = await self._port.ask(question, facts, data)
+        text, usage = await self._port.ask(question, facts, data, history=history)
         return CoachAnswer(
             text=text,
             spent_usd=spent + usage.cost_usd,
@@ -141,19 +162,16 @@ class Coach:
             raise LimitReached
         return spent
 
-    async def ask_stream(self, user: User, question: str) -> AsyncIterator[CoachChunk]:
+    async def ask_stream(
+        self, user: User, question: str, history: Sequence[Turn] = ()
+    ) -> AsyncIterator[CoachChunk]:
         """Тот же ответ, но кусками (§6.21.1)."""
         spent = await self.ensure_budget()
         facts = await self._facts(user)
-        data = (
-            CoachData(user, self._stats, self._meals, self._weights, self._products,
-                      self._scans)
-            if self._meals is not None and self._weights is not None
-            else None
-        )
+        data = self._data(user)
         parts: list[str] = []
         usage: Usage | None = None
-        async for chunk in self._port.stream(question, facts, data):
+        async for chunk in self._port.stream(question, facts, data, history=history):
             if chunk.kind == "delta":
                 parts.append(chunk.text)
             elif chunk.kind == "reset":
@@ -172,6 +190,14 @@ class Coach:
             kind="end", text=text, spent_usd=spent, limit_usd=self._limit,
             actions=await self._actions(user, text),
         )
+
+    def _data(self, user: User) -> CoachData | None:
+        """Инструменты — только когда есть чем их обслужить: без репозиториев модель
+        получит вызовы, на которые нечем ответить (§6.21)."""
+        if self._meals is None or self._weights is None:
+            return None
+        return CoachData(user, self._stats, self._meals, self._weights, self._products,
+                         self._scans, clock=self._clock)
 
     async def _actions(self, user: User, text: str) -> list[Candidate]:
         """Что из названного можно записать одним тапом.
@@ -200,9 +226,12 @@ class Coach:
         rows = await self._stats.last_days_macros(user, 30)
         goal = await self._stats.current_goal(user)
         logged = [(d, m, k) for d, m, k in rows if k > 0]
+        # Время — чтобы «за последний час» и «с 20:00» не угадывались (§6.21.2).
+        now = self._clock().astimezone(ZoneInfo(user.timezone))
         head = (
             f"Цель на день: {goal.daily_kcal:.0f} ккал, белок {goal.protein_g:.0f} г, "
-            f"жир {goal.fat_g:.0f} г, углеводы {goal.carb_g:.0f} г."
+            f"жир {goal.fat_g:.0f} г, углеводы {goal.carb_g:.0f} г.\n"
+            f"Сейчас {now:%Y-%m-%d %H:%M} по времени человека."
         )
         if not logged:
             return head + "\nЗаписей за 30 дней нет."

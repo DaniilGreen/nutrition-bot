@@ -1542,7 +1542,20 @@
       ? '<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>' +
         '<span class="mic" style="margin-left:6px">' + esc(m.busy) + '</span>'
       : '';
-    return esc(m.text) + busy;
+    /* §6.21.2: из разметки модели рисуем только **жирный**. Замена идёт после esc —
+       в тексте уже нет ни одного «<», так что HTML от модели сюда не попадёт. */
+    return esc(m.text).replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>') + busy;
+  }
+
+  /* §6.21.2: последние реплики открытого разговора — чтобы «разложи» было про прошлый
+     ответ. Пузыри с ошибкой и недописанные не шлём: это не слова ассистента. Сервер
+     всё равно обрежет и проверит (MA-INV-66). */
+  function chatHistory() {
+    return (state.chat || []).filter(function (m) {
+      return !m.busy && !m.err && m.text;
+    }).slice(-6).map(function (m) {
+      return { role: m.me ? 'user' : 'assistant', text: m.text };
+    });
   }
 
   /* Поток ответа правит только свой пузырь: полная перерисовка на каждом
@@ -1625,6 +1638,7 @@
   function askCoach(text) {
     if (!text || state.asking) return;
     state.asking = true;
+    var history = chatHistory();
     state.chat = (state.chat || []).concat([{ me: true, text: text }]);
     /* Пузырь ответа заводим сразу пустым: в него потечёт текст, и он же
        держит строку состояния. Иначе экран стоит пустым до первого куска. */
@@ -1634,12 +1648,12 @@
 
     var done = function (err) {
       bubble.busy = null;
-      if (err) bubble.text = bubble.text || err;
+      if (err) { bubble.text = bubble.text || err; bubble.err = true; }
       state.asking = false;
       renderAi();
     };
 
-    streamCoach(text, bubble, function () { paintBubble(bubble); })
+    streamCoach(text, history, bubble, function () { paintBubble(bubble); })
       .then(function (ok) {
         if (ok) return done(null);
         /* Поток не сложился — повторяем обычным запросом. Ассистент, который
@@ -1649,7 +1663,7 @@
         renderAi();
         return send('/api/coach', {
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: text })
+          body: JSON.stringify({ question: text, history: history })
         }).then(function (d) {
           bubble.text = d.text;
           bubble.actions = d.actions || [];
@@ -1662,7 +1676,7 @@
 
   /* Чтение SSE. Возвращает true, если поток дошёл до конца; false — если этот
      клиент потоков не умеет и надо идти запасным путём. */
-  function streamCoach(question, bubble, onTick) {
+  function streamCoach(question, history, bubble, onTick) {
     if (!window.fetch || !window.TextDecoder) return Promise.resolve(false);
     return fetch('/api/coach/stream', {
       method: 'POST',
@@ -1670,7 +1684,7 @@
         'Content-Type': 'application/json',
         'X-Telegram-Init-Data': tg.initData
       },
-      body: JSON.stringify({ question: question })
+      body: JSON.stringify({ question: question, history: history })
     }).then(function (r) {
       if (!r.ok) {
         return r.json().catch(function () { return {}; }).then(function (body) {
@@ -1700,7 +1714,9 @@
             if (ev.kind === 'delta') bubble.text += ev.text;
             else if (ev.kind === 'reset') bubble.text = '';
             else if (ev.kind === 'tool') bubble.busy = TOOL_SAYS[ev.text] || 'смотрю данные';
-            else if (ev.kind === 'error') { bubble.text = ev.message; finished = true; }
+            else if (ev.kind === 'error') {
+              bubble.text = ev.message; bubble.err = true; finished = true;
+            }
             else if (ev.kind === 'end') {
               bubble.text = ev.text || bubble.text;
               bubble.actions = ev.actions || [];

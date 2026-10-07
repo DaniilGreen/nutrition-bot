@@ -10,7 +10,7 @@ MA-INV-39: объект создаётся УЖЕ привязанным к че
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -81,8 +81,8 @@ class CoachData:
 
     async def meals_on(self, date_str: Any = None) -> dict[str, Any]:
         """Приёмы конкретного дня с позициями: время, что записано, граммовка."""
-        day = _parse_day(date_str)
         today = local_date(self._clock(), self._user.timezone, day_start(self._user.ui_prefs))
+        day = _parse_day(date_str, today)
         days_ago = (today - day).days
         if days_ago < 0 or days_ago > 365:
             return {"date": day.isoformat(), "meals": [],
@@ -96,11 +96,14 @@ class CoachData:
                     "at": m.eaten_at.astimezone(zone).strftime("%H:%M"),
                     "said": m.raw_input[:120],
                     "kcal": round(m.totals.kcal),
+                    # Без Б/Ж/У модель честно отвечала «в базе только ккал» (§6.21.2).
+                    **_pfc(m.totals),
                     "items": [
                         {
                             "name": i.name_snapshot,
                             "grams": round(i.grams),
                             "kcal": round(i.macros.kcal),
+                            **_pfc(i.macros),
                             "estimated": bool(i.is_estimate),
                         }
                         for i in m.items
@@ -199,15 +202,23 @@ class CoachData:
         }
 
 
-def _parse_day(value: Any) -> date:
+def _pfc(m: Any) -> dict[str, float]:
+    return {"protein_g": round(m.protein, 1), "fat_g": round(m.fat, 1),
+            "carb_g": round(m.carb, 1)}
+
+
+def _parse_day(value: Any, today: date) -> date:
     """Дата от модели. Не разобрали — сегодня: отказ на кривом аргументе стоил
-    бы человеку ответа, а «сегодня» это осмысленный запасной вариант."""
+    бы человеку ответа, а «сегодня» это осмысленный запасной вариант.
+
+    `today` — по поясу человека: сервер живёт в UTC, и с полуночи до 7 утра его
+    «сегодня» было бы вчерашним днём (§6.21.2)."""
     if isinstance(value, str):
         try:
             return date.fromisoformat(value.strip()[:10])
         except ValueError:
             pass
-    return datetime.now().date()
+    return today
 
 
 def demo() -> None:
@@ -217,10 +228,11 @@ def demo() -> None:
     assert _clamp(0, 1, 90, 14) == 1           # пол
     assert _clamp("вчера", 1, 90, 14) == 14    # мусор → дефолт
     assert _clamp(None, 1, 90, 14) == 14
-    assert _parse_day("2026-09-01") == date(2026, 9, 1)
-    assert _parse_day("2026-09-01T10:00:00") == date(2026, 9, 1)
-    assert _parse_day("позавчера") == datetime.now().date()
-    assert _parse_day(None) == datetime.now().date()
+    today = date(2026, 10, 7)  # «сегодня» человека, а не сервера
+    assert _parse_day("2026-09-01", today) == date(2026, 9, 1)
+    assert _parse_day("2026-09-01T10:00:00", today) == date(2026, 9, 1)
+    assert _parse_day("позавчера", today) == today
+    assert _parse_day(None, today) == today
     print("данные ассистента: ок")
 
 

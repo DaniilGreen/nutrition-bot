@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.application.coach_data import MAX_DAYS, CoachData
-from app.application.entities import Meal, MealItem, User, WeightLog
+from app.application.entities import Meal, MealItem, WeightLog
 from app.application.stats_service import StatsService
 from app.domain.goals import Goal
 from app.domain.value_objects import Macros
@@ -134,3 +134,19 @@ async def test_без_каталога_доля_всё_равно_считает
     acc = await CoachData(me, stats, meals, InMemoryWeightRepo()).accuracy(30)
     assert acc["share_estimated"] == 1.0
     assert "estimated_products" not in acc
+
+
+async def test_приём_несёт_бжу_а_не_только_ккал():
+    """§6.21.2: без Б/Ж/У модель отвечала «в базе только ккал», хотя они есть."""
+    data, _, _ = await _setup()
+    today = (await data.day_totals(1))[-1]["date"]
+    meal = (await data.meals_on(today))["meals"][0]
+    assert {"protein_g", "fat_g", "carb_g"} <= meal.keys()
+    assert {"protein_g", "fat_g", "carb_g"} <= meal["items"][0].keys()
+
+
+async def test_непонятная_дата_это_сегодня_человека():
+    """Модель прислала мусор вместо даты — берём «сегодня» по поясу человека."""
+    data, _, _ = await _setup()
+    today = (await data.day_totals(1))[-1]["date"]
+    assert (await data.meals_on("вчера вечером"))["date"] == today

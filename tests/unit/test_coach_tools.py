@@ -265,3 +265,16 @@ async def test_оборванный_поток_не_теряет_оплачен�
             break                              # человек закрыл аппку посреди второго раунда
     await stream.aclose()
     assert meter.notes == [(700, 15)]          # первый раунд уже учтён
+
+
+async def test_прошлые_реплики_идут_до_вопроса_а_факты_только_у_вопроса():
+    """§6.21.2: «разложи» должно видеть прошлый ответ; сводка фактов — только свежая."""
+    client = FakeClient([_resp(content="Лосось 140, нигири 108.")])
+    coach = OpenAiCoach(client, "gpt-5.1")
+    await coach.ask("разложи", "ФАКТЫ", FakeData(),
+                    history=[("user", "сколько с 20:00"), ("assistant", "853 ккал")])
+    msgs = client.calls[0]["messages"]
+    assert [m["role"] for m in msgs] == ["system", "user", "assistant", "user"]
+    assert msgs[2]["content"] == "853 ккал"
+    assert "ФАКТЫ" in msgs[-1]["content"] and "разложи" in msgs[-1]["content"]
+    assert not any("ФАКТЫ" in m["content"] for m in msgs[1:3])

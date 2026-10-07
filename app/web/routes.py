@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.assistant import Assistant
 from app.application.body_scans import BodyScanService, ScanCheck, from_reading
-from app.application.coach import LimitReached
+from app.application.coach import LimitReached, clean_history
 from app.application.dto import Unit
 from app.application.entities import User
 from app.application.results import (
@@ -1159,7 +1159,7 @@ async def coach(
     if service is None:
         raise unavailable("coach_off", "Ассистент недоступен: не настроен ключ.")
     try:
-        answer = await service.ask(user, question)
+        answer = await service.ask(user, question, clean_history(body.get("history")))
     except LimitReached as exc:
         raise ApiError(
             429, "coach_limit",
@@ -1197,6 +1197,7 @@ async def coach_stream(
     if len(question) > 500:
         raise bad_request("question_too_long", "Слишком длинный вопрос.")
     _throttle(request, user, "coach", limit=6, window=60)
+    history = clean_history(body.get("history"))  # недоверенный ввод (MA-INV-66)
 
     container: Container = request.app.state.container
     check = container.coach_for(session)
@@ -1221,7 +1222,7 @@ async def coach_stream(
                             "message": "Ассистент недоступен."})
                 return
             try:
-                async for chunk in service.ask_stream(user, question):
+                async for chunk in service.ask_stream(user, question, history):
                     yield _sse(_chunk_json(chunk))
                 await own.commit()
             except Exception:

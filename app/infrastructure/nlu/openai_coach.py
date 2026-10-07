@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from types import SimpleNamespace
 from typing import Any, Protocol
 
 from openai import AsyncOpenAI
 
-from app.application.coach import CoachChunk
+from app.application.coach import CoachChunk, Turn
 from app.domain.spend import Usage
 from app.infrastructure.openai_compat import token_counts
 
@@ -38,7 +38,10 @@ SYSTEM = """Ты — помощник по дневнику питания. От
 - Если данных мало для вывода, так и скажи, а не сочиняй.
 - Без нравоучений и оценок вроде «плохо» или «ты переел». Факты и следствия.
 - Называя продукт, пиши его ровно так, как он записан в дневнике.
-- 2–5 предложений. Списком — только если пунктов правда несколько."""
+- 2–5 предложений. Списком — только если пунктов правда несколько.
+- Выше могут быть прошлые реплики этого разговора. Короткий вопрос вроде «разложи» или
+  «посмотри ещё раз» — продолжение прошлого ответа, а не новая тема.
+- Из разметки — только **жирный**. Заголовков, таблиц и курсива не пиши."""
 
 TOOLS: list[dict[str, Any]] = [
     {
@@ -170,12 +173,10 @@ class OpenAiCoach:
             log.warning("не удалось записать расход ассистента", exc_info=True)
 
     async def ask(
-        self, question: str, facts: str, data: CoachData | None = None
+        self, question: str, facts: str, data: CoachData | None = None,
+        history: Sequence[Turn] = (),
     ) -> tuple[str, Usage]:
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM},
-            {"role": "user", "content": f"Мои данные:\n{facts}\n\nВопрос: {question}"},
-        ]
+        messages = _opening(question, facts, history)
         # Токены копим по ВСЕМ раундам: учесть только последний значило бы
         # недосчитать в разы, и лимит $5 перестал бы ограничивать (MA-INV-40).
         tokens_in = tokens_out = cached = 0
@@ -224,7 +225,8 @@ class OpenAiCoach:
 
 
     async def stream(
-        self, question: str, facts: str, data: CoachData | None = None
+        self, question: str, facts: str, data: CoachData | None = None,
+        history: Sequence[Turn] = (),
     ) -> AsyncIterator[CoachChunk]:
         """Тот же цикл, но текст отдаётся по мере генерации (§6.21.1).
 
@@ -232,10 +234,7 @@ class OpenAiCoach:
         закончился вызовом инструмента, шлём `reset`: модель написала преамбулу
         и передумала, и эта преамбула не должна висеть над настоящим ответом.
         """
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM},
-            {"role": "user", "content": f"Мои данные:\n{facts}\n\nВопрос: {question}"},
-        ]
+        messages = _opening(question, facts, history)
         tokens_in = tokens_out = cached = 0
 
         for round_no in range(MAX_ROUNDS):
@@ -314,6 +313,19 @@ class OpenAiCoach:
             kind="end",
             usage=Usage(self._model, tokens_in, tokens_out, cached),
         )
+
+
+def _opening(question: str, facts: str, history: Sequence[Turn]) -> list[dict[str, Any]]:
+    """Начало разговора: системный промпт, прошлые реплики открытого экрана, вопрос.
+
+    Сводка фактов — только у текущего вопроса: она свежая, а у прошлых реплик была бы
+    устаревшей копией (MA-INV-66). Реплики — простой текст, без вызовов инструментов:
+    за данными модель сходит заново."""
+    return [
+        {"role": "system", "content": SYSTEM},
+        *({"role": role, "content": text} for role, text in history),
+        {"role": "user", "content": f"Мои данные:\n{facts}\n\nВопрос: {question}"},
+    ]
 
 
 def _slot_call(slot: dict[str, str]) -> Any:

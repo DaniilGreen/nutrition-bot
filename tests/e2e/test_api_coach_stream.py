@@ -33,10 +33,11 @@ class StubStream:
             CoachChunk(kind="delta", text="молоко 3.2%."),
         ]
 
-    async def ask(self, question, facts, data=None):
+    async def ask(self, question, facts, data=None, history=()):
         return "нестримовый ответ", Usage("gpt-5.1", *self.tokens)
 
-    async def stream(self, question, facts, data=None):
+    async def stream(self, question, facts, data=None, history=()):
+        self.seen_history = list(history)
         for c in (self._chunks if self._chunks is not None else self._default()):
             yield c
         yield CoachChunk(kind="end", usage=Usage("gpt-5.1", *self.tokens))
@@ -167,3 +168,17 @@ async def test_лимит_считает_весь_расход_а_не_толь�
     async with client as c:
         r = await c.post("/api/coach/stream", json={"question": "q"}, headers=_hdr())
     assert r.status_code == 429
+
+
+async def test_поток_получает_историю(client, fake_container):
+    """§6.21.2: «разложи» в потоке — тоже с прошлыми репликами."""
+    port = StubStream()
+    fake_container.coach_port = port
+    fake_container.spend = InMemorySpendRepo()
+    history = [{"role": "user", "text": "сколько с 20:00"},
+               {"role": "assistant", "text": "853 ккал"}]
+    async with client as c:
+        r = await c.post("/api/coach/stream", json={"question": "разложи", "history": history},
+                         headers=_hdr())
+    assert r.status_code == 200, r.text
+    assert port.seen_history == [("user", "сколько с 20:00"), ("assistant", "853 ккал")]
