@@ -278,3 +278,16 @@ async def test_прошлые_реплики_идут_до_вопроса_а_ф�
     assert msgs[2]["content"] == "853 ккал"
     assert "ФАКТЫ" in msgs[-1]["content"] and "разложи" in msgs[-1]["content"]
     assert not any("ФАКТЫ" in m["content"] for m in msgs[1:3])
+
+
+async def test_вопрос_без_истории_не_помечен_продолжением():
+    client = FakeClient([_resp(content="ок")])
+    await OpenAiCoach(client, "gpt-5.1").ask("сколько белка", "ФАКТЫ", FakeData())
+    assert "продолжение" not in client.calls[0]["messages"][-1]["content"]
+
+
+async def test_вопрос_после_истории_помечен_продолжением():
+    client = FakeClient([_resp(content="ок")])
+    await OpenAiCoach(client, "gpt-5.1").ask("разложи", "ФАКТЫ", FakeData(),
+                                             history=[("assistant", "853 ккал")])
+    assert "продолжение разговора" in client.calls[0]["messages"][-1]["content"]
