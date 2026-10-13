@@ -9,8 +9,8 @@ from datetime import date, datetime
 from statistics import median
 from zoneinfo import ZoneInfo
 
-from app.application.coach import LimitReached
 from app.application.body_scans import from_reading
+from app.application.coach import LimitReached
 from app.application.dto import (
     Intent,
     ParsedItem,
@@ -58,6 +58,11 @@ from app.domain.clarify import worth_asking_portion
 from app.domain.consensus import confidence_from_cv, median_cv
 from app.domain.duplicates import Candidate, group
 from app.domain.goals import Goal, Remaining, in_goal, remaining
+from app.domain.menu import MenuLine
+from app.domain.menu import misread as menu_misread
+from app.domain.menu import picked as menu_picked
+from app.domain.menu import title as menu_title
+from app.domain.menu import totals as menu_totals
 from app.domain.naming import looks_like_key, phrase_names
 from app.domain.nutrition import atwater_suspect
 from app.domain.plate import caption_numbers, clean_name, said
@@ -188,7 +193,8 @@ class Assistant:
         return LabelRead(draft=draft, item_index=0, atwater_warning=warn)
 
     async def read_photo(
-        self, user: User, image: bytes, *, caption: str = "", photo_file_id: str | None = None
+        self, user: User, image: bytes, *, caption: str = "", photo_file_id: str | None = None,
+        day_offset: int = 0,
     ) -> Result:
         """FR-34: снимок → этикетка (FR-27) или карточка блюда.
 
@@ -201,6 +207,8 @@ class Assistant:
         reading = await self._vision.read_photo(image, caption)
         if reading.kind == "label":
             return await self.read_label(user, image, photo_file_id=photo_file_id)
+        if reading.kind == "menu":
+            return await self._log_menu(user, reading.menu, day_offset=day_offset)
         if reading.kind == "body_scan":
             scan = await self._vision.read_scan(image)
             if scan is None:
@@ -228,6 +236,33 @@ class Assistant:
         grams = plate_split(reading.components, total)
         weighed = total is not None or any(c.fixed for c in reading.components)
         return PlateRead(reading=reading, grams=grams, weighed=weighed, total_g=total)
+
+    async def _log_menu(
+        self, user: User, lines: list[MenuLine], *, day_offset: int = 0
+    ) -> Result:
+        """FR-38: скриншот меню — цифры как свои (FR-22), пишем сразу. Перепутанная цифра
+        (Атуотер не сходится) — не пишем: молча записать неверное хуже, чем переспросить."""
+        lines = menu_picked(lines)
+        if not lines:
+            return Unknown(reason="не нашёл на скриншоте калорий — пришли цифры текстом")
+        bad = [ln.name for ln in lines if menu_misread(ln)]
+        if bad:
+            return Unknown(
+                reason="цифры на скриншоте не сходятся (" + ", ".join(bad) + ") — "
+                "пришли ккал и БЖУ текстом, так надёжнее"
+            )
+        items = []
+        for ln in lines:
+            kcal, p, f, c = menu_totals(ln)
+            items.append(ParsedItem(
+                name=menu_title(ln), canonical_key="", unit=Unit.PORTION,
+                total_kcal=kcal, total_protein=p, total_fat=f, total_carb=c,
+            ))
+        draft = ParsedMessage(intent=Intent.MEAL, items=items, confidence=1.0)
+        return await self.continue_meal(
+            user, draft, raw_input="меню: " + ", ".join(i.name for i in items),
+            input_type="menu", day_offset=day_offset,
+        )
 
     @staticmethod
     def photo_text(

@@ -844,6 +844,9 @@ async def on_photo(
             screens.label(result),  # КБЖУ/100 г таблицей + вопрос про вес порции
             label_grams_keyboard(item.unit_weight_g, item.serving_g),
         )
+    elif isinstance(result, MealLogged):
+        # FR-38: скриншот меню записан сразу — тот же ответ, что у текста, с отменой.
+        await _reply_message(message, result, state, app_user, assistant, raw="меню")
     else:
         await message.answer(format_result(result))
 

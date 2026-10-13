@@ -46,8 +46,8 @@ from app.domain.goals import Goal
 from app.domain.goals import edit_goal as consistent_goal
 from app.domain.label_portion import label_grams
 from app.domain.plate import MAX_COMPONENTS
-from app.domain.prefs import merge as merge_prefs
 from app.domain.prefs import day_start, sanitize
+from app.domain.prefs import merge as merge_prefs
 from app.domain.timeframe import local_date
 from app.domain.value_objects import Density
 from app.web.deps import CurrentAssistant, CurrentScans, CurrentUser, current_user, get_session
@@ -383,7 +383,7 @@ async def log_photo(
     caption = unquote(request.headers.get("X-Caption") or "")[:200]
     offset = _day_offset(request.query_params.get("days_ago"))
     try:
-        result = await assistant.read_photo(user, image, caption=caption)
+        result = await assistant.read_photo(user, image, caption=caption, day_offset=offset)
     except LimitReached as exc:
         raise ApiError(
             429, "ai_limit",

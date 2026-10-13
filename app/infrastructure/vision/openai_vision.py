@@ -13,10 +13,15 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from app.application.dto import ParsedItem, PlateReading, ScanReading, Unit
+from app.domain.menu import MenuLine
 from app.domain.plate import FAT_KINDS, MAX_COMPONENTS, Component
 from app.infrastructure.openai_compat import temperature_for, token_counts
 
 log = logging.getLogger(__name__)
+
+# ponytail: потолок позиций со скриншота меню (FR-38). Больше — скорее страница каталога, чем
+# заказ; обрезка лишь страхует от записи всего меню разом.
+MAX_MENU = 8
 
 SYSTEM_PROMPT = (
     "Ты читаешь таблицу пищевой ценности (КБЖУ) с фото этикетки продукта.\n"
@@ -37,8 +42,13 @@ PHOTO_PROMPT = (
     "1) kind: 'label' — на снимке упаковка/этикетка с таблицей пищевой ценности; 'dish' — еда "
     "(блюдо на тарелке, в миске, в контейнере, продукт в руке); 'body_scan' — распечатка "
     "анализа состава тела (InBody, Tanita и подобные: вес, мышцы, жир, силуэт человека); "
+    "'menu' — скриншот или фото меню, карточки блюда в приложении доставки или кафе, где у "
+    "блюда НАПЕЧАТАНЫ калории на порцию («410 Kcal • Carbs 32.2G • Fat 11.4G • Protein "
+    "45.6G»). Фото блюда рядом с напечатанными калориями — это 'menu', а не 'dish'. Таблица "
+    "пищевой ценности на упаковке (на 100 г) — это 'label', а не 'menu'; "
     "'none' — ничего из этого.\n"
-    "Для 'label', 'body_scan' и 'none' остальные поля оставь пустыми.\n"
+    "Для 'label', 'body_scan' и 'none' остальные поля оставь пустыми; для 'menu' заполни "
+    "только menu (правило 8).\n"
     "2) dish — короткое название по-русски: «паста с курицей в сливочном соусе».\n"
     "3) components — съедобные составляющие (не больше 8), как их записал бы человек в "
     "дневник: КОНКРЕТНО и со способом приготовления («макароны отварные», «куриное филе "
@@ -79,7 +89,13 @@ PHOTO_PROMPT = (
     "крупы, яичница, овощи на сковороде); false — сырые овощи и фрукты, суп, выпечка, "
     "варёное на пару. fat_kind — какое масло вероятнее.\n"
     "6) ask_dressing — true, если это салат, нарезка или каша и заправки не видно.\n"
-    "7) liquid — true для супа и напитков."
+    "7) liquid — true для супа и напитков.\n"
+    "8) menu — только для kind='menu': каждая позиция, у которой напечатаны калории. name — "
+    "название ровно как напечатано (латиницей — так латиницей). kcal, protein, fat, carb — "
+    "ЧИСЛА РОВНО КАК НАПЕЧАТАНЫ на порцию, ничего не пересчитывай и не оценивай; не "
+    "напечатано — null. portion — объём или вес порции, если напечатан («360 мл»), иначе null. "
+    "count — число в счётчике заказа или корзины рядом с позицией («1», «2»), если он виден, "
+    "иначе null."
 )
 
 
@@ -90,8 +106,18 @@ class PlateComponentOut(BaseModel):
     fixed: bool
 
 
+class MenuLineOut(BaseModel):
+    name: str
+    kcal: float
+    protein: float | None
+    fat: float | None
+    carb: float | None
+    portion: str | None
+    count: int | None
+
+
 class PhotoReadingOut(BaseModel):
-    kind: Literal["label", "dish", "body_scan", "none"]
+    kind: Literal["label", "dish", "body_scan", "menu", "none"]
     dish: str
     components: list[PlateComponentOut]
     caption_total_g: float | None
@@ -99,6 +125,7 @@ class PhotoReadingOut(BaseModel):
     fat_kind: Literal["масло подсолнечное", "масло сливочное", "масло оливковое"]
     ask_dressing: bool
     liquid: bool
+    menu: list[MenuLineOut]
 
 
 SCAN_PROMPT = (
@@ -274,6 +301,11 @@ class OpenAiVision:
             fat_kind=r.fat_kind if r.fat_kind in FAT_KINDS else FAT_KINDS[0],
             ask_dressing=r.ask_dressing,
             liquid=r.liquid,
+            menu=[
+                MenuLine(m.name.strip()[:120], m.kcal, m.protein, m.fat, m.carb,
+                         (m.portion or "").strip()[:30] or None, m.count)
+                for m in r.menu[:MAX_MENU]
+            ],
         )
 
     async def read_scan(self, image: bytes) -> ScanReading | None:

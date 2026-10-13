@@ -74,7 +74,7 @@ class PlateReading:
     """FR-34: что vision увидел на снимке. Граммы тут — оценка модели; вес от
     человека накладывает `app/domain/plate.py`."""
 
-    kind: str                              # label | dish | body_scan | none
+    kind: str                              # label | dish | body_scan | menu | none
     dish: str = ""
     components: list = field(default_factory=list)  # list[domain.plate.Component]
     caption_total_g: float | None = None   # вес всей тарелки из подписи (как прочла модель)
@@ -82,6 +82,7 @@ class PlateReading:
     fat_kind: str = ""
     ask_dressing: bool = False
     liquid: bool = False
+    menu: list = field(default_factory=list)  # list[domain.menu.MenuLine], FR-38
 
 
 @dataclass
