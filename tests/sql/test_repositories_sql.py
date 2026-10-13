@@ -259,3 +259,28 @@ async def test_потолок_трат_хранится_в_настройках_
     assert await spend.month_limit(15.0) == 20.0
     await spend.set_month_limit(25.0)
     assert await spend.month_limit(15.0) == 25.0
+
+
+async def test_недавние_и_частые_только_свои_и_последний_раз(session):
+    """§6.25: порядок по последнему разу или частоте, поиск по имени, чужие приёмы не видны."""
+    me, other = await _user(session, 9301), await _user(session, 9302)
+    bread = await _product(session, "rx_bread", "Хлеб 100% зерно")
+    yog = await _product(session, "rx_yog", "йогурт_этикетка")
+    beer = await _product(session, "rx_beer", "пиво соседа")
+    await _meal(session, me, yog, 60, days_ago=3)
+    await _meal(session, me, yog, 70, days_ago=2)
+    await _meal(session, me, bread, 84, days_ago=1)
+    await _meal(session, other, beer, 500, days_ago=0)
+    repo = SqlMealRepo(session)
+
+    recent, total = await repo.product_usage(me.id, by="recent", query=None, offset=0, limit=10)
+    assert [pid for pid, _ in recent] == [bread.id, yog.id] and total == 2
+    frequent, _ = await repo.product_usage(me.id, by="frequent", query=None, offset=0, limit=10)
+    assert frequent == [(yog.id, 2), (bread.id, 1)]
+    # «%» и «_» в поиске — буквы, а не маски
+    found, n = await repo.product_usage(me.id, by="recent", query="100%", offset=0, limit=10)
+    assert [pid for pid, _ in found] == [bread.id] and n == 1
+
+    last = await repo.last_use(me.id, [yog.id, bread.id, beer.id])
+    assert last[yog.id][1] == 70 and last[bread.id][1] == 84
+    assert beer.id not in last  # пиво — чужое

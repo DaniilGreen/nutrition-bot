@@ -204,6 +204,40 @@ class InMemoryMealRepo:
         rows.sort(key=lambda r: -r[2])
         return rows[:limit]
 
+    async def product_usage(
+        self, user_id: int, *, by: str, query: str | None, offset: int, limit: int
+    ) -> tuple[list[tuple[int, int]], int]:
+        last: dict[int, datetime] = {}
+        uses: dict[int, int] = {}
+        for m in self._meals:
+            if m.user_id != user_id:
+                continue
+            for it in m.items:
+                if it.product_id is None:
+                    continue
+                if query and query.lower() not in it.name_snapshot.lower():
+                    continue
+                uses[it.product_id] = uses.get(it.product_id, 0) + 1
+                last[it.product_id] = max(last.get(it.product_id, m.eaten_at), m.eaten_at)
+        if by == "recent":
+            ids = sorted(uses, key=lambda p: last[p], reverse=True)
+        else:
+            ids = sorted(uses, key=lambda p: (-uses[p], -last[p].timestamp()))
+        page = ids[offset:offset + limit]
+        return [(p, uses[p]) for p in page], len(ids)
+
+    async def last_use(
+        self, user_id: int, product_ids: list[int]
+    ) -> dict[int, tuple[datetime, float]]:
+        out: dict[int, tuple[datetime, float]] = {}
+        for m in sorted(self._meals, key=lambda m: m.eaten_at, reverse=True):
+            if m.user_id != user_id:
+                continue
+            for it in m.items:
+                if it.product_id in product_ids:
+                    out.setdefault(it.product_id, (m.eaten_at, it.grams))
+        return out
+
     async def items_of_product(
         self, user_id: int, product_id: int, *, limit: int
     ) -> list[tuple[datetime, float, float]]:

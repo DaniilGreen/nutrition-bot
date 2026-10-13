@@ -358,6 +358,46 @@ class SqlMealRepo:
             (pid, name, float(kcal or 0), int(times)) for pid, name, kcal, times in res.all()
         ]
 
+    async def product_usage(
+        self, user_id: int, *, by: str, query: str | None, offset: int, limit: int
+    ) -> tuple[list[tuple[int, int]], int]:
+        last = func.max(MealORM.eaten_at)
+        uses = func.count()
+        stmt = (
+            select(MealItemORM.product_id, uses)
+            .join(MealORM, MealORM.id == MealItemORM.meal_id)
+            .where(MealORM.user_id == user_id, MealItemORM.product_id.is_not(None))
+        )
+        if query:
+            stmt = stmt.join(ProductORM, ProductORM.id == MealItemORM.product_id).where(
+                ProductORM.display_name.ilike(SqlProductRepo._like(query), escape="\\")
+            )
+        stmt = stmt.group_by(MealItemORM.product_id)
+        total = (
+            await self._s.execute(select(func.count()).select_from(stmt.subquery()))
+        ).scalar_one()
+        order = (last.desc(),) if by == "recent" else (uses.desc(), last.desc())
+        res = await self._s.execute(stmt.order_by(*order).offset(offset).limit(limit))
+        return [(int(pid), int(n)) for pid, n in res.all()], int(total)
+
+    async def last_use(
+        self, user_id: int, product_ids: list[int]
+    ) -> dict[int, tuple[datetime, float]]:
+        if not product_ids:
+            return {}
+        # ponytail: все появления страницы продуктов и первый по времени в Python. Потолок —
+        # продукт, съеденный тысячи раз; тогда DISTINCT ON (product_id).
+        res = await self._s.execute(
+            select(MealItemORM.product_id, MealORM.eaten_at, MealItemORM.grams)
+            .join(MealORM, MealORM.id == MealItemORM.meal_id)
+            .where(MealORM.user_id == user_id, MealItemORM.product_id.in_(product_ids))
+            .order_by(MealORM.eaten_at.desc())
+        )
+        out: dict[int, tuple[datetime, float]] = {}
+        for pid, at, g in res.all():
+            out.setdefault(int(pid), (at, float(g or 0)))
+        return out
+
     async def items_of_product(
         self, user_id: int, product_id: int, *, limit: int
     ) -> list[tuple[datetime, float, float]]:

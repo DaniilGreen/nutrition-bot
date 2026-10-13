@@ -93,6 +93,209 @@
     toastTimer = setTimeout(function () { el.hidden = true; }, 3500);
   }
 
+  /* §6.25: запись в ДРУГОЙ день, чем открыт, — подтверждение тостом с отменой. Экран
+     остаётся на месте: человек листает вчера и повторяет оттуда по одной позиции. */
+  function toastUndo(text, mealId) {
+    var el = document.getElementById('toast');
+    el.innerHTML = '<span style="flex-grow:1">' + esc(text) + '</span>' +
+      '<button class="undo" data-undo="' + mealId + '">Отменить</button>';
+    el.className = 'toast with-undo';
+    el.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.hidden = true; }, 6000);
+  }
+
+  /* «Сегодня / Вчера / сб, 11 окт» — день последнего раза в каталоге (§6.25). День
+     считает сервер по поясу человека; здесь только подпись. */
+  var WD = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+  var MON = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+  function dayName(ago, iso, cap) {
+    if (ago === 0) return cap ? 'Сегодня' : 'сегодня';
+    if (ago === 1) return cap ? 'Вчера' : 'вчера';
+    var a = String(iso || '').split('-');
+    if (a.length !== 3) return '';
+    var d = new Date(Number(a[0]), Number(a[1]) - 1, Number(a[2]));
+    return (ago < 7 ? WD[d.getDay()] + ', ' : '') + Number(a[2]) + ' ' + MON[Number(a[1]) - 1];
+  }
+
+  /* ── шторка порции (§6.25) ─────────────────────────────────────────────
+     Одна на два места: позиция прошлого дня («ещё раз») и продукт в каталоге.
+     Живёт вне #screen: перерисовка экрана её не сносит, а она не сносит экран. */
+  var sheetEl = document.createElement('div');
+  document.body.appendChild(sheetEl);
+
+  function portions(ref) {
+    var r = Math.round(ref);
+    if (!(r > 0)) return [];
+    var xs = [Math.round(r / 2), r, Math.round(r * 1.5)];
+    return xs.filter(function (g, i) { return g > 0 && xs.indexOf(g) === i; });
+  }
+
+  function openSheet(sh) {
+    sh.pick = Math.round(sh.ref) || 100;
+    sh.own = false;
+    state.sheet = sh;
+    paintSheet();
+  }
+  function closeSheet() { state.sheet = null; paintSheet(); }
+
+  /* MA-INV-68: цифра под граммовкой — предпросмотр. Записанное считает сервер. */
+  function sheetPreview(sh) {
+    var g = Number(sh.pick) || 0;
+    var pfc = sh.per.p != null
+      ? '<span class="mic num"><span style="color:var(--prot)">Б ' + n(sh.per.p * g) + '</span> · ' +
+        '<span style="color:var(--fat)">Ж ' + n(sh.per.f * g) + '</span> · ' +
+        '<span style="color:var(--carb)">У ' + n(sh.per.c * g) + '</span></span>'
+      : '';
+    return '<span class="num" style="font-size:var(--f-t2);font-weight:700">' +
+      n(sh.per.kcal * g) + '</span><span class="mic">ккал</span>' +
+      '<span style="flex-grow:1"></span>' + pfc;
+  }
+
+  function paintSheet() {
+    var sh = state.sheet;
+    if (!sh) { sheetEl.innerHTML = ''; return; }
+    var ref = Math.round(sh.ref);
+    var chips = portions(sh.ref).map(function (g) {
+      var on = !sh.own && g === sh.pick;
+      return '<button class="chip' + (on ? ' on' : '') + '" data-sg="' + g + '" aria-pressed="' +
+        on + '">' + n(g) + ' г' + (g === ref ? ' · ' + esc(sh.refLabel) : '') + '</button>';
+    }).join('') +
+      '<button class="chip' + (sh.own ? ' on' : '') + '" data-sown="1" aria-pressed="' +
+      sh.own + '">своё…</button>';
+    var own = sh.own
+      ? '<label class="composer" style="margin:0">' +
+        '<input id="sgrams" type="number" inputmode="numeric" min="1" max="5000" ' +
+        'value="' + (sh.pick || '') + '" aria-label="Граммы" ' +
+        'style="flex-grow:1;background:none;border:0;color:var(--text);font:inherit;' +
+        'outline:none;min-width:0"><span class="mic">г</span></label>'
+      : '';
+    var where = sh.from > 0
+      ? '<div class="where" role="group" aria-label="Куда записать">' +
+        '<button data-sto="0" aria-pressed="' + (sh.to === 0) + '"' +
+          (sh.to === 0 ? ' class="on"' : '') + '>Сегодня</button>' +
+        '<button data-sto="' + sh.from + '" aria-pressed="' + (sh.to === sh.from) + '"' +
+          (sh.to === sh.from ? ' class="on"' : '') + '>' + esc(sh.fromLabel) + '</button></div>'
+      : '';
+    var extra = sh.kind === 'item'
+      ? '<button class="ghost" data-sedit="1">Править эту запись</button>'
+      : '<button class="ghost" data-scard="1">Карточка продукта ›</button>';
+    sheetEl.innerHTML =
+      '<div class="sheet-back" data-sclose="1"></div>' +
+      '<div class="sheet" role="dialog" aria-modal="true" aria-label="' + esc(sh.title) + '">' +
+        '<div class="grip" aria-hidden="true"></div>' +
+        '<div style="display:flex;gap:var(--s-2);align-items:flex-start">' +
+          '<div style="flex-grow:1;min-width:0"><div class="sh-t">' + esc(sh.title) + '</div>' +
+          '<div class="mic" style="margin-top:4px">' + esc(sh.sub) + '</div></div>' +
+          '<button class="x" data-sclose="1" aria-label="Закрыть">✕</button></div>' +
+        '<div class="sh-chips">' + chips + '</div>' + own + where +
+        '<div class="sh-prev" id="sprev">' + sheetPreview(sh) + '</div>' +
+        '<button class="primary" data-sgo="1">Записать ' +
+          esc(sh.to === 0 ? 'сегодня' : 'в ' + sh.fromLabel) + '</button>' +
+        extra +
+      '</div>';
+    if (sh.own) {
+      var inp = document.getElementById('sgrams');
+      if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+    }
+  }
+
+  function sheetWrite() {
+    var sh = state.sheet;
+    var g = Number(sh.pick);
+    if (!(g > 0 && g <= 5000)) return toast('Вес вне разумных пределов.', true);
+    if (state.sending) return;
+    state.sending = true;
+    var key = 'sheet:' + sh.kind + ':' + (sh.item || sh.product) + ':' + g + ':' + sh.to;
+    var hdr = { 'Content-Type': 'application/json', 'Idempotency-Key': keyFor(key) };
+    var req = sh.kind === 'item'
+      ? send('/api/meals/' + sh.meal + '/items/' + sh.item + '/repeat',
+             { headers: hdr, body: JSON.stringify({ grams: g, days_ago: sh.to }) })
+      : send('/api/meals/quick',
+             { headers: hdr, body: JSON.stringify({ product_id: sh.product, grams: g,
+                                                     days_ago: 0 }) });
+    var to = sh.to;
+    closeSheet();
+    req.then(function (r) { dropKey(key); logged(r, to); })
+      .catch(function (err) { oops(err); })
+      .then(function () { state.sending = false; });
+  }
+
+  /* Записали в открытый день — обычная карточка «Записал». В другой — тост с отменой,
+     экран на месте (§6.25). */
+  function logged(r, toDaysAgo) {
+    if (state.tab === 'day' && toDaysAgo === state.daysAgo) return handle(r);
+    if (r.meal) {
+      toastUndo('Записал в ' + (toDaysAgo === 0 ? 'сегодня' : 'тот день') + ': ' +
+                mealTitle(r.meal) + ' · ' + n(r.meal.kcal) + ' ккал', r.meal.id);
+    } else {
+      toast('Готово.');
+    }
+    rerender();
+  }
+
+  document.getElementById('toast').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-undo]');
+    if (!b) return;
+    this.hidden = true;
+    send('/api/meals/' + b.dataset.undo, { method: 'DELETE' })
+      .then(function () { toast('Отменил.'); rerender(); })
+      .catch(function (err) { oops(err); });
+  });
+
+  sheetEl.addEventListener('click', function (e) {
+    var sh = state.sheet;
+    if (!sh) return;
+    var t = e.target.closest('[data-sclose],button');
+    if (!t) return;
+    if (t.dataset.sclose) return closeSheet();
+    if (t.dataset.sg) { sh.pick = Number(t.dataset.sg); sh.own = false; return paintSheet(); }
+    if (t.dataset.sown) { sh.own = true; return paintSheet(); }
+    if (t.dataset.sto != null) { sh.to = Number(t.dataset.sto); return paintSheet(); }
+    if (t.dataset.sgo) return sheetWrite();
+    if (t.dataset.sedit) {
+      var item = sh.item;
+      closeSheet();
+      state.editItem = item;
+      return repaintDay();
+    }
+    if (t.dataset.scard) {
+      var pid = sh.product;
+      closeSheet();
+      state.cat.view = 'product';
+      state.cat.product = pid;
+      return renderCatalog();
+    }
+  });
+  sheetEl.addEventListener('input', function (e) {
+    if (e.target.id !== 'sgrams' || !state.sheet) return;
+    state.sheet.pick = Number(e.target.value);
+    var pv = document.getElementById('sprev');
+    if (pv) pv.innerHTML = sheetPreview(state.sheet);
+  });
+  sheetEl.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeSheet();
+    if (e.key === 'Enter' && e.target.id === 'sgrams') sheetWrite();
+  });
+
+  /* Шторка позиции прошлого дня: снимок КБЖУ на грамм — из самой позиции (MA-INV-67). */
+  function itemSheet(mealId, itemId) {
+    var d = state.lastDay;
+    var m = d && (d.meals || []).filter(function (x) { return x.id === mealId; })[0];
+    var i = m && (m.items || []).filter(function (x) { return x.id === itemId; })[0];
+    if (!i || !(i.grams > 0)) return;
+    var label = dayName(state.daysAgo, d.day, false);
+    openSheet({
+      kind: 'item', meal: mealId, item: itemId, title: i.name,
+      sub: label + ' ' + m.at + ' · ' + n(i.grams) + ' г · ' + n(i.kcal) + ' ккал' +
+           (INPUT_MARK[m.input_type] ? ' · ' + INPUT_MARK[m.input_type] : ''),
+      ref: i.grams, refLabel: 'как было',
+      per: { kcal: i.kcal / i.grams, p: i.protein_g / i.grams, f: i.fat_g / i.grams,
+             c: i.carb_g / i.grams },
+      from: state.daysAgo, fromLabel: label, to: 0
+    });
+  }
+
   /* Telegram в части клиентов глушит window.confirm — он молча возвращает
      false, и кнопка выглядит мёртвой. Спрашиваем родным диалогом, а confirm
      оставляем запасным путём для обычного браузера. */
@@ -355,14 +558,26 @@
           (i.grams > 0 ? '<span class="num g">' + n(i.grams) + ' г</span>'
                        : '<span class="mic g">свои цифры</span>') +
           '<span class="num" style="width:52px;text-align:right">' + n(i.kcal) + '</span>' +
+          /* §6.25: с прошлого дня — «ещё раз сегодня». На сегодняшнем дне повтор
+             удобнее чипами частого, и кнопка там лишняя. */
+          (state.daysAgo > 0
+            ? '<button class="again" data-again-m="' + m.id + '" data-again-i="' + i.id + '" ' +
+              'aria-label="Записать ' + esc(i.name) + ' в сегодня">↻</button>'
+            : '') +
         '</div>' + (editing ? gramsEditor(m.id, i) : '');
       }).join('');
       var macros = '<div class="row" style="border-top:1px solid var(--separator);margin-top:4px;padding-top:8px">' +
         '<span style="flex-grow:1">Б ' + n(m.protein_g) + ' · Ж ' + n(m.fat_g) + ' · У ' + n(m.carb_g) + '</span></div>';
       var acts = '<div class="actions" style="margin-top:var(--s-2)">' +
-        '<button data-repeat="' + m.id + '">Повторить</button>' +
+        '<button data-repeat="' + m.id + '">' +
+          (state.daysAgo > 0 ? 'Повторить приём сегодня' : 'Повторить') + '</button>' +
         '<button data-drop="' + m.id + '" class="danger">Удалить</button></div>';
-      return head + '<div class="items">' + items + macros + acts + '</div>';
+      /* На 320 подпись «↻ сегодня» у каждой позиции съедала строку — кнопка-иконка,
+         а смысл один раз над позициями. */
+      var hint = state.daysAgo > 0
+        ? '<div class="mic" style="padding:2px 0 4px">↻ — записать ещё раз в сегодня. ' +
+          'Тап по позиции — выбрать вес.</div>' : '';
+      return head + '<div class="items">' + hint + items + macros + acts + '</div>';
     }).join('');
     var newFirst = feedOrder() === 'new_first';
     var head = '<div style="display:flex;align-items:center;margin-bottom:var(--s-2)">' +
@@ -519,39 +734,76 @@
 
   var PAGE = 20;
 
+  var SORTS = [['recent', 'Недавние'], ['frequent', 'Частые'], ['name', 'А–Я']];
+  var WHY = { curated: 'выверено вручную', label: 'с этикетки',
+              manual: 'исправлено тобой', llm: 'оценка модели' };
+
+  /* Граммовка «по умолчанию» для «+» и шторки: последний раз, иначе привычная. */
+  function refGrams(p) { return p.last_grams || p.usual_grams || 100; }
+
+  function productSheet(p) {
+    var last = p.last_days_ago != null
+      ? ' · ' + dayName(p.last_days_ago, p.last_date, false) + ' ' + n(p.last_grams) + '\u00a0г' : '';
+    openSheet({
+      kind: 'product', product: p.id, title: p.name,
+      sub: n(p.kcal_per_100g) + ' ккал / 100 г · ' + (WHY[p.source] || p.source) + last,
+      ref: refGrams(p), refLabel: p.last_grams ? 'как в прошлый раз' : 'обычно',
+      per: { kcal: p.kcal_per_100g / 100, p: p.protein_per_100g / 100,
+             f: p.fat_per_100g / 100, c: p.carb_per_100g / 100 },
+      from: 0, to: 0
+    });
+  }
+
   function renderCatalog() {
     var c = state.cat;
     if (c.view === 'product') return renderProduct();
     if (c.view === 'dups') return renderDups();
+    var sort = c.sort || 'recent';
     document.getElementById('title').textContent = 'Продукты';
-    loadingFor('cat:list');
-    api('/api/products?limit=' + PAGE + '&offset=' + c.offset +
+    loadingFor('cat:list:' + sort);
+    api('/api/products?limit=' + PAGE + '&offset=' + c.offset + '&sort=' + sort +
         (c.q ? '&q=' + encodeURIComponent(c.q) : ''))
       .then(function (d) {
+        c.items = {};
+        var lastDay = null;
         var rows = d.items.map(function (p) {
+          c.items[p.id] = p;
           var est = p.source === 'llm'
             ? '<span class="badge">оценка</span>'
             : (p.source === 'label' ? '<span class="badge">с этикетки</span>' : '');
-          /* MA-INV-24: две зоны. Тело строки пишет приём с привычной
-             граммовкой — ради этого вкладка и сделана. Шеврон открывает
-             карточку. Одна зона на всё превращала каталог в редактор. */
-          var g = p.usual_grams || 100;
-          return '<div class="item2">' +
-            '<button class="body" data-quick="' + p.id + '" data-grams="' + g + '">' +
+          var g = refGrams(p);
+          /* §6.25, «Недавние»: группы по дню последнего раза. */
+          var head = '';
+          if (sort === 'recent' && p.last_date !== lastDay) {
+            lastDay = p.last_date;
+            head = '<div class="dayhead">' + esc(dayName(p.last_days_ago, p.last_date, true)) +
+                   '</div>';
+          }
+          var use = sort === 'recent' && p.last_time
+            ? p.last_time + ' · ' + n(p.last_grams) + ' г'
+            : (p.uses ? n(p.uses) + ' раз · обычно ' + n(p.usual_grams) + ' г'
+                      : n(p.usual_grams) + ' г');
+          /* MA-INV-24 (пересмотр §6.25): тело строки — шторка порции, «+» — запись
+             сразу. Промах по телу больше не пишет приём. */
+          return head + '<div class="item2">' +
+            '<button class="body" data-psheet="' + p.id + '">' +
               '<span class="nm">' + esc(p.name) + est + '</span>' +
-              '<span class="mic use">' +
-                (p.uses ? n(p.uses) + ' раз · обычно ' + n(g) + ' г' : n(g) + ' г') +
-              '</span></button>' +
+              '<span class="mic use">' + esc(use) + '</span></button>' +
             '<span class="num kk">' + n(p.kcal_per_100g) + '<span class="per">/100 г</span></span>' +
-            '<button class="chev" data-product="' + p.id + '" aria-label="Открыть карточку">' +
-              '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-              'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-              '<path d="M9 18l6-6-6-6"/></svg></button></div>';
-        }).join('') || '<div class="state">Ничего не нашлось.</div>';
+            '<button class="plus" data-quick="' + p.id + '" data-grams="' + g + '" ' +
+              'aria-label="Записать ' + esc(p.name) + ' ' + n(g) + ' г">+</button></div>';
+        }).join('') || '<div class="state">' +
+          (sort === 'name' || c.q ? 'Ничего не нашлось.' : 'Пока ничего не записано.') + '</div>';
         var hint = d.items.length
           ? '<div class="mic" style="padding:var(--s-2) var(--s-2) 0">' +
-            'Тап по строке — записать. Шеврон — открыть карточку.</div>'
+            'Тап — выбрать порцию. «+» — записать сразу.</div>'
           : '';
+        var sorts = '<div class="chips" role="group" aria-label="Порядок">' +
+          SORTS.map(function (x) {
+            var on = x[0] === sort;
+            return '<button class="chip' + (on ? ' on' : '') + '" data-sort="' + x[0] +
+                   '" aria-pressed="' + on + '">' + x[1] + '</button>';
+          }).join('') + '</div>';
         var from = d.total ? c.offset + 1 : 0;
         var to = Math.min(c.offset + PAGE, d.total);
         show(
@@ -560,8 +812,9 @@
               'stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/>' +
               '<path d="M20 20l-3.5-3.5" stroke-linecap="round"/></svg>' +
             '<input id="q" type="search" placeholder="Найти продукт" value="' + esc(c.q) + '">' +
-          '</div>' +
-          '<section class="card">' + hint + '<div class="plist">' + rows + '</div></section>' +
+          '</div>' + sorts +
+          '<section class="card" style="margin-top:var(--s-3)">' + hint +
+            '<div class="plist">' + rows + '</div></section>' +
           '<div class="cap" style="text-align:center;margin-top:var(--s-3)">' +
             (d.total ? from + '–' + to + ' из ' + d.total : 'пусто') + '</div>' +
           '<div class="pager">' +
@@ -579,56 +832,89 @@
   function renderProduct() {
     loadingFor('cat:product:' + state.cat.product);
     api('/api/products/' + state.cat.product).then(function (d) {
-      var p = d.product;
-      document.getElementById('title').textContent = 'Продукт';
-      var why = { curated: 'выверено вручную', label: 'с этикетки',
-                  manual: 'исправлено тобой', llm: 'оценка модели' }[p.source] || p.source;
-      show('<section class="card">' +
-        '<input id="pname" value="' + esc(p.name) + '" ' +
-          'style="width:100%;background:var(--surface-2);border:1px solid var(--surface-3);' +
-          'border-radius:var(--r-sm);color:var(--text);font:inherit;font-size:var(--f-body);' +
-          'padding:11px;outline:none">' +
-        '<div class="mic" style="margin-top:var(--s-2)">' + esc(why) +
-          ' · съедено ' + n(p.uses) + ' раз</div>' +
-        '<div style="margin-top:var(--s-4)">' +
-          field('pk', 'Ккал / 100 г', p.kcal_per_100g) +
-          field('pp', 'Белок, г', p.protein_per_100g) +
-          field('pf', 'Жир, г', p.fat_per_100g) +
-          field('pc', 'Углеводы, г', p.carb_per_100g) +
-        '</div>' +
-        '<button class="primary" id="save">Сохранить</button>' +
-        '<div class="mic" style="margin-top:var(--s-3);line-height:1.5">' +
-          'Правка меняет будущие записи. Уже съеденное не двинется — в истории ' +
-          'хранится снимок на момент записи.</div>' +
-        '</section>' +
-        recentCard(d.recent_items, p) +
-        '<div class="pager"><button id="toList">К списку</button></div>');
+      state.cat.card = d;
+      state.cat.editing = false;
+      state.cat.pick = Math.round(refGrams(d.product));
+      paintProduct();
     }).catch(failure);
   }
 
-  /* §6.8: «где я это ел». Без истории непонятно, откуда взялась плотность и
-     стоит ли её править — а карточка ровно про это. Здесь же кнопка записать
-     привычной порцией: пришёл посмотреть, заодно записал. */
+  /* §6.25, В1: карточка начинается с записи — пришёл за продуктом, чтобы съесть его ещё
+     раз. Правка плотности по кнопке, а не формой с порога. */
+  function paintProduct() {
+    var d = state.cat.card;
+    var p = d.product;
+    var c = state.cat;
+    document.getElementById('title').textContent = 'Продукт';
+    var last = p.last_days_ago != null
+      ? ' · последний раз ' + dayName(p.last_days_ago, p.last_date, false) + ', ' +
+        n(p.last_grams) + '\u00a0г' : '';
+    var g = c.pick;
+    var chips = portions(refGrams(p)).map(function (x) {
+      var on = x === g;
+      return '<button class="chip' + (on ? ' on' : '') + '" data-cg="' + x + '" aria-pressed="' +
+             on + '">' + n(x) + ' г</button>';
+    }).join('') + '<button class="chip" data-psheet="' + p.id + '">своё…</button>';
+    var head = '<section class="card">' +
+      '<div style="font-size:var(--f-t2);font-weight:700;line-height:1.25">' + esc(p.name) +
+      '</div><div class="mic" style="margin-top:6px">' + esc(WHY[p.source] || p.source) +
+        ' · съедено ' + n(p.uses) + ' раз' + esc(last) + '</div>' +
+      '<div class="sh-chips" style="margin-top:var(--s-4)">' + chips + '</div>' +
+      /* MA-INV-68: ккал на кнопке — предпросмотр, запишет сервер. */
+      '<button class="primary" style="margin-top:var(--s-3)" data-quick="' + p.id +
+        '" data-grams="' + g + '">Записать сегодня · ' + n(g) + ' г · ' +
+        n(p.kcal_per_100g * g / 100) + ' ккал</button></section>';
+    var density = c.editing
+      ? '<section class="card" style="margin-top:var(--s-3)">' +
+          '<input id="pname" aria-label="Название" value="' + esc(p.name) + '" ' +
+          'style="width:100%;background:var(--surface-2);border:1px solid var(--surface-3);' +
+          'border-radius:var(--r-sm);color:var(--text);font:inherit;font-size:var(--f-body);' +
+          'padding:11px;outline:none;box-sizing:border-box">' +
+          '<div style="margin-top:var(--s-4)">' +
+            field('pk', 'Ккал / 100 г', p.kcal_per_100g) +
+            field('pp', 'Белок, г', p.protein_per_100g) +
+            field('pf', 'Жир, г', p.fat_per_100g) +
+            field('pc', 'Углеводы, г', p.carb_per_100g) +
+          '</div>' +
+          '<button class="primary" id="save">Сохранить</button>' +
+          '<div class="mic" style="margin-top:var(--s-3);line-height:1.5">' +
+            'Правка меняет будущие записи. Уже съеденное не двинется — в истории ' +
+            'хранится снимок на момент записи.</div></section>'
+      : '<section class="card" style="margin-top:var(--s-3)">' +
+          '<div style="display:flex;align-items:center;margin-bottom:var(--s-2)">' +
+            '<span class="cap" style="flex-grow:1">На 100 г</span>' +
+            '<button class="link" data-cedit="1">Править</button></div>' +
+          '<div class="dtiles">' +
+            tile(p.kcal_per_100g, 'ккал', '') + tile(p.protein_per_100g, 'белок', 'var(--prot)') +
+            tile(p.fat_per_100g, 'жир', 'var(--fat)') + tile(p.carb_per_100g, 'углев', 'var(--carb)') +
+          '</div></section>';
+    show(head + density + recentCard(d.recent_items, p) +
+         '<div class="pager"><button id="toList">К списку</button></div>');
+  }
+
+  function tile(v, label, color) {
+    return '<div class="dtile"><div class="num tv"' + (color ? ' style="color:' + color + '"' : '') +
+           '>' + n(v, 1) + '</div><div class="mic">' + label + '</div></div>';
+  }
+
+  /* §6.8: «где я это ел» — откуда взялась плотность и стоит ли её править. У каждого
+     раза «↻ сегодня»: тот же вес по нынешней плотности каталога (§6.25). */
   function recentCard(items, p) {
-    var g = p.usual_grams || 100;
-    var log = '<div class="actions" style="margin-top:var(--s-3)">' +
-      '<button data-quick="' + p.id + '" data-grams="' + g + '">' +
-      'Записать ' + n(g) + ' г</button></div>';
     if (!items || !items.length) {
-      return card('В приёмах',
-        '<div class="state">Этот продукт ещё не встречался в записях.</div>' + log, '');
+      return card('Когда ел', '<div class="state">Этот продукт ещё не встречался в записях.</div>', '');
     }
     var rows = items.map(function (i) {
       return '<div class="row">' +
         '<span style="flex-grow:1">' + esc(i.at) + '</span>' +
         '<span class="num g">' + n(i.grams) + ' г</span>' +
-        '<span class="num" style="width:52px;text-align:right">' + n(i.kcal) + '</span>' +
+        '<span class="num" style="width:44px;text-align:right">' + n(i.kcal) + '</span>' +
+        '<button class="again wide" data-quick="' + p.id + '" data-grams="' + i.grams + '" ' +
+          'aria-label="Записать ' + n(i.grams) + ' г в сегодня">↻ сегодня</button>' +
       '</div>';
     }).join('');
-    return card('В приёмах', '<div class="items" style="padding-left:0">' + rows +
-                '</div>' + log,
-                'Последние ' + n(items.length) + ' появления. Столбец справа — ' +
-                'ккал по снимку на момент записи, а не по нынешней плотности.');
+    return card('Когда ел', '<div class="items" style="padding-left:0">' + rows + '</div>',
+                'Ккал — по снимку на момент записи; «↻ сегодня» запишет тот же вес ' +
+                'по нынешней плотности.');
   }
 
   function field(id, label, value) {
@@ -2982,8 +3268,29 @@
     var wrow = e.target.closest('.row[data-wid]');
     if (wrow) return dropWeight(Number(wrow.dataset.wid));
 
+    /* §6.25: «↻ сегодня» живёт внутри строки позиции — ловим до строки, иначе тап по
+       кнопке открыл бы правку веса. */
+    var again = e.target.closest('button[data-again-i]');
+    if (again) {
+      if (state.sending) return;
+      state.sending = true;
+      var ak = 'again:' + again.dataset.againI;
+      return send('/api/meals/' + again.dataset.againM + '/items/' + again.dataset.againI +
+                  '/repeat', {
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': keyFor(ak) },
+        body: JSON.stringify({ days_ago: 0 })
+      }).then(function (r) { dropKey(ak); logged(r, 0); })
+        .catch(function (err) { oops(err); })
+        .then(function () { state.sending = false; });
+    }
+
     var row = e.target.closest('.row[data-item]');
     if (row && !e.target.closest('.composer')) {
+      /* На прошлом дне тап — «ещё раз» (шторка), на сегодняшнем — правка веса. Правка
+         прошлого дня достижима из шторки (MA-INV-22). */
+      if (state.daysAgo > 0 && state.editItem !== Number(row.dataset.item)) {
+        return itemSheet(Number(row.dataset.meal), Number(row.dataset.item));
+      }
       var id = Number(row.dataset.item);
       state.editItem = state.editItem === id ? null : id;
       return repaintDay();
@@ -3014,9 +3321,11 @@
       state.sending = true;
       busy('Записываю…');
       var rid = 'repeat:' + b.dataset.repeat;
-      return send('/api/meals/' + b.dataset.repeat + '/repeat?days_ago=' + writeDay(),
+      /* §6.25: повтор приёма пишет в сегодня, с какого бы дня ни нажали — «съел то же
+         ещё раз». С прошлого дня экран остаётся на месте, подтверждение тостом. */
+      return send('/api/meals/' + b.dataset.repeat + '/repeat?days_ago=0',
                   { headers: { 'Idempotency-Key': keyFor(rid) } })
-        .then(function (r) { dropKey(rid); return handle(r); })
+        .then(function (r) { dropKey(rid); return logged(r, 0); })
         .catch(function (err) { oops(err); renderDay(); })
         .then(function () { state.sending = false; });
     }
@@ -3047,10 +3356,7 @@
            или листает каталог и может записать ещё. Уход туда стоил лишнего
            тапа на каждый следующий продукт и рассинхронивал подсветку вкладки. */
         dropKey(qid);
-        if (stay) {
-          toast(r.meal ? 'Записал ' + n(r.meal.kcal) + ' ккал.' : 'Готово.');
-          return rerender();
-        }
+        if (stay) return logged(r, 0);
         return handle(r);
       }).catch(function (err) {
         oops(err);
@@ -3074,6 +3380,19 @@
         .then(function () { state.sending = false; });
     }
     /* ── каталог ─────────────────────────────────────────────────────── */
+    if (b.dataset.psheet) {
+      var sp = (state.cat.items || {})[b.dataset.psheet] ||
+               (state.cat.card && state.cat.card.product);
+      if (sp) productSheet(sp);
+      if (sp && b.closest('.sh-chips')) { state.sheet.own = true; paintSheet(); }
+      return;
+    }
+    if (b.dataset.sort) {
+      state.cat.sort = b.dataset.sort; state.cat.offset = 0;
+      return renderCatalog();
+    }
+    if (b.dataset.cg) { state.cat.pick = Number(b.dataset.cg); return paintProduct(); }
+    if (b.dataset.cedit) { state.cat.editing = true; return paintProduct(); }
     if (b.dataset.product) {
       state.cat.view = 'product'; state.cat.product = b.dataset.product;
       return renderCatalog();

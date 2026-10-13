@@ -225,11 +225,63 @@ class MealService:
             )
         )
 
+    async def repeat_item(
+        self, user: User, meal_id: int, item_id: int, *,
+        grams: float | None = None, day_offset: int = 0,
+    ) -> Meal | None:
+        """Одна позиция приёма ещё раз — отдельным приёмом (§6.25, MA-INV-67).
+
+        Кейс владельца: вчера хлеб записан по этикетке, сегодня этикетки нет. Берём снимок
+        позиции, а не каталог: повторяется съеденное, а не то, что сейчас лежит в базе.
+        Другая граммовка масштабирует снимок; позиция без веса («свои цифры») — как есть.
+        """
+        user_id = _require_id(user)
+        src = await self._meals.get(user_id, meal_id)
+        it = next((i for i in (src.items if src else []) if i.id == item_id), None)
+        if src is None or it is None:
+            return None
+        k = grams / it.grams if grams and it.grams > 0 else 1.0
+        m = it.macros
+        macros = Macros(m.kcal * k, m.protein * k, m.fat * k, m.carb * k).rounded(1)
+        return await self._meals.add(
+            Meal(
+                user_id=user_id,
+                eaten_at=self._clock() + timedelta(days=max(-30, min(7, day_offset))),
+                input_type=src.input_type,
+                raw_input=it.name_snapshot,
+                items=[
+                    MealItem(
+                        name_snapshot=it.name_snapshot,
+                        grams=round(it.grams * k, 1),
+                        macros=macros,
+                        product_id=it.product_id,
+                        is_estimate=it.is_estimate,
+                    )
+                ],
+                source_confidence=src.source_confidence,
+                totals=macros,
+                estimated=it.is_estimate,
+            )
+        )
+
     async def contributions(
         self, user_id: int, *, days: int, limit: int, by: str = "kcal"
     ) -> list[tuple[int | None, str, float, int]]:
         """Вклад продуктов за окно: по калориям или по белку."""
         return await self._meals.contributions(user_id, days=days, limit=limit, by=by)
+
+    async def product_usage(
+        self, user_id: int, *, by: str, query: str | None, offset: int, limit: int
+    ) -> tuple[list[tuple[int, int]], int]:
+        """Съеденные человеком продукты по последнему разу или частоте (§6.25)."""
+        return await self._meals.product_usage(
+            user_id, by=by, query=query, offset=offset, limit=limit
+        )
+
+    async def last_use(
+        self, user_id: int, product_ids: list[int]
+    ) -> dict[int, tuple[datetime, float]]:
+        return await self._meals.last_use(user_id, product_ids)
 
     async def items_of_product(
         self, user_id: int, product_id: int, *, limit: int = 5

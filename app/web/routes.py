@@ -11,7 +11,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated, Any
 from urllib.parse import unquote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -47,7 +47,8 @@ from app.domain.goals import edit_goal as consistent_goal
 from app.domain.label_portion import label_grams
 from app.domain.plate import MAX_COMPONENTS
 from app.domain.prefs import merge as merge_prefs
-from app.domain.prefs import sanitize
+from app.domain.prefs import day_start, sanitize
+from app.domain.timeframe import local_date
 from app.domain.value_objects import Density
 from app.web.deps import CurrentAssistant, CurrentScans, CurrentUser, current_user, get_session
 from app.web.errors import ApiError, bad_request, not_found, unavailable
@@ -988,16 +989,66 @@ async def repeat(
     return idem.remember(logged_json(result, user.timezone))
 
 
+@router.post("/meals/{meal_id}/items/{item_id}/repeat")
+async def repeat_item(
+    meal_id: int, item_id: int, body: dict[str, Any], user: CurrentUser,
+    assistant: CurrentAssistant, request: Request, idem: CurrentIdem,
+) -> dict[str, Any]:
+    """Одна позиция ещё раз, по умолчанию в сегодня (§6.25, MA-INV-67).
+
+    День — из тела, а не с экрана: кнопка «↻ сегодня» на вчерашнем дне пишет именно в
+    сегодня, а шторка даёт выбрать «тот день» явно."""
+    grams: float | None = None
+    if body.get("grams") is not None:
+        try:
+            grams = float(body["grams"])
+        except (TypeError, ValueError) as exc:
+            raise bad_request("bad_grams", "Вес вне разумных пределов.") from exc
+        if not 0 < grams <= 5000:
+            raise bad_request("bad_grams", "Вес вне разумных пределов.")
+    if idem.replay is not None:
+        return idem.replay
+    result = await assistant.repeat_item(
+        user, meal_id, item_id, grams=grams, day_offset=_day_offset(body.get("days_ago"))
+    )
+    if result is None:
+        raise not_found("meal_not_found", "Запись не найдена — возможно, её удалили.")
+    return idem.remember(logged_json(result, user.timezone))
+
+
+SORTS = ("recent", "frequent", "name")
+
+
+def _last_json(last: tuple[datetime, float] | None, user: User) -> dict[str, Any]:
+    """«Последний раз» для строки каталога и шторки (§6.25): день считается по поясу и
+    границе дня человека, иначе после полуночи по UTC «вчера» стало бы «сегодня»."""
+    if last is None:
+        return {"last_date": None, "last_time": None, "last_days_ago": None, "last_grams": None}
+    at, grams = last
+    start = day_start(user.ui_prefs)
+    day = local_date(at, user.timezone, start)
+    today = local_date(datetime.now(UTC), user.timezone, start)
+    return {
+        "last_date": day.isoformat(),
+        "last_time": at.astimezone(ZoneInfo(user.timezone)).strftime("%H:%M"),
+        "last_days_ago": (today - day).days,
+        "last_grams": round(grams, 1),
+    }
+
+
 @router.get("/products")
 async def products(
     user: CurrentUser, assistant: CurrentAssistant,
-    q: str | None = None, offset: int = 0, limit: int = 20,
+    q: str | None = None, offset: int = 0, limit: int = 20, sort: str = "name",
 ) -> dict[str, Any]:
-    """Каталог страницами: полный список нельзя — их больше двух сотен (§7.2)."""
+    """Каталог страницами: полный список нельзя — их больше двух сотен (§7.2).
+    `sort=recent|frequent` — только съеденное этим человеком (§6.25)."""
     if offset < 0 or limit < 1 or limit > 100:
         raise bad_request("bad_paging", "Страница вне диапазона.")
-    items, total, uses, grams = await assistant.catalog_page(
-        user, offset=offset, limit=limit, query=(q or "").strip() or None
+    if sort not in SORTS:
+        raise bad_request("bad_sort", "Сортировка: recent, frequent или name.")
+    items, total, uses, grams, last = await assistant.catalog_page(
+        user, offset=offset, limit=limit, query=(q or "").strip() or None, sort=sort
     )
     return {
         "total": total,
@@ -1005,6 +1056,7 @@ async def products(
         "limit": limit,
         "items": [
             product_json(p, uses.get(p.id or 0, 0), grams.get(p.id or 0))
+            | _last_json(last.get(p.id or 0), user)
             for p in items
         ],
     }
@@ -1026,7 +1078,7 @@ async def product(
     return {
         "product": product_json(
             p, counts, sorted(grams)[len(grams) // 2] if grams else None
-        ),
+        ) | _last_json(await assistant.last_use_of(user, product_id), user),
         "recent_items": [
             {
                 "at": at.astimezone(tz).strftime("%d.%m %H:%M"),

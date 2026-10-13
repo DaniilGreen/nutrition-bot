@@ -191,6 +191,23 @@ class MealRepo(Protocol):
         """
         ...
 
+    async def product_usage(
+        self, user_id: int, *, by: str, query: str | None, offset: int, limit: int
+    ) -> tuple[list[tuple[int, int]], int]:
+        """Продукты, которые человек ел: страница (product_id, сколько раз) и всего (§6.25).
+
+        `by="recent"` — по последнему разу, `by="frequent"` — по числу раз. Только свои
+        приёмы: «Недавние» соседа — это чужой дневник.
+        """
+        ...
+
+    async def last_use(
+        self, user_id: int, product_ids: list[int]
+    ) -> dict[int, tuple[datetime, float]]:
+        """Последний раз, когда человек ел продукт: (когда, граммы). Подпись в каталоге и
+        граммовка шторки по умолчанию (§6.25)."""
+        ...
+
     async def items_of_product(
         self, user_id: int, product_id: int, *, limit: int
     ) -> list[tuple[datetime, float, float]]:

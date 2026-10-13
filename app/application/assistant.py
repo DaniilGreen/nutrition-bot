@@ -427,6 +427,19 @@ class Assistant:
         stats = await self._stats.daily(user, days_ago=-day_offset)
         return MealLogged(meal=meal, remaining=stats.remaining)
 
+    async def repeat_item(
+        self, user: User, meal_id: int, item_id: int, *,
+        grams: float | None = None, day_offset: int = 0,
+    ) -> MealLogged | None:
+        """Одна позиция ещё раз — обычно с прошлого дня в сегодня (§6.25)."""
+        meal = await self._meals.repeat_item(
+            user, meal_id, item_id, grams=grams, day_offset=day_offset
+        )
+        if meal is None:
+            return None
+        stats = await self._stats.daily(user, days_ago=-day_offset)
+        return MealLogged(meal=meal, remaining=stats.remaining)
+
     async def remove_item(self, user: User, meal_id: int, item_id: int) -> MealLogged | None:
         """Удалить одну позицию записи. None — если позиций не осталось (запись удалена)."""
         meal = await self._meals.remove_item(user, meal_id, item_id)
@@ -481,18 +494,38 @@ class Assistant:
         )
 
     async def catalog_page(
-        self, user: User, *, offset: int = 0, limit: int = 20, query: str | None = None
-    ) -> tuple[list[Product], int, dict[int, int], dict[int, float]]:
-        """Страница каталога: продукты, всего, сколько раз ел, привычный вес."""
-        items, total = await self._products.list_page(offset=offset, limit=limit, query=query)
-        uses = await self._products.usage_counts(
-            [p.id for p in items if p.id], user_id=_require_id(user)
-        )
+        self, user: User, *, offset: int = 0, limit: int = 20, query: str | None = None,
+        sort: str = "name",
+    ) -> tuple[
+        list[Product], int, dict[int, int], dict[int, float], dict[int, tuple[datetime, float]]
+    ]:
+        """Страница каталога: продукты, всего, сколько раз ел, привычный вес, последний раз.
+
+        `recent`/`frequent` — только то, что человек ел, по последнему разу или по числу раз
+        (§6.25); `name` — весь каталог по алфавиту."""
+        uid = _require_id(user)
+        if sort in ("recent", "frequent"):
+            rows, total = await self._meals.product_usage(
+                uid, by=sort, query=query, offset=offset, limit=limit
+            )
+            found = [await self._products.get_by_id(pid) for pid, _ in rows]
+            items = [p for p in found if p is not None]
+            uses = dict(rows)
+        else:
+            items, total = await self._products.list_page(
+                offset=offset, limit=limit, query=query
+            )
+            uses = await self._products.usage_counts([p.id for p in items if p.id], user_id=uid)
         # Привычная граммовка — из истории самого человека: без неё тап по
         # строке каталога не знает, сколько записывать (MA-INV-24).
-        rows = await self._meals.frequent_items(_require_id(user), days=180, limit=200)
-        grams = {pid: g for pid, _, g, _ in rows if pid is not None}
-        return items, total, uses, grams
+        freq = await self._meals.frequent_items(uid, days=180, limit=200)
+        grams = {pid: g for pid, _, g, _ in freq if pid is not None}
+        last = await self._meals.last_use(uid, [p.id for p in items if p.id])
+        return items, total, uses, grams, last
+
+    async def last_use_of(self, user: User, product_id: int) -> tuple[datetime, float] | None:
+        """Когда и сколько человек ел продукт в последний раз — для карточки (§6.25)."""
+        return (await self._meals.last_use(_require_id(user), [product_id])).get(product_id)
 
     async def usage_of(self, user: User, product_id: int) -> int:
         """Сколько раз ЭТОТ человек ел продукт. Карточке нужно одно число."""
