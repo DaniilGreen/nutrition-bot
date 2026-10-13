@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 
 from app.application.dto import ParsedItem, ParsedMessage
-from app.application.entities import Meal, MealItem, Product, User
+from app.application.entities import Meal, MealItem, Product, StatedUse, User
 from app.application.ports import MealRepo, ProductRepo
 from app.clock import Clock, utcnow
 from app.domain.inedible import explain
@@ -282,6 +282,9 @@ class MealService:
         self, user_id: int, product_ids: list[int]
     ) -> dict[int, tuple[datetime, float]]:
         return await self._meals.last_use(user_id, product_ids)
+
+    async def stated_usage(self, user_id: int, *, query: str | None) -> list[StatedUse]:
+        return await self._meals.stated_usage(user_id, query=query)
 
     async def items_of_product(
         self, user_id: int, product_id: int, *, limit: int = 5

@@ -137,3 +137,35 @@ async def test_недавние_по_последнему_разу_и_тольк
     assert first["last_time"] == _noon(1).astimezone(ZoneInfo("Europe/Moscow")).strftime("%H:%M")
     assert [p["name"] for p in frequent["items"]] == ["йогурт", "Хлеб с изюмом"]
     assert bad.status_code == 400
+
+
+def _stated(uid: int, days_ago: int, name: str, kcal: float, grams: float = 0) -> Meal:
+    m = Macros(kcal, kcal * 0.1, kcal * 0.03, kcal * 0.08)
+    return Meal(user_id=uid, eaten_at=_noon(days_ago), input_type="menu", raw_input=name,
+                items=[MealItem(name_snapshot=name, grams=grams, macros=m, product_id=None)],
+                source_confidence=1.0, totals=m)
+
+
+async def test_свои_цифры_видны_в_недавних_вперемешку_с_продуктами(client, fake_container):
+    """Владелец 13.10: Caesar со скриншота меню не попадал в «Недавние» — его нет в каталоге."""
+    repo = fake_container.products
+    bread = await _product(repo, "bread", "Хлеб с изюмом", 260)
+    async with client as c:
+        uid = await _login(c)
+        await fake_container.meals.add(_stated(uid, 2, "Chicken Caesar Salad", 410))
+        await fake_container.meals.add(_meal(uid, 1, (bread, "Хлеб с изюмом", 84)))
+        caesar = await fake_container.meals.add(_stated(uid, 0, "Chicken Caesar Salad", 410))
+        await fake_container.meals.add(_stated(uid + 999, 0, "чужой салат", 300))
+        recent = (await c.get("/api/products?sort=recent", headers=_hdr())).json()
+        frequent = (await c.get("/api/products?sort=frequent", headers=_hdr())).json()
+        found = (await c.get("/api/products?sort=recent&q=caesar", headers=_hdr())).json()
+        az = (await c.get("/api/products?sort=name", headers=_hdr())).json()
+    names = [p["name"] for p in recent["items"]]
+    assert names == ["Chicken Caesar Salad", "Хлеб с изюмом"] and recent["total"] == 2
+    s = recent["items"][0]
+    assert s["stated"] and s["kcal"] == 410 and s["uses"] == 2 and s["last_days_ago"] == 0
+    # «+» повторяет снимок последнего раза
+    assert (s["meal_id"], s["item_id"]) == (caesar.id, caesar.items[0].id)
+    assert frequent["items"][0]["name"] == "Chicken Caesar Salad"  # 2 раза против 1
+    assert [p["name"] for p in found["items"]] == ["Chicken Caesar Salad"]
+    assert all(not p.get("stated") for p in az["items"])  # «А–Я» — это каталог

@@ -67,6 +67,20 @@ class Meal:
 
 
 @dataclass
+class StatedUse:
+    """Позиция «своими цифрами» в «Недавних» (§6.25): в каталоге её нет, плотности на 100 г
+    тоже. Последний раз — чтобы повторить его снимок (MA-INV-67)."""
+
+    name: str
+    last_at: datetime
+    uses: int
+    meal_id: int
+    item_id: int
+    grams: float
+    macros: Macros
+
+
+@dataclass
 class WeightLog:
     user_id: int
     measured_at: datetime

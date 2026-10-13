@@ -7,7 +7,7 @@ from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.entities import Meal, MealItem, Product, User, WeightLog
+from app.application.entities import Meal, MealItem, Product, StatedUse, User, WeightLog
 from app.domain.body_scan import SEGMENT_FIELDS, BodyScan
 from app.domain.goals import Goal
 from app.domain.value_objects import Density, Macros
@@ -379,6 +379,32 @@ class SqlMealRepo:
         order = (last.desc(),) if by == "recent" else (uses.desc(), last.desc())
         res = await self._s.execute(stmt.order_by(*order).offset(offset).limit(limit))
         return [(int(pid), int(n)) for pid, n in res.all()], int(total)
+
+    async def stated_usage(self, user_id: int, *, query: str | None) -> list[StatedUse]:
+        # ponytail: все «свои цифры» человека и группировка по имени в Python. Потолок — тысячи
+        # таких записей; тогда GROUP BY lower(name_snapshot) с оконной функцией в SQL.
+        stmt = (
+            select(MealItemORM, MealORM.eaten_at)
+            .join(MealORM, MealORM.id == MealItemORM.meal_id)
+            .where(MealORM.user_id == user_id, MealItemORM.product_id.is_(None))
+            .order_by(MealORM.eaten_at.desc())
+        )
+        if query:
+            stmt = stmt.where(
+                MealItemORM.name_snapshot.ilike(SqlProductRepo._like(query), escape="\\")
+            )
+        seen: dict[str, StatedUse] = {}
+        for it, at in (await self._s.execute(stmt)).all():
+            key = it.name_snapshot.strip().lower()
+            if key in seen:
+                seen[key].uses += 1
+                continue
+            seen[key] = StatedUse(
+                name=it.name_snapshot, last_at=at, uses=1, meal_id=it.meal_id, item_id=it.id,
+                grams=float(it.grams or 0),
+                macros=Macros(float(it.kcal), float(it.protein), float(it.fat), float(it.carb)),
+            )
+        return list(seen.values())
 
     async def last_use(
         self, user_id: int, product_ids: list[int]

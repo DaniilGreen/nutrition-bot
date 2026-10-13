@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Protocol
 
 from app.application.dto import ParsedItem, ParsedMessage, PlateReading, ScanReading
-from app.application.entities import Meal, Product, User, WeightLog
+from app.application.entities import Meal, Product, StatedUse, User, WeightLog
 from app.domain.body_scan import BodyScan
 from app.domain.goals import Goal
 from app.domain.value_objects import Density, Macros
@@ -199,6 +199,11 @@ class MealRepo(Protocol):
         `by="recent"` — по последнему разу, `by="frequent"` — по числу раз. Только свои
         приёмы: «Недавние» соседа — это чужой дневник.
         """
+        ...
+
+    async def stated_usage(self, user_id: int, *, query: str | None) -> list[StatedUse]:
+        """Позиции «своими цифрами» (FR-22, FR-38) по имени: последний раз и сколько раз,
+        свежие первыми (§6.25). Только свои приёмы."""
         ...
 
     async def last_use(

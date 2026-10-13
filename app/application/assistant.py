@@ -19,7 +19,7 @@ from app.application.dto import (
     ScanReading,
     Unit,
 )
-from app.application.entities import Meal, MealItem, Product, User, WeightLog
+from app.application.entities import Meal, MealItem, Product, StatedUse, User, WeightLog
 from app.application.meal_service import MealService
 from app.application.ports import (
     BugRepo,
@@ -532,20 +532,39 @@ class Assistant:
         self, user: User, *, offset: int = 0, limit: int = 20, query: str | None = None,
         sort: str = "name",
     ) -> tuple[
-        list[Product], int, dict[int, int], dict[int, float], dict[int, tuple[datetime, float]]
+        list[Product | StatedUse], int, dict[int, int], dict[int, float],
+        dict[int, tuple[datetime, float]],
     ]:
         """Страница каталога: продукты, всего, сколько раз ел, привычный вес, последний раз.
 
         `recent`/`frequent` — только то, что человек ел, по последнему разу или по числу раз
         (§6.25); `name` — весь каталог по алфавиту."""
         uid = _require_id(user)
+        items: list[Product | StatedUse]
         if sort in ("recent", "frequent"):
-            rows, total = await self._meals.product_usage(
-                uid, by=sort, query=query, offset=offset, limit=limit
+            # Продукты и «свои цифры» — одним списком (§6.25): из каждого источника берём первые
+            # offset+limit, сливаем по общему ключу и режем страницу — так страница верна.
+            rows, ptotal = await self._meals.product_usage(
+                uid, by=sort, query=query, offset=0, limit=offset + limit
             )
-            found = [await self._products.get_by_id(pid) for pid, _ in rows]
-            items = [p for p in found if p is not None]
             uses = dict(rows)
+            when = await self._meals.last_use(uid, list(uses))
+            found = [await self._products.get_by_id(pid) for pid, _ in rows]
+            stated = await self._meals.stated_usage(uid, query=query)
+            merged: list[Product | StatedUse] = [p for p in found if p is not None] + stated
+
+            def at(e: Product | StatedUse) -> datetime:
+                return e.last_at if isinstance(e, StatedUse) else when[e.id or 0][0]
+
+            def times(e: Product | StatedUse) -> int:
+                return e.uses if isinstance(e, StatedUse) else uses.get(e.id or 0, 0)
+
+            if sort == "recent":
+                merged.sort(key=at, reverse=True)
+            else:
+                merged.sort(key=lambda e: (times(e), at(e)), reverse=True)
+            items = merged[offset:offset + limit]
+            total = ptotal + len(stated)
         else:
             items, total = await self._products.list_page(
                 offset=offset, limit=limit, query=query
@@ -555,7 +574,9 @@ class Assistant:
         # строке каталога не знает, сколько записывать (MA-INV-24).
         freq = await self._meals.frequent_items(uid, days=180, limit=200)
         grams = {pid: g for pid, _, g, _ in freq if pid is not None}
-        last = await self._meals.last_use(uid, [p.id for p in items if p.id])
+        last = await self._meals.last_use(
+            uid, [p.id for p in items if isinstance(p, Product) and p.id]
+        )
         return items, total, uses, grams, last
 
     async def last_use_of(self, user: User, product_id: int) -> tuple[datetime, float] | None:

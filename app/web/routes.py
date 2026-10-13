@@ -24,7 +24,7 @@ from app.application.assistant import Assistant
 from app.application.body_scans import BodyScanService, ScanCheck, from_reading
 from app.application.coach import LimitReached, clean_history
 from app.application.dto import Unit
-from app.application.entities import User
+from app.application.entities import StatedUse, User
 from app.application.results import (
     BodyScanRead,
     ClarificationNeeded,
@@ -1055,11 +1055,30 @@ async def products(
         "offset": offset,
         "limit": limit,
         "items": [
-            product_json(p, uses.get(p.id or 0, 0), grams.get(p.id or 0))
+            _stated_json(p, user) if isinstance(p, StatedUse)
+            else product_json(p, uses.get(p.id or 0, 0), grams.get(p.id or 0))
             | _last_json(last.get(p.id or 0), user)
             for p in items
         ],
     }
+
+
+def _stated_json(s: StatedUse, user: User) -> dict[str, Any]:
+    """«Свои цифры» в «Недавних» (§6.25): ккал порции, а не на 100 г; повтор — снимок позиции
+    `meal_id`/`item_id` (MA-INV-67). `id` строкой — не путать с product_id."""
+    return {
+        "stated": True,
+        "id": f"s{s.item_id}",
+        "name": s.name,
+        "meal_id": s.meal_id,
+        "item_id": s.item_id,
+        "grams": round(s.grams, 1),
+        "kcal": round(s.macros.kcal, 1),
+        "protein_g": round(s.macros.protein, 1),
+        "fat_g": round(s.macros.fat, 1),
+        "carb_g": round(s.macros.carb, 1),
+        "uses": s.uses,
+    } | _last_json((s.last_at, s.grams), user)
 
 
 @router.get("/products/{product_id}")

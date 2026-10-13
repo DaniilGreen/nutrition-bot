@@ -226,6 +226,26 @@ class InMemoryMealRepo:
         page = ids[offset:offset + limit]
         return [(p, uses[p]) for p in page], len(ids)
 
+    async def stated_usage(self, user_id: int, *, query: str | None):
+        from app.application.entities import StatedUse
+
+        seen: dict[str, StatedUse] = {}
+        for m in sorted(self._meals, key=lambda m: m.eaten_at, reverse=True):
+            if m.user_id != user_id:
+                continue
+            for it in m.items:
+                if it.product_id is not None:
+                    continue
+                if query and query.lower() not in it.name_snapshot.lower():
+                    continue
+                key = it.name_snapshot.strip().lower()
+                if key in seen:
+                    seen[key].uses += 1
+                else:
+                    seen[key] = StatedUse(it.name_snapshot, m.eaten_at, 1, m.id, it.id,
+                                          it.grams, it.macros)
+        return list(seen.values())
+
     async def last_use(
         self, user_id: int, product_ids: list[int]
     ) -> dict[int, tuple[datetime, float]]:

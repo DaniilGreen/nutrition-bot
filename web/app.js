@@ -132,7 +132,7 @@
   }
 
   function openSheet(sh) {
-    sh.pick = Math.round(sh.ref) || 100;
+    sh.pick = sh.fixed ? 1 : (Math.round(sh.ref) || 100);
     sh.own = false;
     state.sheet = sh;
     paintSheet();
@@ -156,13 +156,14 @@
     var sh = state.sheet;
     if (!sh) { sheetEl.innerHTML = ''; return; }
     var ref = Math.round(sh.ref);
-    var chips = portions(sh.ref).map(function (g) {
+    var chips = sh.fixed ? '' : portions(sh.ref).map(function (g) {
       var on = !sh.own && g === sh.pick;
       return '<button class="chip' + (on ? ' on' : '') + '" data-sg="' + g + '" aria-pressed="' +
         on + '">' + n(g) + ' г' + (g === ref ? ' · ' + esc(sh.refLabel) : '') + '</button>';
     }).join('') +
       '<button class="chip' + (sh.own ? ' on' : '') + '" data-sown="1" aria-pressed="' +
       sh.own + '">своё…</button>';
+    if (sh.fixed) chips = '';
     var own = sh.own
       ? '<label class="composer" style="margin:0">' +
         '<input id="sgrams" type="number" inputmode="numeric" min="1" max="5000" ' +
@@ -177,9 +178,10 @@
         '<button data-sto="' + sh.from + '" aria-pressed="' + (sh.to === sh.from) + '"' +
           (sh.to === sh.from ? ' class="on"' : '') + '>' + esc(sh.fromLabel) + '</button></div>'
       : '';
-    var extra = sh.kind === 'item'
-      ? '<button class="ghost" data-sedit="1">Править эту запись</button>'
-      : '<button class="ghost" data-scard="1">Карточка продукта ›</button>';
+    var extra = sh.src === 'cat' ? ''
+      : sh.kind === 'item'
+        ? '<button class="ghost" data-sedit="1">Править эту запись</button>'
+        : '<button class="ghost" data-scard="1">Карточка продукта ›</button>';
     sheetEl.innerHTML =
       '<div class="sheet-back" data-sclose="1"></div>' +
       '<div class="sheet" role="dialog" aria-modal="true" aria-label="' + esc(sh.title) + '">' +
@@ -188,7 +190,7 @@
           '<div style="flex-grow:1;min-width:0"><div class="sh-t">' + esc(sh.title) + '</div>' +
           '<div class="mic" style="margin-top:4px">' + esc(sh.sub) + '</div></div>' +
           '<button class="x" data-sclose="1" aria-label="Закрыть">✕</button></div>' +
-        '<div class="sh-chips">' + chips + '</div>' + own + where +
+        (chips ? '<div class="sh-chips">' + chips + '</div>' : '') + own + where +
         '<div class="sh-prev" id="sprev">' + sheetPreview(sh) + '</div>' +
         '<button class="primary" data-sgo="1">Записать ' +
           esc(sh.to === 0 ? 'сегодня' : 'в ' + sh.fromLabel) + '</button>' +
@@ -203,14 +205,15 @@
   function sheetWrite() {
     var sh = state.sheet;
     var g = Number(sh.pick);
-    if (!(g > 0 && g <= 5000)) return toast('Вес вне разумных пределов.', true);
+    if (!sh.fixed && !(g > 0 && g <= 5000)) return toast('Вес вне разумных пределов.', true);
     if (state.sending) return;
     state.sending = true;
     var key = 'sheet:' + sh.kind + ':' + (sh.item || sh.product) + ':' + g + ':' + sh.to;
     var hdr = { 'Content-Type': 'application/json', 'Idempotency-Key': keyFor(key) };
     var req = sh.kind === 'item'
       ? send('/api/meals/' + sh.meal + '/items/' + sh.item + '/repeat',
-             { headers: hdr, body: JSON.stringify({ grams: g, days_ago: sh.to }) })
+             { headers: hdr, body: JSON.stringify(sh.fixed ? { days_ago: sh.to }
+                                                             : { grams: g, days_ago: sh.to }) })
       : send('/api/meals/quick',
              { headers: hdr, body: JSON.stringify({ product_id: sh.product, grams: g,
                                                      days_ago: 0 }) });
@@ -741,6 +744,34 @@
   /* Граммовка «по умолчанию» для «+» и шторки: последний раз, иначе привычная. */
   function refGrams(p) { return p.last_grams || p.usual_grams || 100; }
 
+  /* §6.25: «свои цифры» (меню, названные КБЖУ) в каталоге не живут, но в «Недавних» стоят:
+     справа ккал порции, «+» повторяет снимок позиции (MA-INV-67). */
+  function statedRow(p, sort) {
+    var amount = p.grams > 0 ? n(p.grams) + ' г' : 'порция';
+    var use = (sort === 'recent' && p.last_time ? p.last_time : n(p.uses) + ' раз') +
+              ' · ' + amount;
+    return '<div class="item2">' +
+      '<button class="body" data-psheet="' + p.id + '">' +
+        '<span class="nm">' + esc(p.name) + '<span class="badge">свои цифры</span></span>' +
+        '<span class="mic use">' + esc(use) + '</span></button>' +
+      '<span class="num kk">' + n(p.kcal) + '<span class="per"> ккал</span></span>' +
+      '<button class="plus" data-again-m="' + p.meal_id + '" data-again-i="' + p.item_id + '" ' +
+        'aria-label="Записать ' + esc(p.name) + ' ещё раз сегодня">+</button></div>';
+  }
+
+  function statedSheet(p) {
+    var g = p.grams > 0 ? p.grams : 0;
+    openSheet({
+      kind: 'item', src: 'cat', meal: p.meal_id, item: p.item_id, title: p.name,
+      sub: 'свои цифры · ' + dayName(p.last_days_ago, p.last_date, false) + ' ' + p.last_time +
+           (g ? ' · ' + n(g) + '\u00a0г' : ''),
+      ref: g, refLabel: 'как было', fixed: !g,
+      per: g ? { kcal: p.kcal / g, p: p.protein_g / g, f: p.fat_g / g, c: p.carb_g / g }
+             : { kcal: p.kcal, p: p.protein_g, f: p.fat_g, c: p.carb_g },
+      from: 0, to: 0
+    });
+  }
+
   function productSheet(p) {
     var last = p.last_days_ago != null
       ? ' · ' + dayName(p.last_days_ago, p.last_date, false) + ' ' + n(p.last_grams) + '\u00a0г' : '';
@@ -779,6 +810,7 @@
             head = '<div class="dayhead">' + esc(dayName(p.last_days_ago, p.last_date, true)) +
                    '</div>';
           }
+          if (p.stated) return head + statedRow(p, sort);
           var use = sort === 'recent' && p.last_time
             ? p.last_time + ' · ' + n(p.last_grams) + ' г'
             : (p.uses ? n(p.uses) + ' раз · обычно ' + n(p.usual_grams) + ' г'
@@ -3383,6 +3415,7 @@
     if (b.dataset.psheet) {
       var sp = (state.cat.items || {})[b.dataset.psheet] ||
                (state.cat.card && state.cat.card.product);
+      if (sp && sp.stated) return statedSheet(sp);
       if (sp) productSheet(sp);
       if (sp && b.closest('.sh-chips')) { state.sheet.own = true; paintSheet(); }
       return;

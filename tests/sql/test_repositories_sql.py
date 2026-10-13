@@ -284,3 +284,24 @@ async def test_недавние_и_частые_только_свои_и_пос�
     last = await repo.last_use(me.id, [yog.id, bread.id, beer.id])
     assert last[yog.id][1] == 70 and last[bread.id][1] == 84
     assert beer.id not in last  # пиво — чужое
+
+
+async def test_свои_цифры_по_имени_последний_раз_только_свои(session):
+    me, other = await _user(session, 9401), await _user(session, 9402)
+    repo = SqlMealRepo(session)
+
+    async def stated(user, name, kcal, days_ago):
+        m = Macros(kcal, 10, 5, 20)
+        return await repo.add(Meal(
+            user_id=user.id, eaten_at=datetime.now(UTC) - timedelta(days=days_ago, hours=1),
+            input_type="menu", raw_input=name,
+            items=[MealItem(name_snapshot=name, grams=0, macros=m, product_id=None)],
+            source_confidence=1.0, totals=m))
+
+    await stated(me, "Chicken Caesar Salad", 410, 2)
+    last = await stated(me, "chicken caesar salad", 400, 0)
+    await stated(other, "Чужой салат 100%", 300, 0)
+    rows = await repo.stated_usage(me.id, query=None)
+    assert len(rows) == 1 and rows[0].uses == 2
+    assert rows[0].item_id == last.items[0].id and rows[0].macros.kcal == 400
+    assert await repo.stated_usage(me.id, query="100%") == []
