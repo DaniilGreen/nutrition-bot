@@ -220,6 +220,9 @@ class MealService:
                     for it in src.items
                 ],
                 source_confidence=src.source_confidence,
+                # FR-39.2: имя едет с повтором — шаблон жив, пока блюдо едят, даже если
+                # исходный приём удалили.
+                template_name=src.template_name,
                 totals=src.totals,
                 estimated=src.estimated,
             )
@@ -428,26 +431,42 @@ class MealService:
             return False
         return best_product_match(parsed_item.name, await self._products.list_all()) is not None
 
-    async def remember_dish(self, user: User, meal_id: int, name: str) -> Product | None:
-        """FR-39, вход «кнопка»: записанный приём → блюдо в каталоге.
+    async def save_template(self, user: User, meal_id: int, name: str) -> Meal | None:
+        """FR-39.2: дать записанному приёму имя блюда своей сборки.
 
-        Плотность берётся из СНАПШОТОВ записи (INV-3) — модель не переспрашиваем, позиции уже
-        выверены gate'ом при записи. Сам приём не меняется: он остался тем, что человек съел.
-        None — если делить не на что (позиция без веса: плотности без веса не существует).
+        Продукт в каталоге НЕ заводим: сборка — это состав, а не плотность. Умножать свёрток
+        на вес нельзя (тяжёлый свёрток ≠ больше лаваша), а состав нужен, чтобы его править.
+        Сам приём не трогаем (INV-3) — добавляется только ярлык.
         """
-        meal = await self._meals.get(_require_id(user), meal_id)
-        if meal is None or not meal.items:
+        clean = name.strip()[:64]
+        if not clean:
             return None
+        meal = await self._meals.get(_require_id(user), meal_id)
+        if meal is None or len(meal.items) < 2:
+            return None  # одна позиция — это уже продукт, блюдо из неё делать нечего
         if any(not item.grams or item.grams <= 0 for item in meal.items):
-            return None  # FR-22 без граммов: молча поделить на меньший вес = завысить навсегда
-        grams = sum(item.grams for item in meal.items)
-        estimate = any(item.is_estimate for item in meal.items)
-        return await self._pin_dish(
-            name,
-            _density_from(sum_macros(item.macros for item in meal.items), grams),
-            unit_weight=round(grams, 1),  # вся запись = одна порция → дальше считается штукой
-            estimate=estimate,
-        )
+            return None  # нечего повторять: вес позиции неизвестен
+        return await self._meals.set_template(_require_id(user), meal_id, clean)
+
+    async def repeat_template(
+        self, user: User, name: str, *, day_offset: int = 0
+    ) -> Meal | None:
+        """FR-39.2: «свёрток» → повторить самый свежий приём с этим именем. Без LLM."""
+        src = await self._meals.latest_by_template(_require_id(user), name.strip())
+        if src is None or src.id is None:
+            return None
+        return await self.repeat(user, src.id, day_offset=day_offset)
+
+    async def template_match(self, user: User, text: str) -> str | None:
+        """Текст целиком — это имя своего блюда? Сверяем теми же правилами, что и продукты
+        (INV-4.2): «свёрток» и «свертки» — одно и то же, а «свёрток с сыром» — уже нет."""
+        probe = text.strip()
+        if not probe or len(probe) > 64:
+            return None
+        for name in await self._meals.template_names(_require_id(user)):
+            if _names_compatible(probe, name):
+                return name
+        return None
 
     async def prepare_batch(self, parsed: ParsedMessage) -> Product | None:
         """FR-39, вход «фраза»: сырьё котла → блюдо в каталоге. Приём пищи НЕ пишем."""

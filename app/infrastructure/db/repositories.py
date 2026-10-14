@@ -66,6 +66,7 @@ def _meal_to_domain(o: MealORM) -> Meal:
         input_type=o.input_type,
         raw_input=o.raw_input,
         source_confidence=o.source_confidence,
+        template_name=o.template_name,
         totals=Macros(o.total_kcal, o.total_protein, o.total_fat, o.total_carb),
         items=[
             MealItem(
@@ -546,6 +547,7 @@ class SqlMealRepo:
             input_type=meal.input_type,
             raw_input=meal.raw_input,
             source_confidence=meal.source_confidence,
+            template_name=meal.template_name,
             total_kcal=meal.totals.kcal,
             total_protein=meal.totals.protein,
             total_fat=meal.totals.fat,
@@ -600,6 +602,34 @@ class SqlMealRepo:
             .limit(1)
         )
         return await self._delete_orm(res.scalar_one_or_none())
+
+    async def set_template(self, user_id: int, meal_id: int, name: str) -> Meal | None:
+        """FR-39.2: дать приёму имя блюда. Сам приём не трогаем — только ярлык (INV-3)."""
+        orm = await self._s.get(MealORM, meal_id)
+        if orm is None or orm.user_id != user_id:
+            return None
+        orm.template_name = name
+        await self._s.flush()
+        return _meal_to_domain(orm)
+
+    async def latest_by_template(self, user_id: int, name: str) -> Meal | None:
+        """Самый свежий приём с этим именем: поменял состав и сохранил заново — идёт новый."""
+        res = await self._s.execute(
+            select(MealORM)
+            .where(MealORM.user_id == user_id, func.lower(MealORM.template_name) == name.lower())
+            .order_by(MealORM.eaten_at.desc())
+            .limit(1)
+        )
+        orm = res.scalars().first()
+        return _meal_to_domain(orm) if orm is not None else None
+
+    async def template_names(self, user_id: int) -> list[str]:
+        res = await self._s.execute(
+            select(MealORM.template_name)
+            .where(MealORM.user_id == user_id, MealORM.template_name.is_not(None))
+            .distinct()
+        )
+        return [n for n in res.scalars().all() if n]
 
     async def get(self, user_id: int, meal_id: int) -> Meal | None:
         res = await self._s.execute(

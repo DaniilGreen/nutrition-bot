@@ -336,23 +336,21 @@ _DRESS_WORD = {"none": "без", "sour_cream": "сметана, 20 г", "mayo": 
                "oil": "масло, 10 г"}
 
 
-def format_dish_saved(saved: object) -> str:
-    """FR-39: блюдо своей сборки заведено. Показываем плотность и как звать его дальше."""
-    product = saved.product  # type: ignore[attr-defined]
-    d = product.density
-    mark = " ≈" if product.is_estimate else ""
-    name = escape(product.display_name, quote=False)
-    lines = [f"🍲 Запомнил: <b>{name}</b>{mark}"]
-    lines.append(
-        f"На 100 г: {d.kcal_per_100g:.0f} ккал · Б {d.protein_per_100g:.1f}"
-        f" · Ж {d.fat_per_100g:.1f} · У {d.carb_per_100g:.1f}"
+def format_dish_saved(meal: object, name: str) -> str:
+    """FR-39.2: блюдо названо. Показываем состав и как звать его дальше."""
+    items = meal.items  # type: ignore[attr-defined]
+    parts = ", ".join(f"{escape(i.name_snapshot, quote=False)} {i.grams:.0f} г" for i in items)
+    safe = escape(name, quote=False)
+    return (
+        f"🍲 Запомнил: <b>{safe}</b>\n"
+        f"{parts}\n"
+        f"Дальше пиши просто «{safe}» — запишу этот же состав. "
+        f"Можно поправить: убрать позицию кнопкой или «поправь граммы у {_first_name(items)}»."
     )
-    if product.unit_weight_g:
-        # Главное ради чего всё: дальше ни граммов, ни весов — одно слово.
-        lines.append(f"Порция {product.unit_weight_g:.0f} г — пиши просто «{name}».")
-    else:
-        lines.append(f"Дальше пиши «{name} 250 г».")
-    return "\n".join(lines)
+
+
+def _first_name(items: list) -> str:
+    return escape(items[0].name_snapshot, quote=False) if items else "позиции"
 
 
 def format_photo_card(

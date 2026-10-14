@@ -611,18 +611,19 @@ async def on_density_input(
 async def on_dish_name_input(
     message: Message, app_user: User, assistant: Assistant, state: FSMContext
 ) -> None:
-    """FR-39: имя блюда → плотность из записи → пин в каталог. Сам приём не трогаем (INV-3)."""
+    """FR-39.2: имя блюда → ярлык на приёме. Дальше это имя повторяет состав (INV-3)."""
     data = await state.get_data()
     meal_id = int(data.get("dish_meal_id", 0))
     await state.clear()
-    saved = await assistant.remember_dish(app_user, meal_id, message.text or "")
+    name = (message.text or "").strip()
+    saved = await assistant.remember_dish(app_user, meal_id, name)
     if saved is None:
         await message.answer(
-            "Не вышло: у позиций записи нет веса, а без веса плотности не существует. "
-            "Запиши состав с граммами — тогда запомню."
+            "Не вышло запомнить: нужна запись минимум из двух позиций, и у каждой — вес. "
+            "Запиши состав с граммами, тогда повторю его одним словом."
         )
         return
-    await message.answer(format_dish_saved(saved), parse_mode="HTML")
+    await message.answer(format_dish_saved(saved, name), parse_mode="HTML")
 
 
 @router.message(MealStates.awaiting_rename, F.text)

@@ -62,6 +62,7 @@ class Meal:
     source_confidence: float
     totals: Macros
     estimated: bool = False  # транзиентный флаг: хоть одна позиция — AI-оценка (не персистится)
+    template_name: str | None = None  # FR-39.2: имя блюда своей сборки, по нему идёт повтор
     id: int | None = None
     created_at: datetime | None = None
 

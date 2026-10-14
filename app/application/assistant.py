@@ -129,6 +129,18 @@ class Assistant:
     ) -> Result:
         """`day_offset` — день, на который смотрит человек, когда пишет (0 = сегодня,
         −1 = вчера). Это ДЕФОЛТ: слово «вчера» в самой фразе его перебивает."""
+        # FR-39.2: своё блюдо («свёрток») — повторяем сохранённый состав, в LLM не идём вообще.
+        # Проверка ДО разбора: знакомая еда не должна стоить ни денег, ни задержки.
+        if input_type == "text" and not photo:
+            template = await self._meals.template_match(user, text)
+            if template is not None:
+                repeated = await self._meals.repeat_template(
+                    user, template, day_offset=day_offset
+                )
+                if repeated is not None:
+                    stats = await self._stats.daily(user, days_ago=-day_offset)
+                    return MealLogged(meal=repeated, remaining=stats.remaining)
+
         known_keys = await self._products.all_keys()
         # Self-consistency (D-15/INV-12): k сэмплов оценки → медиана + калиброванная уверенность.
         # Заменяет фейковый ретрай при temperature=0 (был почти no-op). Адаптер сам решает k:
@@ -703,10 +715,9 @@ class Assistant:
         """Слить дубли. История не движется: перепривязывается только связь (INV-3)."""
         return await self._products.merge(winner_id, loser_ids)
 
-    async def remember_dish(self, user: User, meal_id: int, name: str) -> DishSaved | None:
-        """FR-39: превратить записанный приём в блюдо каталога. Сам приём не трогаем (INV-3)."""
-        product = await self._meals.remember_dish(user, meal_id, name)
-        return DishSaved(product=product) if product is not None else None
+    async def remember_dish(self, user: User, meal_id: int, name: str) -> Meal | None:
+        """FR-39.2: дать приёму имя блюда. Продукт не заводим — сборка это состав (D-38)."""
+        return await self._meals.save_template(user, meal_id, name)
 
     async def fix_product_density(self, product_id: int, density: Density) -> Product | None:
         # INV-11.2: ручную правку каталога тоже отсекаем по границам

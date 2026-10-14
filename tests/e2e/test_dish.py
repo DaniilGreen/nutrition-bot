@@ -28,67 +28,82 @@ def _meal(*items: ParsedItem) -> ParsedMessage:
     return ParsedMessage(intent=Intent.MEAL, confidence=0.9, items=list(items))
 
 
-async def test_button_turns_a_logged_meal_into_a_dish() -> None:
-    """AC-63/AC-64: свёрток из трёх компонентов → продукт с плотностью и весом порции."""
+async def test_named_dish_repeats_its_composition_without_llm() -> None:
+    """AC-67/AC-68: имя блюда повторяет СОСТАВ, продукт в каталоге не заводится."""
     assistant, users, products = _build(
         StubNlu(_meal(
-            _item("курица", "chicken_cooked", 140, 165, 31),
-            _item("лаваш", "lavash", 50, 274, 8),
-            _item("майонез", "mayo", 20, 680, 0.5),
+            _item("взвесь", "mix", 120, 200, 15, 13, 3),
+            _item("лаваш", "lavash", 50, 274, 8, 1, 56),
         ))
     )
     user = await _new_user(users)
-    logged = await assistant.process(user, "курица 140, лаваш 50, майонез 20")
+    logged = await assistant.process(user, "взвесь 120, лаваш 50")
     assert isinstance(logged, MealLogged)
     assert logged.meal.id is not None
+    keys_before = await products.all_keys()
 
-    saved = await assistant.remember_dish(user, logged.meal.id, "свёрток")
+    assert await assistant.remember_dish(user, logged.meal.id, "свёрток") is not None
+    # StubNlu исчерпан: если бот пойдёт в разбор — упадёт. Значит повтор идёт мимо LLM.
+    again = await assistant.process(user, "свёрток")
 
-    assert saved is not None
-    total_g = 140 + 50 + 20
-    assert saved.product.unit_weight_g == total_g  # дальше «свёрток» считается штукой (INV-7)
-    # плотность = КБЖУ записи / вес записи; сверяем с тем, что реально записано
-    expected = logged.meal.totals.kcal / total_g * 100
-    assert abs(saved.product.density.kcal_per_100g - expected) < 0.5
-    assert saved.product.source == "manual"
+    assert isinstance(again, MealLogged)
+    assert [(i.name_snapshot, i.grams) for i in again.meal.items] == [
+        (i.name_snapshot, i.grams) for i in logged.meal.items
+    ]
+    assert await products.all_keys() == keys_before, "сборка не должна плодить продукт"
+
+
+async def test_template_survives_on_repeat() -> None:
+    """Имя едет с повтором — шаблон жив, пока блюдо едят (FR-39.2)."""
+    assistant, users, _ = _build(
+        StubNlu(_meal(
+            _item("взвесь", "mix", 120, 200, 15, 13, 3),
+            _item("лаваш", "lavash", 50, 274, 8, 1, 56),
+        ))
+    )
+    user = await _new_user(users)
+    logged = await assistant.process(user, "взвесь 120, лаваш 50")
+    assert isinstance(logged, MealLogged)
+    assert logged.meal.id is not None
+    await assistant.remember_dish(user, logged.meal.id, "свёрток")
+
+    repeated = await assistant.process(user, "свёрток")
+
+    assert isinstance(repeated, MealLogged)
+    assert repeated.meal.template_name == "свёрток"
 
 
 async def test_saving_a_dish_does_not_move_history() -> None:
-    """AC-68/INV-3: снапшот съеденного после сохранения блюда не изменился ни на грамм."""
-    assistant, users, products = _build(
+    """AC-71/INV-3: снапшот съеденного после сохранения блюда не изменился ни на грамм."""
+    assistant, users, _ = _build(
         StubNlu(_meal(
-            _item("курица", "chicken_cooked", 140, 165, 31),
-            _item("лаваш", "lavash", 50, 274, 8),
+            _item("взвесь", "mix", 120, 200, 15, 13, 3),
+            _item("лаваш", "lavash", 50, 274, 8, 1, 56),
         ))
     )
     user = await _new_user(users)
-    logged = await assistant.process(user, "курица 140, лаваш 50")
+    logged = await assistant.process(user, "взвесь 120, лаваш 50")
     assert isinstance(logged, MealLogged)
     before = [(i.name_snapshot, i.grams, i.macros.kcal) for i in logged.meal.items]
-    before_total = logged.meal.totals.kcal
 
     assert logged.meal.id is not None
     await assistant.remember_dish(user, logged.meal.id, "свёрток")
 
-    after_meal = await assistant.get_meal(user, logged.meal.id)
-    assert after_meal is not None
-    assert [(i.name_snapshot, i.grams, i.macros.kcal) for i in after_meal.items] == before
-    assert after_meal.totals.kcal == before_total
+    after = await assistant.get_meal(user, logged.meal.id)
+    assert after is not None
+    assert [(i.name_snapshot, i.grams, i.macros.kcal) for i in after.items] == before
 
 
-async def test_dish_without_weights_is_refused() -> None:
-    """AC-65: позиция по своим цифрам без граммов — плотности не существует, блюдо не заводим."""
-    stated = ParsedItem(
-        name="шаурма", canonical_key="shawarma", unit=Unit.UNKNOWN,
-        total_kcal=520, total_protein=45, total_fat=18, total_carb=35, confidence=0.9,
-    )
-    assistant, users, _ = _build(StubNlu(_meal(stated)))
+async def test_single_item_or_weightless_meal_is_not_a_dish() -> None:
+    """AC-70: из одной позиции блюдо делать нечего, без веса — нечего повторять."""
+    one = _meal(_item("взвесь", "mix", 120, 200, 15, 13, 3))
+    assistant, users, _ = _build(StubNlu(one))
     user = await _new_user(users)
-    logged = await assistant.process(user, "шаурма 520 ккал 45/18/35")
+    logged = await assistant.process(user, "взвесь 120")
     assert isinstance(logged, MealLogged)
     assert logged.meal.id is not None
 
-    assert await assistant.remember_dish(user, logged.meal.id, "шаурма") is None
+    assert await assistant.remember_dish(user, logged.meal.id, "свёрток") is None
 
 
 async def test_batch_phrase_divides_the_pot_and_logs_no_meal() -> None:

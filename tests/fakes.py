@@ -381,6 +381,25 @@ class InMemoryMealRepo:
         self._meals.remove(last)
         return last
 
+    async def set_template(self, user_id: int, meal_id: int, name: str) -> Meal | None:
+        meal = await self.get(user_id, meal_id)
+        if meal is not None:
+            meal.template_name = name
+        return meal
+
+    async def latest_by_template(self, user_id: int, name: str) -> Meal | None:
+        hits = [
+            m for m in self._meals
+            if m.user_id == user_id and (m.template_name or "").lower() == name.lower()
+        ]
+        return max(hits, key=lambda m: m.eaten_at) if hits else None
+
+    async def template_names(self, user_id: int) -> list[str]:
+        return sorted({
+            m.template_name for m in self._meals
+            if m.user_id == user_id and m.template_name
+        })
+
     async def get(self, user_id: int, meal_id: int) -> Meal | None:
         return next((m for m in self._meals if m.id == meal_id and m.user_id == user_id), None)
 
