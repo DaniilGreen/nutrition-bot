@@ -249,6 +249,7 @@
     }).then(function (r) {
       dropKey(sid);
       closeSheet();
+      if (update) loadFrequent();  // состав набора поменялся — и ккал в чипе тоже
       return r.kind === 'logged' ? logged(r, 0) : handle(r);
     }).catch(function (err) { oops(err); }).then(function () { state.sending = false; });
   }
@@ -2318,9 +2319,14 @@
   /* Частое — одна прокручиваемая строка, без «Ещё» (§6.3). Список считает
      сервер по медиане граммовки за 30 дней. */
   function chips() {
-    var xs = state.frequent || [];
-    if (!xs.length) return '';
-    return '<div class="chips">' + xs.map(function (i) {
+    var xs = state.frequent || [], ss = state.sets || [];
+    if (!xs.length && !ss.length) return '';
+    /* FR-39.2, макет A: свои наборы — первыми. Тап пишет состав целиком, без модели. */
+    var sets = ss.map(function (x) {
+      return '<button class="chip" data-set="' + esc(x.name) + '">' + esc(x.name) +
+        ' <span class="g">· ' + n(x.kcal) + ' ккал</span></button>';
+    }).join('');
+    return '<div class="chips">' + sets + xs.map(function (i) {
       /* Есть product_id — пишем мгновенно, без модели. Нет (продукт не
          запиннен) — падаем на обычный путь через текст. */
       var attr = i.product_id
@@ -2333,8 +2339,12 @@
 
   function loadFrequent() {
     /* Тихо: пустые чипы — не ошибка, ради них не стоит ломать экран. */
-    api('/api/frequent?limit=10').then(function (d) {
-      state.frequent = d.items;
+    Promise.all([
+      api('/api/frequent?limit=10'),
+      api('/api/sets').catch(function () { return { items: [] }; })
+    ]).then(function (r) {
+      state.frequent = r[0].items;
+      state.sets = r[1].items;
       if (state.tab !== 'day') return;
       /* Вставляем строку чипов на место, а не перерисовкой всего дня: та
          ходила в API заново и мигала экраном ради оформления. */
@@ -3618,6 +3628,7 @@
         state.naming = null;
         toast('Набор «' + r.name + '» сохранён — он в «Продуктах» → «Моё».');
         renderDay();
+        loadFrequent();  // чип нового набора — сразу, а не после перезапуска аппки
       }).catch(function (err) { oops(err); renderDay(); })
         .then(function () { state.sending = false; });
     }
@@ -3631,8 +3642,10 @@
         body: JSON.stringify({ text: b.dataset.set, days_ago: writeDay() })
       }).then(function (r) {
         dropKey(sid);
-        /* FR-39.5: набор пишется с «Продуктов», как «+» у продукта — с вкладки не уводим. */
-        return r.kind === 'logged' ? logged(r, 0) : handle(r);
+        /* FR-39.5: с «Продуктов» и AI не уводим (как «+» у продукта), на «Дне» — обычная запись
+           в открытый день, тем же путём, что и чип продукта. */
+        var stay = state.tab === 'ai' || state.tab === 'cat';
+        return stay && r.kind === 'logged' ? logged(r, 0) : handle(r);
       }).catch(function (err) {
         oops(err);
         return rerender();
