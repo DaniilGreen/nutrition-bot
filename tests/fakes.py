@@ -145,12 +145,17 @@ class InMemoryProductRepo:
         hits.sort(key=lambda p: not p.is_estimate)  # оценки первыми — их и правят чаще
         return hits[:limit]
 
-    async def update_density(self, product_id: int, density: Density) -> Product | None:
+    async def update_density(
+        self, product_id: int, density: Density, *,
+        is_estimate: bool = False, unit_weight_g: float | None = None,
+    ) -> Product | None:
         for p in self._by_key.values():
             if p.id == product_id:
                 p.density = density
-                p.is_estimate = False
+                p.is_estimate = is_estimate
                 p.source = "manual"
+                if unit_weight_g is not None:
+                    p.unit_weight_g = unit_weight_g
                 return p
         return None
 

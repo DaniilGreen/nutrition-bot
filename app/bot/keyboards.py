@@ -21,6 +21,7 @@ ITEM_DEL_PREFIX = "item_del"
 MEAL_REPEAT_PREFIX = "meal_repeat"
 PROD_FIX_PREFIX = "prod_fix"
 PROD_RENAME_PREFIX = "prod_rename"  # переименовать продукт в /products (FR-27 #6)
+DISH_SAVE_PREFIX = "dish_save"  # запомнить запись как блюдо своей сборки (FR-39)
 ONBOARD_PREFIX = "onb"
 PHOTO_PREFIX = "ph"  # карточка фото блюда: ph:fat:<id> / ph:dr:<id> / ph:ok (FR-34)
 SCAN_PREFIX = "scan"  # карточка бланка InBody: scan:save / scan:confirm / scan:apply (FR-36)
@@ -160,6 +161,13 @@ def meal_actions_keyboard(meal: Meal) -> InlineKeyboardMarkup:
     # Первой — созидательная кнопка: выпил вторую бутылку, съел вторую порцию. Копирует вес и
     # КБЖУ один-в-один, поэтому в ИИ не идёт и повтор не «переоценивается» заново.
     builder.button(text="🔁 Повторить", callback_data=f"{MEAL_REPEAT_PREFIX}:{meal.id}")
+    # FR-39: сборка из нескольких взвешенных компонентов → блюдо каталога, чтобы завтра не
+    # вводить состав заново. Одна позиция — уже продукт, делать из неё блюдо нечего; позиция
+    # без веса не даёт плотности, поэтому кнопку не показываем вовсе, а не ругаемся после тапа.
+    if len(meal.items) > 1 and all(item.grams for item in meal.items):
+        builder.button(
+            text="🍲 Запомнить как блюдо", callback_data=f"{DISH_SAVE_PREFIX}:{meal.id}"
+        )
     if len(meal.items) > 1:
         for item in meal.items:
             if item.id is not None:

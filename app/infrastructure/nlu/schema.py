@@ -70,7 +70,7 @@ class NluItem(BaseModel):
 
 
 class NluResult(BaseModel):
-    intent: Literal["meal", "weight", "query", "correction", "unknown"]
+    intent: Literal["meal", "weight", "query", "correction", "batch", "unknown"]
     items: list[NluItem] = Field(default_factory=list)
     weight_kg: float | None = None
     correction_op: Literal["delete", "replace", "adjust", "other"] | None = Field(
@@ -80,5 +80,20 @@ class NluResult(BaseModel):
         default=0,
         description="Сдвиг дня приёма относительно сегодня: «вчера»=-1, «позавчера»=-2, "
         "«завтра»=+1. Если день НЕ назван — строго 0 (сегодня). Диапазон -30..+7.",
+    )
+    batch_name: str | None = Field(
+        default=None,
+        description="intent=batch: как назвать блюдо в каталоге, по-русски и без слова "
+        "«заготовка» («свёрток», «соус»). null для остальных интентов.",
+    )
+    batch_yield_g: float | None = Field(
+        default=None,
+        description="intent=batch: вес ГОТОВОГО в граммах, если назван («вышло 1100», "
+        "«получилось 1.8 кг»). СТРОГО null, если не назван — усушку не угадывай.",
+    )
+    batch_portions: int | None = Field(
+        default=None,
+        description="intent=batch: на сколько равных порций разложено («на 8 свёртков», "
+        "«6 контейнеров»). null, если число порций не названо.",
     )
     confidence: float = Field(description="Общая уверенность разбора, 0..1")

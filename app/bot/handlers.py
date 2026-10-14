@@ -55,6 +55,7 @@ from app.application.results import (
 from app.bot.dashboard_image import render_weight_chart  # единственный уцелевший PNG — линия веса
 from app.bot.formatters import (  # текстовые подсказки внутри диалога (не экраны)
     SCAN_REFUSAL,
+    format_dish_saved,
     format_goal_proposal,
     format_photo_card,
     format_result,
@@ -71,6 +72,7 @@ from app.bot.keyboards import (
     BTN_WEIGHT,
     DAY_DEL_PREFIX,
     DAY_NAV_PREFIX,
+    DISH_SAVE_PREFIX,
     GOAL_TARGET_PREFIX,
     LABEL_G_PREFIX,
     ONBOARD_PREFIX,
@@ -605,6 +607,24 @@ async def on_density_input(
     )
 
 
+@router.message(MealStates.awaiting_dish_name, F.text)
+async def on_dish_name_input(
+    message: Message, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
+    """FR-39: имя блюда → плотность из записи → пин в каталог. Сам приём не трогаем (INV-3)."""
+    data = await state.get_data()
+    meal_id = int(data.get("dish_meal_id", 0))
+    await state.clear()
+    saved = await assistant.remember_dish(app_user, meal_id, message.text or "")
+    if saved is None:
+        await message.answer(
+            "Не вышло: у позиций записи нет веса, а без веса плотности не существует. "
+            "Запиши состав с граммами — тогда запомню."
+        )
+        return
+    await message.answer(format_dish_saved(saved), parse_mode="HTML")
+
+
 @router.message(MealStates.awaiting_rename, F.text)
 async def on_rename_input(
     message: Message, app_user: User, assistant: Assistant, state: FSMContext
@@ -1085,6 +1105,7 @@ async def on_text(
         MealStates.awaiting_label_grams,
         MealStates.awaiting_photo,
         MealStates.awaiting_scan,
+        MealStates.awaiting_dish_name,
         MealStates.awaiting_bug,
         ProfileStates.body,
     )
@@ -1267,6 +1288,23 @@ async def on_prod_fix(
         f"Пришли 4 числа через пробел — ккал, белки, жиры, углеводы на 100 г.\n"
         f"Напр.: <code>165 31 3.6 0</code>\nИли переименуй кнопкой ниже.",
         reply_markup=prod_edit_keyboard(product_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(f"{DISH_SAVE_PREFIX}:"))
+async def on_dish_save(
+    callback: CallbackQuery, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
+    """FR-39: «Запомнить как блюдо» → спрашиваем имя, считать будем из снапшотов записи."""
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    meal_id = int((callback.data or f"{DISH_SAVE_PREFIX}:0").split(":", 1)[1])
+    await state.set_state(MealStates.awaiting_dish_name)
+    await state.update_data(dish_meal_id=meal_id)
+    await callback.message.answer(
+        "🍲 Как назвать блюдо? Пришли название — дальше его можно будет записывать одним словом."
     )
     await callback.answer()
 

@@ -13,6 +13,7 @@ class MealStates(StatesGroup):
     awaiting_rename = State()        # новое имя продукта (FR-27 #6)
     awaiting_photo = State()         # карточка фото блюда ждёт «Записать» или вес (FR-34)
     awaiting_scan = State()          # карточка бланка InBody ждёт «Сохранить» (FR-36)
+    awaiting_dish_name = State()     # имя блюда своей сборки (FR-39)
 
 
 class ProfileStates(StatesGroup):

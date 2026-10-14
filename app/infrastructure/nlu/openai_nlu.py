@@ -166,6 +166,9 @@ def _to_dto(result: NluResult) -> ParsedMessage:
         correction_op=result.correction_op,
         day_offset=result.day_offset,
         confidence=result.confidence,
+        batch_name=result.batch_name,
+        batch_yield_g=result.batch_yield_g,
+        batch_portions=result.batch_portions,
         items=[
             ParsedItem(
                 name=i.name,

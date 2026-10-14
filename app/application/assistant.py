@@ -36,6 +36,7 @@ from app.application.results import (
     DailyStats,
     DayPace,
     DayView,
+    DishSaved,
     History,
     ItemAdjusted,
     ItemRemoved,
@@ -163,6 +164,13 @@ class Assistant:
 
         if parsed.intent is Intent.QUERY:
             return await self._stats.daily(user)
+
+        if parsed.intent is Intent.BATCH and parsed.items:
+            # FR-39: наготовил впрок. Пиним блюдо, приём пищи НЕ пишем — он это не ел.
+            product = await self._meals.prepare_batch(parsed)
+            if product is None:
+                return Unknown(reason="не понял состав заготовки")
+            return DishSaved(product=product, portions=parsed.batch_portions)
 
         if parsed.intent is Intent.CORRECTION:
             return await self._handle_correction(user, parsed)
@@ -694,6 +702,11 @@ class Assistant:
     async def merge_products(self, winner_id: int, loser_ids: list[int]) -> int:
         """Слить дубли. История не движется: перепривязывается только связь (INV-3)."""
         return await self._products.merge(winner_id, loser_ids)
+
+    async def remember_dish(self, user: User, meal_id: int, name: str) -> DishSaved | None:
+        """FR-39: превратить записанный приём в блюдо каталога. Сам приём не трогаем (INV-3)."""
+        product = await self._meals.remember_dish(user, meal_id, name)
+        return DishSaved(product=product) if product is not None else None
 
     async def fix_product_density(self, product_id: int, density: Density) -> Product | None:
         # INV-11.2: ручную правку каталога тоже отсекаем по границам

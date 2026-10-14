@@ -15,6 +15,7 @@ class Intent(str, Enum):
     WEIGHT = "weight"
     QUERY = "query"
     CORRECTION = "correction"
+    BATCH = "batch"  # FR-39: наготовил впрок → посчитать блюдо, приём НЕ писать
     UNKNOWN = "unknown"
 
 
@@ -67,6 +68,10 @@ class ParsedMessage:
     # переживают уточнение варианта между снимком и записью.
     photo: bool = False
     weight_guessed: bool = False  # веса не называли: каждая позиция — оценка «на глаз»
+    # FR-39, вход «фраза для котла»: items — СЫРЬЁ, а не съеденное.
+    batch_name: str | None = None       # как назвать блюдо в каталоге
+    batch_yield_g: float | None = None  # вес готового; None → сумма весов сырья
+    batch_portions: int | None = None   # на сколько порций разложено → unit_weight_g
 
 
 @dataclass

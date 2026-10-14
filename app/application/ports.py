@@ -96,7 +96,14 @@ class ProductRepo(Protocol):
         """Поиск по подстроке в имени/ключе, регистронезависимо (FR-15.1)."""
         ...
 
-    async def update_density(self, product_id: int, density: Density) -> Product | None: ...
+    async def update_density(
+        self, product_id: int, density: Density, *,
+        is_estimate: bool = False, unit_weight_g: float | None = None,
+    ) -> Product | None:
+        """Ручная правка каталога (FR-15) и перерасчёт заготовки (FR-39).
+        `is_estimate` по умолчанию False — правка руками снимает «≈»; заготовка
+        наследует флаг от сырья. `unit_weight_g=None` — не трогать."""
+        ...
 
     async def rename(self, product_id: int, name: str) -> Product | None:
         """Переименовать продукт (FR-27 #6: vision назвал обобщённо → юзер уточняет имя)."""

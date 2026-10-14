@@ -428,6 +428,94 @@ class MealService:
             return False
         return best_product_match(parsed_item.name, await self._products.list_all()) is not None
 
+    async def remember_dish(self, user: User, meal_id: int, name: str) -> Product | None:
+        """FR-39, вход «кнопка»: записанный приём → блюдо в каталоге.
+
+        Плотность берётся из СНАПШОТОВ записи (INV-3) — модель не переспрашиваем, позиции уже
+        выверены gate'ом при записи. Сам приём не меняется: он остался тем, что человек съел.
+        None — если делить не на что (позиция без веса: плотности без веса не существует).
+        """
+        meal = await self._meals.get(_require_id(user), meal_id)
+        if meal is None or not meal.items:
+            return None
+        if any(not item.grams or item.grams <= 0 for item in meal.items):
+            return None  # FR-22 без граммов: молча поделить на меньший вес = завысить навсегда
+        grams = sum(item.grams for item in meal.items)
+        estimate = any(item.is_estimate for item in meal.items)
+        return await self._pin_dish(
+            name,
+            _density_from(sum_macros(item.macros for item in meal.items), grams),
+            unit_weight=round(grams, 1),  # вся запись = одна порция → дальше считается штукой
+            estimate=estimate,
+        )
+
+    async def prepare_batch(self, parsed: ParsedMessage) -> Product | None:
+        """FR-39, вход «фраза»: сырьё котла → блюдо в каталоге. Приём пищи НЕ пишем."""
+        pot: list[Macros] = []
+        grams_total = 0.0
+        estimate = False
+        for parsed_item in parsed.items:
+            # Через каталог: у известного сырья — запиннутая плотность, не свежая выдумка (INV-2).
+            product = await self._resolve_product(parsed_item)
+            estimate = estimate or product.is_estimate
+            resolution = resolve_grams(
+                unit=parsed_item.unit.value,
+                quantity=parsed_item.quantity,
+                grams_estimate=parsed_item.grams,
+                portion_hint=parsed_item.portion_hint,
+                parsed_unit_weight_g=parsed_item.unit_weight_g,
+                product_unit_weight_g=product.unit_weight_g,
+                product_default_portion_g=product.default_portion_g,
+                product_portion_sizes=product.portion_sizes,
+                parsed_portion_sizes=parsed_item.portion_options,
+            )
+            grams = clamp_grams(resolution.grams)
+            raw = macros_for_grams(product.density, grams)
+            # Тот же gate, что у позиции приёма (INV-11.1/14) — сырьё проходит его поштучно, до
+            # сложения. Сам котёл Атвотером НЕ пересверяем: он уже сумма выверенного.
+            pot.append(clamp_macros(raw) if is_alcoholic(parsed_item.name) else vet_macros(raw))
+            grams_total += grams
+
+        if not pot:
+            return None
+        # Вес готового: назвали — берём его (при варке вода ушла, масса не равна сумме сырья);
+        # не назвали — сумма весов сырья, что для сборки без термообработки ТОЧНО, а не почти.
+        yield_g = parsed.batch_yield_g or grams_total
+        if yield_g <= 0:
+            return None
+        portions = parsed.batch_portions if (parsed.batch_portions or 0) > 0 else None
+        return await self._pin_dish(
+            (parsed.batch_name or parsed.items[0].name),
+            _density_from(sum_macros(pot), yield_g),
+            unit_weight=round(yield_g / portions, 1) if portions else None,
+            estimate=estimate,
+        )
+
+    async def _pin_dish(
+        self, name: str, density: Density, *, unit_weight: float | None, estimate: bool
+    ) -> Product:
+        """Общий пин обоих входов. Собрал то же блюдо заново — обновляем, а не плодим дубль."""
+        clean = name.strip()[:255] or "блюдо"
+        key = _slug(clean)
+        existing = await self._products.get_by_key(key)
+        if existing is not None and _names_compatible(clean, existing.display_name):
+            assert existing.id is not None
+            updated = await self._products.update_density(
+                existing.id, density, is_estimate=estimate, unit_weight_g=unit_weight
+            )
+            if updated is not None:
+                return updated
+        return await self._products.create(
+            Product(
+                canonical_key=await self._free_key(key),
+                display_name=clean,
+                density=density,
+                unit_weight_g=unit_weight,
+                source="manual",  # выведено из взвешенного, а не угадано (FR-39)
+                is_estimate=estimate,
+            )
+        )
+
     async def _resolve_product(self, parsed_item: ParsedItem) -> Product:
         key = _canonical_key(parsed_item.canonical_key, parsed_item.name)
         existing = await self._products.get_by_key(key)
@@ -513,6 +601,18 @@ def best_product_match(
         if score > best_score:
             best, best_score = product, score
     return best if best_score >= threshold else None
+
+
+def _density_from(total: Macros, grams: float) -> Density:
+    """КБЖУ порции/котла → плотность на 100 г. Границы INV-11.2 — последним словом."""
+    return clamp_density(
+        Density(
+            kcal_per_100g=total.kcal / grams * 100,
+            protein_per_100g=total.protein / grams * 100,
+            fat_per_100g=total.fat / grams * 100,
+            carb_per_100g=total.carb / grams * 100,
+        )
+    )
 
 
 def _canonical_key(llm_key: str, name: str) -> str:

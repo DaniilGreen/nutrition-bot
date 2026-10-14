@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from app.application.dto import ParsedMessage, PlateReading, ScanReading
-from app.application.entities import Meal, MealItem, WeightLog
+from app.application.entities import Meal, MealItem, Product, WeightLog
 from app.domain.goals import Goal, Remaining
 from app.domain.value_objects import Macros
 
@@ -14,6 +14,14 @@ from app.domain.value_objects import Macros
 class MealLogged:
     meal: Meal
     remaining: Remaining
+
+
+@dataclass
+class DishSaved:
+    """FR-39: блюдо своей сборки заведено в каталог. Приёма пищи тут нет — только продукт."""
+
+    product: Product
+    portions: int | None = None  # сколько порций вышло из котла (вход «фраза»)
 
 
 @dataclass

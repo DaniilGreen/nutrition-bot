@@ -248,7 +248,10 @@ class SqlProductRepo:
         )
         return [_product_to_domain(o) for o in res.scalars().all()]
 
-    async def update_density(self, product_id: int, density: Density) -> Product | None:
+    async def update_density(
+        self, product_id: int, density: Density, *,
+        is_estimate: bool = False, unit_weight_g: float | None = None,
+    ) -> Product | None:
         orm = await self._s.get(ProductORM, product_id)
         if orm is None:
             return None
@@ -256,8 +259,10 @@ class SqlProductRepo:
         orm.protein_per_100g = density.protein_per_100g
         orm.fat_per_100g = density.fat_per_100g
         orm.carb_per_100g = density.carb_per_100g
-        orm.is_estimate = False  # вручную выверено — больше не оценка
+        orm.is_estimate = is_estimate  # правка руками снимает «≈», заготовка наследует от сырья
         orm.source = "manual"
+        if unit_weight_g is not None:
+            orm.unit_weight_g = unit_weight_g  # FR-39: перегатовил на другое число порций
         await self._s.flush()
         return _product_to_domain(orm)
 

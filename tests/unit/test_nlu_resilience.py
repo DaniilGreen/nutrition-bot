@@ -19,6 +19,7 @@ def _ok(intent="meal"):
     parsed = SimpleNamespace(
         intent=intent, weight_kg=None, correction_op=None, day_offset=0,
         confidence=0.9, items=[],
+        batch_name=None, batch_yield_g=None, batch_portions=None,  # FR-39
     )
     return SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(parsed=parsed))],
