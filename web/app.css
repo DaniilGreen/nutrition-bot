@@ -176,7 +176,8 @@ nav button[aria-current="page"]{color:var(--accent)}
 .pace .chips{flex-wrap:wrap;overflow:visible;margin-left:0;margin-right:0;
   padding-left:0;padding-right:0;min-height:0}
 .pace .chip{flex-shrink:1;max-width:100%}
-.actions{display:flex;gap:var(--s-2);margin-top:var(--s-4)}
+/* flex-wrap: с «Сохранить набор» (FR-39.2) три кнопки на 320 в ряд не влезают — уезжали за край. */
+.actions{display:flex;flex-wrap:wrap;gap:var(--s-2);margin-top:var(--s-4)}
 .actions button{background:var(--surface-2);border:0;color:var(--text);font:inherit;
   font-size:var(--f-caption);border-radius:var(--r-pill);padding:9px 15px;cursor:pointer;min-height:44px}
 .actions button.danger{color:var(--alert)}
@@ -514,3 +515,33 @@ body.ai{padding-bottom:calc(var(--tabbar) + 76px + env(safe-area-inset-bottom))}
 .dtiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
 .dtile{background:var(--surface-2);border-radius:var(--r-sm);padding:10px 4px;text-align:center}
 .dtile .tv{font-size:var(--f-t3);font-weight:600}
+
+/* ── FR-39: набор — имя в карточке (макет A) и лист состава (макет C) ──────────── */
+.naming{display:flex;flex-direction:column;gap:var(--s-2);margin-top:var(--s-2)}
+.naming-row{display:flex;gap:var(--s-2)}
+.naming input{flex-grow:1;min-width:0;min-height:44px;box-sizing:border-box;
+  border-radius:var(--r-field);border:1px solid var(--border);background:var(--surface-2);
+  color:var(--text);font:inherit;padding:0 var(--s-3)}
+/* .primary глобально width:100% и с отступом сверху — для колонки шторки. В строке рядом с полем
+   это вылет за край на 34px и кнопка ниже поля (замер 15.10.2026), поэтому сбрасываем. */
+.naming .primary{width:auto;margin-top:0;min-height:44px;padding:0 var(--s-4);
+  border-radius:var(--r-field);flex-shrink:0}
+.slist{display:flex;flex-direction:column;background:var(--surface-2);border-radius:var(--r-sm);
+  padding:2px var(--s-1) 2px var(--s-3)}
+.srow{display:flex;align-items:center;gap:4px;min-height:52px}
+.srow + .srow{border-top:1px solid var(--surface-3)}
+.srow .nm{flex-grow:1;min-width:0;font-size:var(--f-body-s);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.srow .step{flex-shrink:0;width:40px;height:40px;border-radius:var(--r-pill);border:0;
+  background:var(--surface-3);color:var(--text);font:inherit;font-size:1.125rem;cursor:pointer}
+.srow .sg{flex-shrink:0;width:52px;text-align:center;font-size:var(--f-body-s)}
+.srow .kk{flex-shrink:0;width:36px;text-align:right;font-size:var(--f-caption);color:var(--text-muted)}
+.srow .sx{flex-shrink:0;width:40px;height:40px;border:0;background:none;color:var(--text-faint);
+  font:inherit;cursor:pointer}
+/* На узком экране имя ингредиента получало 44px («кур…») — кнопки ±, граммы, ккал и ✕ занимают
+   228px. Ниже 400px имя встаёт своей строкой над управлением (замер 15.10.2026). */
+@media (max-width:400px){
+  .srow{flex-wrap:wrap;padding:6px 0}
+  .srow .nm{flex-basis:100%}
+  .srow .step:first-of-type{margin-left:auto}
+}

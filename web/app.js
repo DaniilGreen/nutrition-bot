@@ -152,9 +152,113 @@
       '<span style="flex-grow:1"></span>' + pfc;
   }
 
+  /* FR-39.6, макет C: набор перед записью — граммы ±, убрать, добавить из каталога.
+     Цифры здесь — предпросмотр по снапшоту на грамм; записанное пересчитывает сервер. */
+  function openSetSheet(x) {
+    state.sheet = {
+      kind: 'set', name: x.name, title: x.name, keep: 'today', q: '', found: [],
+      n0: x.items.length,
+      items: x.items.map(function (i, k) {
+        var g = i.grams || 1;
+        return { src: k, name: i.name, grams: i.grams, base: i.grams,
+                 per: { kcal: i.kcal / g, p: i.protein_g / g, f: i.fat_g / g, c: i.carb_g / g } };
+      })
+    };
+    paintSheet();
+  }
+
+  function setChanged(sh) {
+    return sh.items.length !== sh.n0 || sh.items.some(function (it, k) {
+      return it.src !== k || it.grams !== it.base;
+    });
+  }
+
+  function paintSetSheet(sh) {
+    var t = { kcal: 0, p: 0, f: 0, c: 0, g: 0 };
+    var rows = sh.items.map(function (it, k) {
+      t.kcal += it.per.kcal * it.grams; t.p += it.per.p * it.grams;
+      t.f += it.per.f * it.grams; t.c += it.per.c * it.grams; t.g += it.grams;
+      return '<div class="srow">' +
+        '<span class="nm">' + esc(it.name) + '</span>' +
+        '<button class="step" data-sdec="' + k + '" aria-label="Меньше: ' + esc(it.name) + '">−</button>' +
+        '<span class="num sg">' + n(it.grams) + '\u00a0г</span>' +
+        '<button class="step" data-sinc="' + k + '" aria-label="Больше: ' + esc(it.name) + '">+</button>' +
+        '<span class="num kk">' + n(it.per.kcal * it.grams) + '</span>' +
+        '<button class="sx" data-sdrop="' + k + '" aria-label="Убрать: ' + esc(it.name) + '">✕</button>' +
+      '</div>';
+    }).join('') || '<div class="state">Пусто — добавь что-нибудь ниже.</div>';
+    var found = sh.found.map(function (p) {
+      return '<button class="chip" data-sadd="' + p.id + '">+ ' + esc(p.name) + '</button>';
+    }).join('');
+    var keep = setChanged(sh)
+      ? '<div class="where" role="group" aria-label="Что сделать с изменениями">' +
+          ['today', 'update'].map(function (v) {
+            var on = sh.keep === v;
+            return '<button data-skeep="' + v + '" aria-pressed="' + on + '"' +
+              (on ? ' class="on"' : '') + '>' + (v === 'today' ? 'Только сегодня' : 'Обновить набор') +
+              '</button>';
+          }).join('') + '</div>'
+      : '';
+    sheetEl.innerHTML =
+      '<div class="sheet-back" data-sclose="1"></div>' +
+      '<div class="sheet" role="dialog" aria-modal="true" aria-label="Набор ' + esc(sh.title) + '">' +
+        '<div class="grip" aria-hidden="true"></div>' +
+        '<div style="display:flex;gap:var(--s-2);align-items:flex-start">' +
+          '<div style="flex-grow:1;min-width:0"><div class="sh-t">' + esc(sh.title) + '</div>' +
+          '<div class="mic" style="margin-top:4px">Поправь под сегодняшний — и запиши</div></div>' +
+          '<button class="x" data-sclose="1" aria-label="Закрыть">✕</button></div>' +
+        '<div class="slist">' + rows + '</div>' +
+        '<label class="composer" style="margin:0">' +
+          '<input id="sq" type="search" autocomplete="off" placeholder="Добавить: найди продукт" ' +
+          'value="' + esc(sh.q) + '" aria-label="Добавить продукт в набор" ' +
+          'style="flex-grow:1;background:none;border:0;color:var(--text);font:inherit;' +
+          'outline:none;min-width:0"></label>' +
+        (found ? '<div class="sh-chips">' + found + '</div>' : '') +
+        /* Перенос блоками, а не словами: на 320 при больших числах «У 34» рвалось на две строки. */
+        '<div class="sh-prev" style="flex-wrap:wrap"><span class="num" ' +
+          'style="font-size:var(--f-t2);font-weight:700">' + n(t.kcal) + '</span>' +
+          '<span class="mic" style="white-space:nowrap">ккал · ' + n(t.g) + '\u00a0г</span>' +
+          '<span style="flex-grow:1"></span><span class="mic num" style="white-space:nowrap">' +
+          '<span style="color:var(--prot)">Б ' + n(t.p) + '</span> · ' +
+          '<span style="color:var(--fat)">Ж ' + n(t.f) + '</span> · ' +
+          '<span style="color:var(--carb)">У ' + n(t.c) + '</span></span></div>' +
+        keep +
+        '<button class="primary" data-setgo="1"' + (sh.items.length ? '' : ' disabled') + '>' +
+          'Записать · ' + n(t.kcal) + ' ккал</button>' +
+      '</div>';
+    if (sh.qFocus) {
+      var q = document.getElementById('sq');
+      if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+      sh.qFocus = false;
+    }
+  }
+
+  function setWrite() {
+    var sh = state.sheet;
+    if (!sh || state.sending || !sh.items.length) return;
+    state.sending = true;
+    busy('Записываю…');
+    var picks = sh.items.map(function (i) {
+      return i.src != null ? { src: i.src, grams: i.grams } : { product_id: i.product, grams: i.grams };
+    });
+    var update = setChanged(sh) && sh.keep === 'update';
+    var sid = 'setlog:' + sh.name + ':' + JSON.stringify(picks) + ':' + update;
+    send('/api/sets/log', {
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': keyFor(sid) },
+      body: JSON.stringify({ name: sh.name, items: picks, update: update, days_ago: writeDay() })
+    }).then(function (r) {
+      dropKey(sid);
+      closeSheet();
+      return r.kind === 'logged' ? logged(r, 0) : handle(r);
+    }).catch(function (err) { oops(err); }).then(function () { state.sending = false; });
+  }
+
+  var setSearchTimer = null;
+
   function paintSheet() {
     var sh = state.sheet;
     if (!sh) { sheetEl.innerHTML = ''; return; }
+    if (sh.kind === 'set') return paintSetSheet(sh);
     var ref = Math.round(sh.ref);
     var chips = sh.fixed ? '' : portions(sh.ref).map(function (g) {
       var on = !sh.own && g === sh.pick;
@@ -252,6 +356,25 @@
     var t = e.target.closest('[data-sclose],button');
     if (!t) return;
     if (t.dataset.sclose) return closeSheet();
+    if (sh.kind === 'set') {
+      var it = sh.items[Number(t.dataset.sdec || t.dataset.sinc || t.dataset.sdrop)];
+      var step = it && it.grams < 30 ? 5 : 10;  // ложка соуса и 120 г начинки — разный шаг
+      if (t.dataset.sdec && it) { it.grams = Math.max(step, it.grams - step); return paintSheet(); }
+      if (t.dataset.sinc && it) { it.grams = Math.min(5000, it.grams + step); return paintSheet(); }
+      if (t.dataset.sdrop && it) { sh.items.splice(sh.items.indexOf(it), 1); return paintSheet(); }
+      if (t.dataset.skeep) { sh.keep = t.dataset.skeep; return paintSheet(); }
+      if (t.dataset.setgo) return setWrite();
+      if (t.dataset.sadd) {
+        var p = sh.found.filter(function (x) { return String(x.id) === t.dataset.sadd; })[0];
+        if (!p) return;
+        sh.items.push({ product: p.id, name: p.name, grams: refGrams(p), base: null,
+                        per: { kcal: p.kcal_per_100g / 100, p: p.protein_per_100g / 100,
+                               f: p.fat_per_100g / 100, c: p.carb_per_100g / 100 } });
+        sh.q = ''; sh.found = [];
+        return paintSheet();
+      }
+      return;
+    }
     if (t.dataset.sg) { sh.pick = Number(t.dataset.sg); sh.own = false; return paintSheet(); }
     if (t.dataset.sown) { sh.own = true; return paintSheet(); }
     if (t.dataset.sto != null) { sh.to = Number(t.dataset.sto); return paintSheet(); }
@@ -271,6 +394,22 @@
     }
   });
   sheetEl.addEventListener('input', function (e) {
+    if (e.target.id === 'sq' && state.sheet && state.sheet.kind === 'set') {
+      var sh = state.sheet, q = e.target.value;
+      sh.q = q;
+      clearTimeout(setSearchTimer);
+      if (q.trim().length < 2) { sh.found = []; sh.qFocus = true; return paintSheet(); }
+      setSearchTimer = setTimeout(function () {
+        api('/api/products?sort=name&limit=6&q=' + encodeURIComponent(q.trim()))
+          .then(function (d) {
+            if (state.sheet !== sh || sh.q !== q) return;  // пока шёл запрос, ввод ушёл дальше
+            sh.found = d.items.filter(function (x) { return !x.stated; });
+            sh.qFocus = true;
+            paintSheet();
+          }).catch(function () {});
+      }, 250);
+      return;
+    }
     if (e.target.id !== 'sgrams' || !state.sheet) return;
     state.sheet.pick = Number(e.target.value);
     var pv = document.getElementById('sprev');
@@ -517,6 +656,9 @@
      Фраза ввода не переживает правку веса («паста 10 г» при записанных 15) и
      у фото её нет вовсе — там стояло служебное слово «этикетка». */
   function mealTitle(m) {
+    /* FR-39.2: у набора есть имя — оно и заголовок, и строка тоста «Записал …». Перечень позиций
+       на 320 съедал его многоточием; состав виден, когда карточку раскрыть. */
+    if (m.template_name) return m.template_name;
     var parts = (m.items || []).map(function (i) {
       return i.name + (i.grams > 0 ? ' ' + n(i.grams) + ' г' : '');
     });
@@ -571,10 +713,28 @@
       }).join('');
       var macros = '<div class="row" style="border-top:1px solid var(--separator);margin-top:4px;padding-top:8px">' +
         '<span style="flex-grow:1">Б ' + n(m.protein_g) + ' · Ж ' + n(m.fat_g) + ' · У ' + n(m.carb_g) + '</span></div>';
-      var acts = '<div class="actions" style="margin-top:var(--s-2)">' +
-        '<button data-repeat="' + m.id + '">' +
-          (state.daysAgo > 0 ? 'Повторить приём сегодня' : 'Повторить') + '</button>' +
-        '<button data-drop="' + m.id + '" class="danger">Удалить</button></div>';
+      /* FR-39.2: несколько взвешенных позиций — можно сохранить набор. Уже набор — кнопки нет,
+         в шапке бейдж с именем. Имя вводится прямо в карточке, без модалки (макет A). */
+      var canSet = !m.template_name && m.items.length > 1 &&
+                   m.items.every(function (i) { return i.grams > 0; });
+      var acts = state.naming === m.id
+        ? '<div class="naming">' +
+            '<label class="mic" for="setname">Как назвать набор? Дальше это слово запишет тот же ' +
+              'состав</label>' +
+            '<div class="naming-row">' +
+              '<input id="setname" type="text" maxlength="64" autocomplete="off" ' +
+                'enterkeyhint="done">' +
+              '<button class="primary" data-setsave="' + m.id + '">Готово</button></div>' +
+            '<button class="link" data-setcancel="1" style="align-self:flex-start">Отмена</button>' +
+          '</div>'
+        : '<div class="actions" style="margin-top:var(--s-2)">' +
+            '<button data-repeat="' + m.id + '">' +
+              (state.daysAgo > 0 ? 'Повторить приём сегодня' : 'Повторить') + '</button>' +
+            '<button data-drop="' + m.id + '" class="danger">Удалить</button></div>' +
+            /* Отдельной строкой, а не третьей кнопкой в ряду: на 320 в ряду 204px, «Повторить» +
+               «Сохранить набор» = 245px — ряд рвался на три строки. Набор сохраняют изредка,
+               ему хватает ссылки; «Удалить» остаётся последним. */
+            (canSet ? '<button class="link" data-setname="' + m.id + '">Сохранить набор</button>' : '');
       /* На 320 подпись «↻ сегодня» у каждой позиции съедала строку — кнопка-иконка,
          а смысл один раз над позициями. */
       var hint = state.daysAgo > 0
@@ -765,9 +925,9 @@
   function setRow(x) {
     var parts = x.items.map(function (i) { return i.name + ' ' + n(i.grams) + ' г'; }).join(' · ');
     return '<div class="item2">' +
-      '<div class="body"><span class="nm">' + esc(x.name) +
-        '<span class="badge">набор</span></span>' +
-        '<span class="mic use">' + esc(parts) + '</span></div>' +
+      '<button class="body" data-setsheet="' + esc(x.name) + '">' +
+        '<span class="nm">' + esc(x.name) + '</span>' +
+        '<span class="mic use">' + esc(parts) + '</span></button>' +
       '<span class="num kk">' + n(x.kcal) + '<span class="per"> ккал</span></span>' +
       '<button class="plus" data-set="' + esc(x.name) + '" ' +
         'aria-label="Записать набор ' + esc(x.name) + '">+</button></div>';
@@ -822,7 +982,7 @@
           var est = p.source === 'llm'
             ? '<span class="badge">оценка</span>'
             : p.source === 'label' ? '<span class="badge">с этикетки</span>'
-            : p.source === 'recipe' ? '<span class="badge">рецепт</span>' : '';
+            : p.source === 'recipe' && sort !== 'mine' ? '<span class="badge">рецепт</span>' : '';
           var g = refGrams(p);
           /* §6.25, «Недавние»: группы по дню последнего раза. */
           var head = '';
@@ -847,6 +1007,8 @@
               'aria-label="Записать ' + esc(p.name) + ' ' + n(g) + ' г">+</button></div>';
         }).join('');
         if (sort === 'mine') {
+          c.sets = {};
+          (d.sets || []).forEach(function (x) { c.sets[x.name] = x; });
           var sets = (d.sets || []).map(setRow).join('');
           rows = (sets ? '<div class="dayhead">Наборы · ешь целиком</div>' + sets : '') +
                  (rows ? '<div class="dayhead">Рецепты · берёшь по граммам</div>' + rows : '');
@@ -3430,6 +3592,35 @@
         return stay ? rerender() : renderDay();
       }).then(function () { state.sending = false; });
     }
+    if (b.dataset.setsheet) {
+      var setx = state.cat.sets && state.cat.sets[b.dataset.setsheet];
+      if (setx) openSetSheet(setx);
+      return;
+    }
+    if (b.dataset.setname) {
+      state.naming = Number(b.dataset.setname);
+      renderDay();
+      var ni = document.getElementById('setname');
+      if (ni) ni.focus();
+      return;
+    }
+    if (b.dataset.setcancel) { state.naming = null; return renderDay(); }
+    if (b.dataset.setsave) {
+      var mid = b.dataset.setsave;
+      var nm = ((document.getElementById('setname') || {}).value || '').trim();
+      if (!nm || state.sending) return;
+      state.sending = true;
+      busy('Сохраняю…');
+      return send('/api/meals/' + mid + '/template', {
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: nm })
+      }).then(function (r) {
+        state.naming = null;
+        toast('Набор «' + r.name + '» сохранён — он в «Продуктах» → «Моё».');
+        renderDay();
+      }).catch(function (err) { oops(err); renderDay(); })
+        .then(function () { state.sending = false; });
+    }
     if (b.dataset.set) {
       if (state.sending) return;
       state.sending = true;
@@ -3720,6 +3911,11 @@
       return;
     }
     if (e.key === 'Enter' && e.target.id === 'say') { e.preventDefault(); submitText(); }
+    if (e.key === 'Enter' && e.target.id === 'setname') {
+      e.preventDefault();
+      var sv = document.querySelector('[data-setsave]');
+      if (sv) sv.click();
+    }
     if (e.key === 'Enter' && e.target.id === 'grams') {
       e.preventDefault();
       var v = (e.target.value || '').trim();

@@ -69,6 +69,7 @@ def meal_json(meal: Meal, tz: str) -> dict[str, Any]:
         "fat_g": round(meal.totals.fat, 1),
         "carb_g": round(meal.totals.carb, 1),
         "estimated": any(i.is_estimate for i in meal.items),
+        "template_name": meal.template_name,  # FR-39.2: набор — бейдж в карточке, кнопка скрыта
         "items": [item_json(i) for i in meal.items],
     }
 

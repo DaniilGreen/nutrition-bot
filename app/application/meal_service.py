@@ -16,7 +16,7 @@ import re
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 
-from app.application.dto import ParsedItem, ParsedMessage
+from app.application.dto import ParsedItem, ParsedMessage, SetPick
 from app.application.entities import Meal, MealItem, Product, StatedUse, User
 from app.application.ports import MealRepo, ProductRepo
 from app.clock import Clock, utcnow
@@ -460,6 +460,65 @@ class MealService:
             return None
         return await self.repeat(user, src.id, day_offset=day_offset, times=times)
 
+    async def log_set(
+        self, user: User, name: str, picks: list[SetPick], *, update: bool, day_offset: int = 0
+    ) -> Meal | None:
+        """FR-39.6: набор с правкой перед записью — граммы, убрать, добавить из каталога.
+
+        Цифры считаются ЗДЕСЬ, клиенту не доверяем: позиция набора — снапшот × (новые граммы /
+        старые), что точно (снапшот = плотность × граммы, INV-3); добавленный продукт — через его
+        запиннутую плотность и тот же gate, что у обычной записи (INV-11).
+
+        Имя набора приём получает, только если состав не тронут ИЛИ человек выбрал «Обновить
+        набор»: самый свежий приём с именем и есть набор, и «только сегодня» его подменять не
+        должен.
+        """
+        uid = _require_id(user)
+        src = await self._meals.latest_by_template(uid, name.strip())
+        if src is None:
+            return None
+        items: list[MealItem] = []
+        for pick in picks:
+            grams = round(clamp_grams(pick.grams), 1)
+            if pick.src is not None:
+                if not 0 <= pick.src < len(src.items) or not src.items[pick.src].grams:
+                    return None  # чужой индекс — клиент рассинхронился, писать наугад нельзя
+                it = src.items[pick.src]
+                items.append(MealItem(
+                    name_snapshot=it.name_snapshot, grams=grams,
+                    macros=_times(it.macros, grams / it.grams),
+                    product_id=it.product_id, is_estimate=it.is_estimate,
+                ))
+            elif pick.product_id is not None:
+                product = await self._products.get_by_id(pick.product_id)
+                if product is None:
+                    return None
+                raw = macros_for_grams(product.density, grams)
+                items.append(MealItem(
+                    name_snapshot=product.display_name, grams=grams,
+                    macros=clamp_macros(raw) if is_alcoholic(product.display_name)
+                    else vet_macros(raw),
+                    product_id=product.id, is_estimate=product.is_estimate,
+                ))
+        if not items:
+            return None
+        untouched = len(picks) == len(src.items) and all(
+            p.src == i and abs(p.grams - src.items[i].grams) < 0.05 for i, p in enumerate(picks)
+        )
+        return await self._meals.add(
+            Meal(
+                user_id=uid,
+                eaten_at=self._clock() + timedelta(days=max(-30, min(7, day_offset))),
+                input_type=src.input_type,
+                raw_input=src.raw_input,
+                items=items,
+                source_confidence=src.source_confidence,
+                template_name=src.template_name if (untouched or update) else None,
+                totals=sum_macros(i.macros for i in items),
+                estimated=any(i.is_estimate for i in items),
+            )
+        )
+
     async def sets(self, user: User) -> list[Meal]:
         """FR-39.5: по одному на имя — самый свежий состав (он и есть набор), свежие первыми."""
         uid = _require_id(user)
@@ -650,8 +709,8 @@ def best_product_match(
     return best if best_score >= threshold else None
 
 
-def _times(m: Macros, times: int) -> Macros:
-    """Снапшот × N. Точно, а не приближённо: снапшот и есть плотность × граммы (INV-3)."""
+def _times(m: Macros, times: float) -> Macros:
+    """Снапшот × k. Точно, а не приближённо: снапшот и есть плотность × граммы (INV-3)."""
     if times == 1:
         return m
     return Macros(m.kcal * times, m.protein * times, m.fat * times, m.carb * times)

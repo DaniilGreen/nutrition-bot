@@ -127,3 +127,13 @@ class ScanReading:
     fat_trunk_kg: float | None = None
     fat_leg_l_kg: float | None = None
     fat_leg_r_kg: float | None = None
+
+
+@dataclass
+class SetPick:
+    """FR-39.6: одна позиция набора при записи с правкой. Ровно одно из `src`/`product_id`:
+    `src` — индекс позиции в сохранённом составе, `product_id` — добавленное из каталога."""
+
+    grams: float
+    src: int | None = None
+    product_id: int | None = None

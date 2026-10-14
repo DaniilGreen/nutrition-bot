@@ -17,6 +17,7 @@ from app.application.dto import (
     ParsedMessage,
     PlateReading,
     ScanReading,
+    SetPick,
     Unit,
 )
 from app.application.entities import Meal, MealItem, Product, StatedUse, User, WeightLog
@@ -605,6 +606,18 @@ class Assistant:
     async def sets(self, user: User) -> list[Meal]:
         """FR-39.5: свои наборы для «Моё»."""
         return await self._meals.sets(user)
+
+    async def log_set(
+        self, user: User, name: str, picks: list[SetPick], *, update: bool, day_offset: int = 0
+    ) -> MealLogged | None:
+        """FR-39.6: набор с правкой состава перед записью."""
+        meal = await self._meals.log_set(
+            user, name, picks, update=update, day_offset=day_offset
+        )
+        if meal is None:
+            return None
+        stats = await self._stats.daily(user, days_ago=-day_offset)
+        return MealLogged(meal=meal, remaining=stats.remaining)
 
     async def last_use_of(self, user: User, product_id: int) -> tuple[datetime, float] | None:
         """Когда и сколько человек ел продукт в последний раз — для карточки (§6.25)."""

@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.assistant import Assistant
 from app.application.body_scans import BodyScanService, ScanCheck, from_reading
 from app.application.coach import LimitReached, clean_history
-from app.application.dto import Unit
+from app.application.dto import SetPick, Unit
 from app.application.entities import StatedUse, User
 from app.application.results import (
     BodyScanRead,
@@ -1112,6 +1112,11 @@ async def sets(user: CurrentUser, assistant: CurrentAssistant) -> dict[str, Any]
                         "name": i.name_snapshot,
                         "grams": round(i.grams, 1),
                         "kcal": round(i.macros.kcal, 1),
+                        # Б/Ж/У позиции — чтобы лист состава считал итог вживую при правке
+                        # граммов (предпросмотр; записанное пересчитывает сервер, MA-INV-68).
+                        "protein_g": round(i.macros.protein, 2),
+                        "fat_g": round(i.macros.fat, 2),
+                        "carb_g": round(i.macros.carb, 2),
                     }
                     for i in m.items
                 ],
@@ -1119,6 +1124,57 @@ async def sets(user: CurrentUser, assistant: CurrentAssistant) -> dict[str, Any]
             for m in await assistant.sets(user)
         ]
     }
+
+
+@router.post("/meals/{meal_id}/template")
+async def save_set(
+    meal_id: int, body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant
+) -> dict[str, Any]:
+    """FR-39.2: дать приёму имя набора прямо из карточки «Дня»."""
+    name = str(body.get("name") or "").strip()
+    if not name or len(name) > 64:
+        raise bad_request("bad_name", "Имя набора — от 1 до 64 символов.")
+    meal = await assistant.remember_dish(user, meal_id, name)
+    if meal is None:
+        raise bad_request("bad_set", "Нужно хотя бы две позиции, и у каждой — вес.")
+    return {"name": meal.template_name}
+
+
+@router.post("/sets/log")
+async def log_set(
+    body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant, request: Request,
+    idem: CurrentIdem,
+) -> dict[str, Any]:
+    """FR-39.6: записать набор с правкой состава. Клиент шлёт ЧТО и СКОЛЬКО, цифры считает
+    сервер — граница доверия: присланным ккал не верим, их тут даже нет в теле."""
+    _throttle(request, user, "meals", limit=20, window=60)
+    name = str(body.get("name") or "").strip()
+    raw = body.get("items")
+    if not name or not isinstance(raw, list) or not 1 <= len(raw) <= 30:
+        raise bad_request("bad_set", "Нужны имя набора и состав.")
+    picks: list[SetPick] = []
+    try:
+        for x in raw:
+            grams = float(x["grams"])
+            src, pid = x.get("src"), x.get("product_id")
+            if not 0 < grams <= 5000 or (src is None) == (pid is None):
+                raise ValueError("ровно одно из src/product_id и вес в границах")
+            picks.append(SetPick(
+                grams=grams,
+                src=int(src) if src is not None else None,
+                product_id=int(pid) if pid is not None else None,
+            ))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise bad_request("bad_set", "Состав набора не разобрать.") from exc
+    if idem.replay is not None:
+        return idem.replay
+    result = await assistant.log_set(
+        user, name, picks, update=bool(body.get("update")),
+        day_offset=_day_offset(body.get("days_ago")),
+    )
+    if result is None:
+        raise bad_request("bad_set", "Набор не найден или его состав изменился — открой заново.")
+    return idem.remember(_result_json(result, user, request, raw_input=name))
 
 
 @router.get("/products/{product_id}")
