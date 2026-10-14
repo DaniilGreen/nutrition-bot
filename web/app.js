@@ -3088,6 +3088,12 @@
             n(res.grams) + ' г.');
     } else if (res.kind === 'correction_failed') {
       toast(res.message, true);
+    } else if (res.kind === 'recipe') {
+      /* FR-39.1: рецепт — продукт, а не съеденное: в день не пишем, говорим как звать дальше. */
+      toast('Рецепт «' + res.name + '» сохранён: ' + n(res.kcal_per_100g) + ' ккал на 100 г. ' +
+            (res.unit_weight_g
+              ? 'Порция ' + n(res.unit_weight_g) + ' г — пиши «' + res.name + '».'
+              : 'В день не записан — дальше пиши «' + res.name + ' 120 г».'));
     } else if (res.kind === 'stats') {
       toast('Похоже на вопрос, а не на еду. Записывать не стал — цифры сверху свежие.');
     } else {

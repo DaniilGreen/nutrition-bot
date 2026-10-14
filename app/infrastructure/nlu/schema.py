@@ -83,8 +83,8 @@ class NluResult(BaseModel):
     )
     batch_name: str | None = Field(
         default=None,
-        description="intent=batch: как назвать блюдо в каталоге, по-русски и без слова "
-        "«заготовка» («свёрток», «соус»). null для остальных интентов.",
+        description="intent=batch: имя рецепта по-русски, без слова «рецепт» "
+        "(«начинка», «соус»). null для остальных интентов.",
     )
     batch_yield_g: float | None = Field(
         default=None,

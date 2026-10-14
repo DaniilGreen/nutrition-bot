@@ -55,11 +55,11 @@ from app.application.results import (
 from app.bot.dashboard_image import render_weight_chart  # единственный уцелевший PNG — линия веса
 from app.bot.formatters import (  # текстовые подсказки внутри диалога (не экраны)
     SCAN_REFUSAL,
-    format_dish_saved,
     format_goal_proposal,
     format_photo_card,
     format_result,
     format_scan_card,
+    format_set_saved,
 )
 from app.bot.keyboards import (
     BTN_BUG,
@@ -619,11 +619,11 @@ async def on_dish_name_input(
     saved = await assistant.remember_dish(app_user, meal_id, name)
     if saved is None:
         await message.answer(
-            "Не вышло запомнить: нужна запись минимум из двух позиций, и у каждой — вес. "
-            "Запиши состав с граммами, тогда повторю его одним словом."
+            "Набор не сохранил: нужно хотя бы две позиции, и у каждой — вес. "
+            "Запиши состав с граммами — тогда повторю его одним словом."
         )
         return
-    await message.answer(format_dish_saved(saved, name), parse_mode="HTML")
+    await message.answer(format_set_saved(saved, name), parse_mode="HTML")
 
 
 @router.message(MealStates.awaiting_rename, F.text)
@@ -1297,7 +1297,7 @@ async def on_prod_fix(
 async def on_dish_save(
     callback: CallbackQuery, app_user: User, assistant: Assistant, state: FSMContext
 ) -> None:
-    """FR-39: «Запомнить как блюдо» → спрашиваем имя, считать будем из снапшотов записи."""
+    """FR-39.2: «Сохранить набор» → спрашиваем имя; состав берём из самой записи."""
     if not isinstance(callback.message, Message):
         await callback.answer()
         return
@@ -1305,7 +1305,7 @@ async def on_dish_save(
     await state.set_state(MealStates.awaiting_dish_name)
     await state.update_data(dish_meal_id=meal_id)
     await callback.message.answer(
-        "🍲 Как назвать блюдо? Пришли название — дальше его можно будет записывать одним словом."
+        "📌 Как назвать набор? Пришли слово — дальше оно запишет этот же состав."
     )
     await callback.answer()
 

@@ -30,6 +30,7 @@ from app.application.results import (
     ClarificationNeeded,
     CorrectionFailed,
     DailyStats,
+    DishSaved,
     ItemAdjusted,
     ItemRemoved,
     LabelRead,
@@ -726,6 +727,20 @@ def _result_json(
             "delta_kg": result.delta_kg,
         }
 
+    if isinstance(result, DishSaved):
+        # FR-39.1: рецепт сохранён продуктом; в день не записан. Без этой ветки ответ
+        # падал в «не понял», хотя продукт уже был заведён — человек решил бы, что не вышло.
+        p = result.product
+        return {
+            "kind": "recipe",
+            "name": p.display_name,
+            "kcal_per_100g": round(p.density.kcal_per_100g, 1),
+            "protein_per_100g": round(p.density.protein_per_100g, 1),
+            "fat_per_100g": round(p.density.fat_per_100g, 1),
+            "carb_per_100g": round(p.density.carb_per_100g, 1),
+            "unit_weight_g": p.unit_weight_g,
+            "is_estimate": p.is_estimate,
+        }
     if isinstance(result, DailyStats):
         # Пользователь спросил, а не записал: отдаём сводку, не выдумывая приём.
         return {"kind": "stats", "totals": remaining_json(result.remaining)}

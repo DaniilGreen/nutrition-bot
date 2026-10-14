@@ -166,3 +166,45 @@ async def test_cooking_the_same_dish_again_updates_it() -> None:
     keys = await products.all_keys()
     assert "соус_2" not in keys, "дубль заводить нельзя — обновляем существующее блюдо"
     assert result.product.density.kcal_per_100g < 680  # разбавили водой — плотность упала
+
+
+async def _saved_wrap(extra_nlu: ParsedMessage | None = None):
+    """Записанный свёрток с именем; StubNlu держит ещё один разбор на случай похода в LLM."""
+    msgs = [_meal(
+        _item("взвесь", "mix", 120, 200, 15, 13, 3),
+        _item("лаваш", "lavash", 50, 274, 8, 1, 56),
+    )]
+    if extra_nlu is not None:
+        msgs.append(extra_nlu)
+    assistant, users, products = _build(StubNlu(*msgs))
+    user = await _new_user(users)
+    logged = await assistant.process(user, "взвесь 120, лаваш 50")
+    assert isinstance(logged, MealLogged) and logged.meal.id is not None
+    await assistant.remember_dish(user, logged.meal.id, "свёрток")
+    return assistant, user, logged.meal
+
+
+async def test_dish_name_inside_a_longer_message_is_not_swallowed() -> None:
+    """«свёрток и кофе» — не своё блюдо целиком. Перехват выкинул бы кофе из дня молча."""
+    coffee_and_wrap = _meal(
+        _item("свёрток", "wrap", 170, 260, 20, 11, 17),
+        _item("кофе", "coffee", 200, 2, 0.1, 0, 0.3),
+    )
+    assistant, user, _ = await _saved_wrap(coffee_and_wrap)
+
+    result = await assistant.process(user, "свёрток и кофе")
+
+    assert isinstance(result, MealLogged)
+    names = [i.name_snapshot for i in result.meal.items]
+    assert "кофе" in names, "кофе пропал — сообщение перехвачено как свёрток целиком"
+
+
+async def test_count_repeats_the_dish_n_times() -> None:
+    """«2 свёртка» — тот же состав ×2 одной записью, без LLM (StubNlu уже пуст)."""
+    assistant, user, src = await _saved_wrap()
+
+    result = await assistant.process(user, "2 свёртка")
+
+    assert isinstance(result, MealLogged)
+    assert [i.grams for i in result.meal.items] == [i.grams * 2 for i in src.items]
+    assert abs(result.meal.totals.kcal - src.totals.kcal * 2) < 0.01

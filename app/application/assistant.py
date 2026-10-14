@@ -132,10 +132,11 @@ class Assistant:
         # FR-39.2: своё блюдо («свёрток») — повторяем сохранённый состав, в LLM не идём вообще.
         # Проверка ДО разбора: знакомая еда не должна стоить ни денег, ни задержки.
         if input_type == "text" and not photo:
-            template = await self._meals.template_match(user, text)
-            if template is not None:
+            match = await self._meals.template_match(user, text)
+            if match is not None:
+                template, times = match
                 repeated = await self._meals.repeat_template(
-                    user, template, day_offset=day_offset
+                    user, template, day_offset=day_offset, times=times
                 )
                 if repeated is not None:
                     stats = await self._stats.daily(user, days_ago=-day_offset)

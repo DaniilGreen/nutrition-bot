@@ -13,6 +13,7 @@ from app.application.results import (
     ClarificationNeeded,
     CorrectionFailed,
     DailyStats,
+    DishSaved,
     History,
     ItemAdjusted,
     ItemRemoved,
@@ -62,6 +63,8 @@ def format_result(result: Result) -> str:
         return _format_item_adjusted(result)
     if isinstance(result, CorrectionFailed):
         return _format_correction_failed(result)
+    if isinstance(result, DishSaved):
+        return format_recipe_saved(result)
     if isinstance(result, Unknown):
         return _format_unknown(result.reason)
     return "⚠️ Не смог обработать. Переформулируй или напиши /help."
@@ -336,21 +339,36 @@ _DRESS_WORD = {"none": "без", "sour_cream": "сметана, 20 г", "mayo": 
                "oil": "масло, 10 г"}
 
 
-def format_dish_saved(meal: object, name: str) -> str:
-    """FR-39.2: блюдо названо. Показываем состав и как звать его дальше."""
+def format_recipe_saved(saved: object) -> str:
+    """FR-39.1: рецепт сохранён продуктом. В день НЕ записан — человек это приготовил, а не съел."""
+    product = saved.product  # type: ignore[attr-defined]
+    d = product.density
+    name = escape(product.display_name, quote=False)
+    mark = " ≈" if product.is_estimate else ""
+    lines = [
+        f"📖 Рецепт <b>{name}</b>{mark} сохранён",
+        f"На 100 г: {d.kcal_per_100g:.0f} ккал · Б {d.protein_per_100g:.0f}"
+        f" · Ж {d.fat_per_100g:.0f} · У {d.carb_per_100g:.0f}",
+    ]
+    if product.unit_weight_g:
+        lines.append(f"Порция {product.unit_weight_g:.0f} г — пиши «{name}», запишу порцию.")
+    else:
+        lines.append(f"В день не записал. Дальше пиши «{name} 120 г».")
+    return "\n".join(lines)
+
+
+def format_set_saved(meal: object, name: str) -> str:
+    """FR-39.2: набор сохранён. Показываем состав и как звать его дальше."""
     items = meal.items  # type: ignore[attr-defined]
     parts = ", ".join(f"{escape(i.name_snapshot, quote=False)} {i.grams:.0f} г" for i in items)
     safe = escape(name, quote=False)
+    first = escape(items[0].name_snapshot, quote=False) if items else "позиции"
     return (
-        f"🍲 Запомнил: <b>{safe}</b>\n"
+        f"📌 Набор <b>{safe}</b> сохранён\n"
         f"{parts}\n"
-        f"Дальше пиши просто «{safe}» — запишу этот же состав. "
-        f"Можно поправить: убрать позицию кнопкой или «поправь граммы у {_first_name(items)}»."
+        f"Дальше пиши «{safe}» — запишу этот же состав, «2 {safe}» — вдвое. "
+        f"Править как обычно: убрать позицию кнопкой или «поправь граммы у {first}»."
     )
-
-
-def _first_name(items: list) -> str:
-    return escape(items[0].name_snapshot, quote=False) if items else "позиции"
 
 
 def format_photo_card(

@@ -48,6 +48,9 @@ _JUNK_KEYS = frozenset(
 _MIN_KEY_LEN = 3
 _CORRECTION_LOOKBACK = 10  # сколько недавних записей просматриваем для «удали X»
 _CORRECTION_NAME_THRESHOLD = 0.8  # порог нечёткого совпадения имени при удалении
+# FR-39.2: «2 свёртка», «свёрток 2 шт». Только 1–2 цифры: «свёрток 150 г» — это вес, не штуки.
+_COUNT_RE = re.compile(r"(?:^|(?<=\s))(\d{1,2})\s*(?:шт\.?)?(?=\s|$)")
+_MAX_TIMES = 10  # больше — скорее опечатка, чем десять свёртков за раз
 class MealService:
     def __init__(self, products: ProductRepo, meals: MealRepo, clock: Clock = utcnow) -> None:
         self._products = products
@@ -191,7 +194,7 @@ class MealService:
         )
 
     async def repeat(
-        self, user: User, meal_id: int, *, day_offset: int = 0
+        self, user: User, meal_id: int, *, day_offset: int = 0, times: int = 1
     ) -> Meal | None:
         """Тот же приём ещё раз: тот же вес, тот же снапшот КБЖУ, текущее время. Без LLM.
 
@@ -212,8 +215,8 @@ class MealService:
                 items=[
                     MealItem(
                         name_snapshot=it.name_snapshot,
-                        grams=it.grams,
-                        macros=it.macros,
+                        grams=round(it.grams * times, 1),
+                        macros=_times(it.macros, times),
                         product_id=it.product_id,
                         is_estimate=it.is_estimate,
                     )
@@ -223,7 +226,7 @@ class MealService:
                 # FR-39.2: имя едет с повтором — шаблон жив, пока блюдо едят, даже если
                 # исходный приём удалили.
                 template_name=src.template_name,
-                totals=src.totals,
+                totals=_times(src.totals, times),
                 estimated=src.estimated,
             )
         )
@@ -449,23 +452,36 @@ class MealService:
         return await self._meals.set_template(_require_id(user), meal_id, clean)
 
     async def repeat_template(
-        self, user: User, name: str, *, day_offset: int = 0
+        self, user: User, name: str, *, day_offset: int = 0, times: int = 1
     ) -> Meal | None:
         """FR-39.2: «свёрток» → повторить самый свежий приём с этим именем. Без LLM."""
         src = await self._meals.latest_by_template(_require_id(user), name.strip())
         if src is None or src.id is None:
             return None
-        return await self.repeat(user, src.id, day_offset=day_offset)
+        return await self.repeat(user, src.id, day_offset=day_offset, times=times)
 
-    async def template_match(self, user: User, text: str) -> str | None:
-        """Текст целиком — это имя своего блюда? Сверяем теми же правилами, что и продукты
-        (INV-4.2): «свёрток» и «свертки» — одно и то же, а «свёрток с сыром» — уже нет."""
+    async def template_match(self, user: User, text: str) -> tuple[str, int] | None:
+        """Сообщение ЦЕЛИКОМ — своё блюдо? Возвращает (имя, сколько штук) или None.
+
+        СИММЕТРИЧНО, как RAG (INV-5.1): «свёрток и кофе» содержит «свёрток», но им не является.
+        Асимметрия засчитала бы совпадение и молча выкинула кофе — съеденное пропало бы из дня.
+        Число рядом с именем — штуки: «2 свёртка», «свёрток 2 шт».
+        """
         probe = text.strip()
         if not probe or len(probe) > 64:
             return None
+        times = 1
+        count = _COUNT_RE.search(probe)
+        if count is not None:
+            times = int(count.group(1))
+            probe = (probe[: count.start()] + " " + probe[count.end() :]).strip()
+        if not probe or not 1 <= times <= _MAX_TIMES:
+            return None
         for name in await self._meals.template_names(_require_id(user)):
-            if _names_compatible(probe, name):
-                return name
+            if _qualifiers(probe) != _qualifiers(name):
+                continue
+            if min(_coverage(probe, name), _coverage(name, probe)) >= _NAME_THRESHOLD:
+                return name, times
         return None
 
     async def prepare_batch(self, parsed: ParsedMessage) -> Product | None:
@@ -620,6 +636,13 @@ def best_product_match(
         if score > best_score:
             best, best_score = product, score
     return best if best_score >= threshold else None
+
+
+def _times(m: Macros, times: int) -> Macros:
+    """Снапшот × N. Точно, а не приближённо: снапшот и есть плотность × граммы (INV-3)."""
+    if times == 1:
+        return m
+    return Macros(m.kcal * times, m.protein * times, m.fat * times, m.carb * times)
 
 
 def _density_from(total: Macros, grams: float) -> Density:

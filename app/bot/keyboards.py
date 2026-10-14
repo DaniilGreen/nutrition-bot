@@ -161,12 +161,12 @@ def meal_actions_keyboard(meal: Meal) -> InlineKeyboardMarkup:
     # Первой — созидательная кнопка: выпил вторую бутылку, съел вторую порцию. Копирует вес и
     # КБЖУ один-в-один, поэтому в ИИ не идёт и повтор не «переоценивается» заново.
     builder.button(text="🔁 Повторить", callback_data=f"{MEAL_REPEAT_PREFIX}:{meal.id}")
-    # FR-39: сборка из нескольких взвешенных компонентов → блюдо каталога, чтобы завтра не
+    # FR-39.2: несколько взвешенных позиций → набор, чтобы завтра не
     # вводить состав заново. Одна позиция — уже продукт, делать из неё блюдо нечего; позиция
     # без веса не даёт плотности, поэтому кнопку не показываем вовсе, а не ругаемся после тапа.
     if len(meal.items) > 1 and all(item.grams for item in meal.items):
         builder.button(
-            text="🍲 Запомнить как блюдо", callback_data=f"{DISH_SAVE_PREFIX}:{meal.id}"
+            text="📌 Сохранить набор", callback_data=f"{DISH_SAVE_PREFIX}:{meal.id}"
         )
     if len(meal.items) > 1:
         for item in meal.items:
