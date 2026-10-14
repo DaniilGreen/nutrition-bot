@@ -17,7 +17,15 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 
 from app.application.dto import ParsedItem, ParsedMessage, SetPick
-from app.application.entities import Meal, MealItem, Product, StatedUse, User
+from app.application.entities import (
+    Meal,
+    MealItem,
+    Product,
+    Recipe,
+    RecipeItem,
+    StatedUse,
+    User,
+)
 from app.application.ports import MealRepo, ProductRepo
 from app.clock import Clock, utcnow
 from app.domain.inedible import explain
@@ -31,6 +39,7 @@ from app.domain.naming import (
 from app.domain.nutrition import macros_for_grams, reconcile_density, split_macros_from_kcal
 from app.domain.plausibility import (
     FALLBACK_DENSITY,
+    clamp_batch_grams,
     clamp_density,
     clamp_grams,
     clamp_macros,
@@ -553,14 +562,12 @@ class MealService:
         return None
 
     async def prepare_batch(self, parsed: ParsedMessage) -> Product | None:
-        """FR-39, вход «фраза»: сырьё котла → блюдо в каталоге. Приём пищи НЕ пишем."""
-        pot: list[Macros] = []
-        grams_total = 0.0
-        estimate = False
+        """FR-39.1: ингредиенты → рецепт в каталоге. Приём пищи НЕ пишем. Состав сохраняем
+        (FR-39.7) — иначе его потом не поправить."""
+        items: list[RecipeItem] = []
         for parsed_item in parsed.items:
             # Через каталог: у известного сырья — запиннутая плотность, не свежая выдумка (INV-2).
             product = await self._resolve_product(parsed_item)
-            estimate = estimate or product.is_estimate
             resolution = resolve_grams(
                 unit=parsed_item.unit.value,
                 quantity=parsed_item.quantity,
@@ -572,27 +579,91 @@ class MealService:
                 product_portion_sizes=product.portion_sizes,
                 parsed_portion_sizes=parsed_item.portion_options,
             )
-            grams = clamp_grams(resolution.grams)
-            raw = macros_for_grams(product.density, grams)
-            # Тот же gate, что у позиции приёма (INV-11.1/14) — сырьё проходит его поштучно, до
-            # сложения. Сам котёл Атвотером НЕ пересверяем: он уже сумма выверенного.
-            pot.append(clamp_macros(raw) if is_alcoholic(parsed_item.name) else vet_macros(raw))
-            grams_total += grams
-
-        if not pot:
+            items.append(RecipeItem(
+                name=product.display_name,
+                grams=round(clamp_batch_grams(resolution.grams), 1),  # партия, не порция
+                density=product.density,
+                product_id=product.id,  # None у непиннутого фолбэка — останется снимок
+                is_estimate=product.is_estimate,
+            ))
+        if not items:
             return None
+        total, grams_total, estimate = _cook(items)
         # Вес готового: назвали — берём его (при варке вода ушла, масса не равна сумме сырья);
         # не назвали — сумма весов сырья, что для сборки без термообработки ТОЧНО, а не почти.
         yield_g = parsed.batch_yield_g or grams_total
         if yield_g <= 0:
             return None
         portions = parsed.batch_portions if (parsed.batch_portions or 0) > 0 else None
-        return await self._pin_dish(
+        product = await self._pin_dish(
             (parsed.batch_name or parsed.items[0].name),
-            _density_from(sum_macros(pot), yield_g),
+            _density_from(total, yield_g),
             unit_weight=round(yield_g / portions, 1) if portions else None,
             estimate=estimate,
         )
+        assert product.id is not None
+        await self._products.set_recipe(
+            product.id, Recipe(items=items, yield_g=parsed.batch_yield_g or None)
+        )
+        return product
+
+    async def recipe_view(self, product_id: int) -> Recipe | None:
+        """FR-39.7: состав для карточки — с ТЕКУЩИМИ плотностями ингредиентов. Ровно ими же
+        считает правка, поэтому предпросмотр в аппке совпадает с тем, что запишет сервер."""
+        recipe = await self._products.get_recipe(product_id)
+        if recipe is None:
+            return None
+        for it in recipe.items:
+            live = await self._products.get_by_id(it.product_id) if it.product_id else None
+            if live is not None:
+                it.density, it.is_estimate = live.density, live.is_estimate
+                it.name = live.display_name
+            else:
+                it.product_id = None  # ингредиент удалён — остаётся снимок
+        return recipe
+
+    async def edit_recipe(
+        self, product_id: int, picks: list[SetPick], *, yield_g: float | None
+    ) -> Product | None:
+        """FR-39.7: новый состав рецепта → пересчёт плотности. Цифры считает сервер: клиент
+        шлёт индекс позиции текущего состава (`src`) или `product_id` из каталога, плюс граммы.
+
+        Меняются будущие записи; съеденное не двигается — в приёмах снапшот (INV-3).
+        None — не рецепт, клиент рассинхронился с составом, пустой состав или чужой продукт.
+        """
+        recipe_product = await self._products.get_by_id(product_id)
+        if recipe_product is None or recipe_product.source != "recipe":
+            return None
+        current = await self.recipe_view(product_id)
+        items: list[RecipeItem] = []
+        for pick in picks:
+            grams = round(clamp_batch_grams(pick.grams), 1)
+            if pick.src is not None:
+                if current is None or not 0 <= pick.src < len(current.items):
+                    return None  # индекс мимо состава — писать наугад нельзя
+                it = current.items[pick.src]
+                items.append(RecipeItem(it.name, grams, it.density, it.product_id, it.is_estimate))
+            elif pick.product_id is not None:
+                if pick.product_id == product_id:
+                    return None  # рецепт не может входить сам в себя
+                live = await self._products.get_by_id(pick.product_id)
+                if live is None:
+                    return None
+                items.append(RecipeItem(
+                    live.display_name, grams, live.density, live.id, live.is_estimate
+                ))
+        if not items:
+            return None
+        total, grams_total, estimate = _cook(items)
+        clean_yield = (
+            round(clamp_batch_grams(yield_g), 1) if yield_g and yield_g > 0 else None
+        )
+        updated = await self._products.update_density(
+            product_id, _density_from(total, clean_yield or grams_total),
+            is_estimate=estimate, source="recipe",
+        )
+        await self._products.set_recipe(product_id, Recipe(items=items, yield_g=clean_yield))
+        return updated
 
     async def _pin_dish(
         self, name: str, density: Density, *, unit_weight: float | None, estimate: bool
@@ -714,6 +785,21 @@ def _times(m: Macros, times: float) -> Macros:
     if times == 1:
         return m
     return Macros(m.kcal * times, m.protein * times, m.fat * times, m.carb * times)
+
+
+def _cook(items: list[RecipeItem]) -> tuple[Macros, float, bool]:
+    """Партия рецепта: КБЖУ, общий вес сырья, есть ли оценочный ингредиент.
+
+    Каждый ингредиент проходит тот же gate, что позиция приёма (INV-11.1, алкоголь — INV-14),
+    до сложения. Сумму Атвотером НЕ пересверяем: она уже сумма выверенного.
+    """
+    pot: list[Macros] = []
+    grams_total = 0.0
+    for it in items:
+        raw = macros_for_grams(it.density, it.grams)
+        pot.append(clamp_macros(raw) if is_alcoholic(it.name) else vet_macros(raw))
+        grams_total += it.grams
+    return sum_macros(pot), grams_total, any(it.is_estimate for it in items)
 
 
 def _density_from(total: Macros, grams: float) -> Density:

@@ -43,6 +43,24 @@ class Product:
 
 
 @dataclass
+class RecipeItem:
+    """FR-39.7: ингредиент рецепта. `density` — снимок плотности на момент сохранения состава;
+    пересчёт берёт ТЕКУЩУЮ плотность продукта, а снимок — только если продукт удалён."""
+
+    name: str
+    grams: float
+    density: Density
+    product_id: int | None = None
+    is_estimate: bool = True
+
+
+@dataclass
+class Recipe:
+    items: list[RecipeItem]
+    yield_g: float | None = None  # вес готового; None — сумма граммов состава
+
+
+@dataclass
 class MealItem:
     name_snapshot: str
     grams: float

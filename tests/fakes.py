@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 from app.application.dto import ParsedItem, ParsedMessage, PlateReading
-from app.application.entities import Meal, Product, User, WeightLog
+from app.application.entities import Meal, Product, Recipe, RecipeItem, User, WeightLog
 from app.domain.goals import Goal
 from app.domain.value_objects import Density, Macros, sum_macros
 
@@ -65,6 +65,7 @@ class InMemoryUserRepo:
 
 class InMemoryProductRepo:
     def __init__(self) -> None:
+        self._recipes: dict[int, Recipe] = {}  # FR-39.7
         self._by_key: dict[str, Product] = {}
         self._seq = 0
         self._uses: dict[int, int] = {}
@@ -123,6 +124,12 @@ class InMemoryProductRepo:
 
     async def merge(self, winner_id: int, loser_ids: list[int]) -> int:
         losers = [i for i in loser_ids if i != winner_id]
+        for r in self._recipes.values():  # FR-39.7: состав ссылается на выжившего
+            for it in r.items:
+                if it.product_id in losers:
+                    it.product_id = winner_id
+        for i in losers:
+            self._recipes.pop(i, None)  # ON DELETE CASCADE
         moved = sum(self._uses.pop(i, 0) for i in losers)
         self._uses[winner_id] = self._uses.get(winner_id, 0) + moved
         for key, prod in list(self._by_key.items()):
@@ -160,6 +167,17 @@ class InMemoryProductRepo:
                     p.unit_weight_g = unit_weight_g
                 return p
         return None
+
+    async def get_recipe(self, product_id: int) -> Recipe | None:
+        r = self._recipes.get(product_id)
+        if r is None:
+            return None
+        return Recipe(items=[RecipeItem(**vars(it)) for it in r.items], yield_g=r.yield_g)
+
+    async def set_recipe(self, product_id: int, recipe: Recipe) -> None:
+        self._recipes[product_id] = Recipe(
+            items=[RecipeItem(**vars(it)) for it in recipe.items], yield_g=recipe.yield_g
+        )
 
     async def rename(self, product_id: int, name: str) -> Product | None:
         for p in self._by_key.values():

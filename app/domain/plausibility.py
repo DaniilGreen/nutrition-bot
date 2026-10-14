@@ -58,6 +58,15 @@ def clamp_grams(grams: float) -> float:
     return _clamp(grams, MIN_PORTION_G, MAX_PORTION_G)
 
 
+MAX_BATCH_G = 20000.0  # рецепт — партия, а не порция: 2.5 кг курицы законны
+
+
+def clamp_batch_grams(grams: float) -> float:
+    """Граммовка ингредиента рецепта (FR-39.7): 1…20 000 г. Граница порции (2000 г) тут не
+    годится — «рецепт: 2.5 кг курицы» молча считался как 2 кг (баг 15.10.2026)."""
+    return _clamp(grams, MIN_PORTION_G, MAX_BATCH_G)
+
+
 def clamp_macros(m: Macros) -> Macros:
     """Только санитарные границы (INV-11.2), БЕЗ Атвотер-сверки. Для названных пользователем
     тоталов (FR-22): явные цифры юзера/меню доверяем, лишь отсекаем абсурд."""

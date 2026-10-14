@@ -87,9 +87,34 @@ class ProductORM(Base):
     source: Mapped[str] = mapped_column(String(32), default="llm")
     is_estimate: Mapped[bool] = mapped_column(Boolean, default=True)
     photo_file_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # FR-39.7: вес готового у рецепта; None — сумма граммов состава.
+    recipe_yield_g: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class RecipeItemORM(Base):
+    """FR-39.7: строка состава рецепта. Ссылка на ингредиент + снимок его плотности — как у
+    meal_items: удалили ингредиент — пересчёт берёт снимок, а не падает."""
+
+    __tablename__ = "recipe_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    recipe_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), index=True
+    )
+    product_id: Mapped[int | None] = mapped_column(
+        ForeignKey("products.id", ondelete="SET NULL"), nullable=True
+    )
+    position: Mapped[int] = mapped_column(Integer)
+    name_snapshot: Mapped[str] = mapped_column(String(255))
+    grams: Mapped[float] = mapped_column(Float)
+    kcal_per_100g: Mapped[float] = mapped_column(Float)
+    protein_per_100g: Mapped[float] = mapped_column(Float)
+    fat_per_100g: Mapped[float] = mapped_column(Float)
+    carb_per_100g: Mapped[float] = mapped_column(Float)
+    is_estimate: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class MealORM(Base):

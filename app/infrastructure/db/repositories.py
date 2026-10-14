@@ -7,7 +7,16 @@ from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.entities import Meal, MealItem, Product, StatedUse, User, WeightLog
+from app.application.entities import (
+    Meal,
+    MealItem,
+    Product,
+    Recipe,
+    RecipeItem,
+    StatedUse,
+    User,
+    WeightLog,
+)
 from app.domain.body_scan import SEGMENT_FIELDS, BodyScan
 from app.domain.goals import Goal
 from app.domain.value_objects import Density, Macros
@@ -20,6 +29,7 @@ from app.infrastructure.db.models import (
     MealItemORM,
     MealORM,
     ProductORM,
+    RecipeItemORM,
     UserGoalORM,
     UserORM,
     WeightLogORM,
@@ -267,6 +277,48 @@ class SqlProductRepo:
         await self._s.flush()
         return _product_to_domain(orm)
 
+    async def get_recipe(self, product_id: int) -> Recipe | None:
+        rows = (
+            await self._s.execute(
+                select(RecipeItemORM)
+                .where(RecipeItemORM.recipe_id == product_id)
+                .order_by(RecipeItemORM.position)
+            )
+        ).scalars().all()
+        if not rows:
+            return None
+        orm = await self._s.get(ProductORM, product_id)
+        return Recipe(
+            items=[
+                RecipeItem(
+                    name=r.name_snapshot, grams=r.grams,
+                    density=Density(
+                        r.kcal_per_100g, r.protein_per_100g, r.fat_per_100g, r.carb_per_100g
+                    ),
+                    product_id=r.product_id, is_estimate=r.is_estimate,
+                )
+                for r in rows
+            ],
+            yield_g=orm.recipe_yield_g if orm is not None else None,
+        )
+
+    async def set_recipe(self, product_id: int, recipe: Recipe) -> None:
+        await self._s.execute(delete(RecipeItemORM).where(RecipeItemORM.recipe_id == product_id))
+        for pos, it in enumerate(recipe.items):
+            self._s.add(RecipeItemORM(
+                recipe_id=product_id, product_id=it.product_id, position=pos,
+                name_snapshot=it.name[:255], grams=it.grams,
+                kcal_per_100g=it.density.kcal_per_100g,
+                protein_per_100g=it.density.protein_per_100g,
+                fat_per_100g=it.density.fat_per_100g,
+                carb_per_100g=it.density.carb_per_100g,
+                is_estimate=it.is_estimate,
+            ))
+        orm = await self._s.get(ProductORM, product_id)
+        if orm is not None:
+            orm.recipe_yield_g = recipe.yield_g
+        await self._s.flush()
+
     async def rename(self, product_id: int, name: str) -> Product | None:
         orm = await self._s.get(ProductORM, product_id)
         if orm is None:
@@ -332,6 +384,13 @@ class SqlProductRepo:
         res = await self._s.execute(
             update(MealItemORM)
             .where(MealItemORM.product_id.in_(losers))
+            .values(product_id=winner_id)
+        )
+        # FR-39.7: состав рецептов ссылается на выжившего, а не на удалённого — иначе пересчёт
+        # молча брал бы устаревший снимок плотности.
+        await self._s.execute(
+            update(RecipeItemORM)
+            .where(RecipeItemORM.product_id.in_(losers))
             .values(product_id=winner_id)
         )
         await self._s.execute(delete(ProductORM).where(ProductORM.id.in_(losers)))

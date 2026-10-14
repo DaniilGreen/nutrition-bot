@@ -20,7 +20,15 @@ from app.application.dto import (
     SetPick,
     Unit,
 )
-from app.application.entities import Meal, MealItem, Product, StatedUse, User, WeightLog
+from app.application.entities import (
+    Meal,
+    MealItem,
+    Product,
+    Recipe,
+    StatedUse,
+    User,
+    WeightLog,
+)
 from app.application.meal_service import MealService
 from app.application.ports import (
     BugRepo,
@@ -606,6 +614,16 @@ class Assistant:
     async def sets(self, user: User) -> list[Meal]:
         """FR-39.5: свои наборы для «Моё»."""
         return await self._meals.sets(user)
+
+    async def recipe_of(self, product_id: int) -> Recipe | None:
+        """FR-39.7: состав рецепта для карточки — с текущими плотностями ингредиентов."""
+        return await self._meals.recipe_view(product_id)
+
+    async def edit_recipe(
+        self, product_id: int, picks: list[SetPick], *, yield_g: float | None
+    ) -> Product | None:
+        """FR-39.7: правка состава рецепта → пересчёт плотности."""
+        return await self._meals.edit_recipe(product_id, picks, yield_g=yield_g)
 
     async def log_set(
         self, user: User, name: str, picks: list[SetPick], *, update: bool, day_offset: int = 0

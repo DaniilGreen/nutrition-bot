@@ -254,12 +254,118 @@
     }).catch(function (err) { oops(err); }).then(function () { state.sending = false; });
   }
 
+  /* FR-39.7: лист правки состава рецепта. Граммы — цифрами в поле (точные веса партии), набор
+     текста обновляет только итог, без перерисовки: иначе поле теряло бы фокус на каждой цифре. */
+  function openRecipeSheet(p, r) {
+    state.sheet = {
+      kind: 'recipe', id: p.id, title: p.name, q: '', found: [],
+      yieldG: r && r.yield_g ? r.yield_g : '',
+      items: (r ? r.items : []).map(function (i, k) {
+        return { src: k, name: i.name, grams: i.grams,
+                 per: { kcal: i.kcal_per_100g / 100, p: i.protein_per_100g / 100,
+                        f: i.fat_per_100g / 100, c: i.carb_per_100g / 100 } };
+      })
+    };
+    paintSheet();
+  }
+
+  function recipeTotals(sh) {
+    var t = { kcal: 0, p: 0, f: 0, c: 0, g: 0 };
+    sh.items.forEach(function (it) {
+      var g = Number(it.grams) || 0;
+      t.kcal += it.per.kcal * g; t.p += it.per.p * g; t.f += it.per.f * g; t.c += it.per.c * g;
+      t.g += g;
+    });
+    var y = Number(sh.yieldG) > 0 ? Number(sh.yieldG) : t.g;
+    return { t: t, y: y, per: y > 0 ? 100 / y : 0 };
+  }
+
+  function recipePreview(sh) {
+    var x = recipeTotals(sh);
+    return '<span class="num" style="font-size:var(--f-t2);font-weight:700">' +
+        n(x.t.kcal * x.per) + '</span><span class="mic" style="white-space:nowrap">ккал на 100\u00a0г</span>' +
+      '<span style="flex-grow:1"></span><span class="mic num" style="white-space:nowrap">' +
+        '<span style="color:var(--prot)">Б ' + n(x.t.p * x.per, 1) + '</span> · ' +
+        '<span style="color:var(--fat)">Ж ' + n(x.t.f * x.per, 1) + '</span> · ' +
+        '<span style="color:var(--carb)">У ' + n(x.t.c * x.per, 1) + '</span></span>' +
+      '<span class="mic" style="flex-basis:100%">Партия ' + n(x.t.g) + '\u00a0г · ' +
+        n(x.t.kcal) + ' ккал</span>';
+  }
+
+  function paintRecipeSheet(sh) {
+    var rows = sh.items.map(function (it, k) {
+      return '<div class="srow">' +
+        '<span class="nm">' + esc(it.name) + '</span>' +
+        '<label class="gin"><input type="number" inputmode="decimal" min="1" max="20000" ' +
+          'data-rgrams="' + k + '" value="' + esc(it.grams) + '" aria-label="Граммы: ' +
+          esc(it.name) + '"><span class="mic">г</span></label>' +
+        '<button class="sx" data-sdrop="' + k + '" aria-label="Убрать: ' + esc(it.name) + '">✕</button>' +
+      '</div>';
+    }).join('') || '<div class="state">Пусто — найди ингредиенты ниже.</div>';
+    var found = sh.found.map(function (p) {
+      return '<button class="chip" data-sadd="' + p.id + '">+ ' + esc(p.name) + '</button>';
+    }).join('');
+    sheetEl.innerHTML =
+      '<div class="sheet-back" data-sclose="1"></div>' +
+      '<div class="sheet" role="dialog" aria-modal="true" aria-label="Состав рецепта ' + esc(sh.title) + '">' +
+        '<div class="grip" aria-hidden="true"></div>' +
+        '<div style="display:flex;gap:var(--s-2);align-items:flex-start">' +
+          '<div style="flex-grow:1;min-width:0"><div class="sh-t">' + esc(sh.title) + '</div>' +
+          '<div class="mic" style="margin-top:4px">Состав рецепта — плотность пересчитается</div></div>' +
+          '<button class="x" data-sclose="1" aria-label="Закрыть">✕</button></div>' +
+        '<div class="slist">' + rows + '</div>' +
+        '<label class="composer" style="margin:0">' +
+          '<input id="sq" type="search" autocomplete="off" placeholder="Добавить ингредиент" ' +
+          'value="' + esc(sh.q) + '" aria-label="Добавить ингредиент" ' +
+          'style="flex-grow:1;background:none;border:0;color:var(--text);font:inherit;' +
+          'outline:none;min-width:0"></label>' +
+        (found ? '<div class="sh-chips">' + found + '</div>' : '') +
+        '<label class="field" style="margin:0"><span class="mic" style="flex-grow:1">' +
+          'Вышло готового, г — если при готовке ушла вода</span>' +
+          '<input id="ryield" class="num" type="number" inputmode="decimal" min="1" max="50000" ' +
+          'placeholder="= сумме" value="' + esc(sh.yieldG) + '"></label>' +
+        '<div class="sh-prev" id="rprev" style="flex-wrap:wrap">' + recipePreview(sh) + '</div>' +
+        '<button class="primary" data-rsave="1"' + (sh.items.length ? '' : ' disabled') + '>' +
+          'Сохранить рецепт</button>' +
+      '</div>';
+    if (sh.qFocus) {
+      var q = document.getElementById('sq');
+      if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+      sh.qFocus = false;
+    }
+  }
+
+  function recipeSave() {
+    var sh = state.sheet;
+    if (!sh || state.sending || !sh.items.length) return;
+    var bad = sh.items.some(function (i) { return !(Number(i.grams) > 0); });
+    if (bad) return toast('У каждого ингредиента нужен вес больше нуля.', true);
+    state.sending = true;
+    busy('Пересчитываю…');
+    send('/api/products/' + sh.id + '/recipe', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        yield_g: Number(sh.yieldG) > 0 ? Number(sh.yieldG) : null,
+        items: sh.items.map(function (i) {
+          return i.src != null ? { src: i.src, grams: Number(i.grams) }
+                               : { product_id: i.product, grams: Number(i.grams) };
+        })
+      })
+    }).then(function (r) {
+      closeSheet();
+      toast('Рецепт пересчитан: ' + n(r.product.kcal_per_100g) + ' ккал на 100 г.');
+      renderProduct();
+    }).catch(function (err) { oops(err); }).then(function () { state.sending = false; });
+  }
+
   var setSearchTimer = null;
 
   function paintSheet() {
     var sh = state.sheet;
     if (!sh) { sheetEl.innerHTML = ''; return; }
     if (sh.kind === 'set') return paintSetSheet(sh);
+    if (sh.kind === 'recipe') return paintRecipeSheet(sh);
     var ref = Math.round(sh.ref);
     var chips = sh.fixed ? '' : portions(sh.ref).map(function (g) {
       var on = !sh.own && g === sh.pick;
@@ -357,6 +463,20 @@
     var t = e.target.closest('[data-sclose],button');
     if (!t) return;
     if (t.dataset.sclose) return closeSheet();
+    if (sh.kind === 'recipe') {
+      if (t.dataset.sdrop) { sh.items.splice(Number(t.dataset.sdrop), 1); return paintSheet(); }
+      if (t.dataset.rsave) return recipeSave();
+      if (t.dataset.sadd) {
+        var rp = sh.found.filter(function (x) { return String(x.id) === t.dataset.sadd; })[0];
+        if (!rp || rp.id === sh.id) return;  // рецепт сам в себя не входит
+        sh.items.push({ product: rp.id, name: rp.name, grams: refGrams(rp),
+                        per: { kcal: rp.kcal_per_100g / 100, p: rp.protein_per_100g / 100,
+                               f: rp.fat_per_100g / 100, c: rp.carb_per_100g / 100 } });
+        sh.q = ''; sh.found = [];
+        return paintSheet();
+      }
+      return;
+    }
     if (sh.kind === 'set') {
       var it = sh.items[Number(t.dataset.sdec || t.dataset.sinc || t.dataset.sdrop)];
       var step = it && it.grams < 30 ? 5 : 10;  // ложка соуса и 120 г начинки — разный шаг
@@ -395,7 +515,17 @@
     }
   });
   sheetEl.addEventListener('input', function (e) {
-    if (e.target.id === 'sq' && state.sheet && state.sheet.kind === 'set') {
+    if (state.sheet && state.sheet.kind === 'recipe' &&
+        (e.target.dataset.rgrams != null || e.target.id === 'ryield')) {
+      var rs = state.sheet;
+      if (e.target.id === 'ryield') rs.yieldG = e.target.value;
+      else rs.items[Number(e.target.dataset.rgrams)].grams = e.target.value;
+      var rpv = document.getElementById('rprev');
+      if (rpv) rpv.innerHTML = recipePreview(rs);
+      return;
+    }
+    if (e.target.id === 'sq' && state.sheet &&
+        (state.sheet.kind === 'set' || state.sheet.kind === 'recipe')) {
       var sh = state.sheet, q = e.target.value;
       sh.q = q;
       clearTimeout(setSearchTimer);
@@ -910,7 +1040,7 @@
      справа ккал порции, «+» повторяет снимок позиции (MA-INV-67). */
   function statedRow(p, sort) {
     var amount = p.grams > 0 ? n(p.grams) + ' г' : 'порция';
-    var use = (sort === 'recent' && p.last_time ? p.last_time : n(p.uses) + ' раз') +
+    var use = (sort === 'recent' && p.last_time ? p.last_time : times(p.uses)) +
               ' · ' + amount;
     return '<div class="item2">' +
       '<button class="body" data-psheet="' + p.id + '">' +
@@ -995,7 +1125,7 @@
           if (p.stated) return head + statedRow(p, sort);
           var use = sort === 'recent' && p.last_time
             ? p.last_time + ' · ' + n(p.last_grams) + ' г'
-            : (p.uses ? n(p.uses) + ' раз · обычно ' + n(p.usual_grams) + ' г'
+            : (p.uses ? times(p.uses) + ' · обычно ' + n(p.usual_grams) + ' г'
                       : n(p.usual_grams) + ' г');
           /* MA-INV-24 (пересмотр §6.25): тело строки — шторка порции, «+» — запись
              сразу. Промах по телу больше не пишет приём. */
@@ -1082,7 +1212,7 @@
     var head = '<section class="card">' +
       '<div style="font-size:var(--f-t2);font-weight:700;line-height:1.25">' + esc(p.name) +
       '</div><div class="mic" style="margin-top:6px">' + esc(WHY[p.source] || p.source) +
-        ' · съедено ' + n(p.uses) + ' раз' + esc(last) + '</div>' +
+        ' · съедено ' + times(p.uses) + esc(last) + '</div>' +
       '<div class="sh-chips" style="margin-top:var(--s-4)">' + chips + '</div>' +
       /* MA-INV-68: ккал на кнопке — предпросмотр, запишет сервер. */
       '<button class="primary" style="margin-top:var(--s-3)" data-quick="' + p.id +
@@ -1112,8 +1242,33 @@
             tile(p.kcal_per_100g, 'ккал', '') + tile(p.protein_per_100g, 'белок', 'var(--prot)') +
             tile(p.fat_per_100g, 'жир', 'var(--fat)') + tile(p.carb_per_100g, 'углев', 'var(--carb)') +
           '</div></section>';
-    show(head + density + recentCard(d.recent_items, p) +
+    show(head + density + recipeCard(d.recipe, p) + recentCard(d.recent_items, p) +
          '<div class="pager"><button id="toList">К списку</button></div>');
+  }
+
+  /* FR-39.7: из чего рецепт и кнопка правки. Состава нет — рецепт заводили до 15.10, когда
+     состав не хранили; говорим честно и даём собрать заново. */
+  function recipeCard(r, p) {
+    if (p.source !== 'recipe') return '';
+    if (!r) {
+      return card('Состав', '<div class="state" style="padding:var(--s-3) 0">Состав этого рецепта ' +
+        'не сохранился — его заводили до 15.10, тогда состав не хранили. Собери его здесь: дальше ' +
+        'его можно будет править, а плотность пересчитается сама.</div>' +
+        '<button class="primary" data-recipe="' + p.id + '">Собрать состав</button>',
+        'Съеденное раньше не изменится — в истории снимок на момент записи.');
+    }
+    var rows = r.items.map(function (i) {
+      return '<div class="row"><span style="flex-grow:1">' + esc(i.name) + '</span>' +
+        '<span class="num g">' + n(i.grams) + '\u00a0г</span></div>';
+    }).join('');
+    var weight = 'Всего ' + n(r.total_g) + '\u00a0г' +
+      (r.yield_g ? ' · вышло готового ' + n(r.yield_g) + '\u00a0г' : '');
+    return card('Состав',
+      '<div class="items" style="padding-left:0">' + rows + '</div>' +
+      '<div class="mic" style="padding:var(--s-2) 0">' + weight + '</div>' +
+      '<button class="primary" style="margin-top:var(--s-2)" data-recipe="' + p.id + '">' +
+        'Править состав</button>',
+      'Правка пересчитает плотность рецепта. Съеденное раньше не изменится.');
   }
 
   function tile(v, label, color) {
@@ -1142,9 +1297,18 @@
   }
 
   function field(id, label, value) {
+    /* MA-INV-72: плотность хранится точной, а в поле — до 0,1. Сырое «183,496402» из базы
+       читалось как сбой. */
+    var shown = value == null || value === '' ? '' : Math.round(Number(value) * 10) / 10;
     return '<div class="field"><label for="' + id + '">' + esc(label) + '</label>' +
       '<input id="' + id + '" class="num" type="number" step="0.1" inputmode="decimal" ' +
-      'value="' + esc(value) + '"></div>';
+      'value="' + esc(shown) + '"></div>';
+  }
+
+  /* «1 раз», «2 раза», «5 раз», «22 раза», «12 раз». */
+  function times(k) {
+    var a = k % 10, b = k % 100;
+    return n(k) + (a >= 2 && a <= 4 && (b < 12 || b > 14) ? ' раза' : ' раз');
   }
 
   function renderDups() {
@@ -3601,6 +3765,13 @@
         oops(err);
         return stay ? rerender() : renderDay();
       }).then(function () { state.sending = false; });
+    }
+    if (b.dataset.recipe) {
+      var cardd = state.cat.card;
+      if (cardd && String(cardd.product.id) === b.dataset.recipe) {
+        openRecipeSheet(cardd.product, cardd.recipe);
+      }
+      return;
     }
     if (b.dataset.setsheet) {
       var setx = state.cat.sets && state.cat.sets[b.dataset.setsheet];

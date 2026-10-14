@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Protocol
 
 from app.application.dto import ParsedItem, ParsedMessage, PlateReading, ScanReading
-from app.application.entities import Meal, Product, StatedUse, User, WeightLog
+from app.application.entities import Meal, Product, Recipe, StatedUse, User, WeightLog
 from app.domain.body_scan import BodyScan
 from app.domain.goals import Goal
 from app.domain.value_objects import Density, Macros
@@ -103,6 +103,14 @@ class ProductRepo(Protocol):
         """Ручная правка каталога (FR-15) и перерасчёт заготовки (FR-39).
         `is_estimate` по умолчанию False — правка руками снимает «≈»; заготовка
         наследует флаг от сырья. `unit_weight_g=None` — не трогать."""
+        ...
+
+    async def get_recipe(self, product_id: int) -> Recipe | None:
+        """FR-39.7: состав рецепта; None — состава нет (рецепт до 15.10.2026 или не рецепт)."""
+        ...
+
+    async def set_recipe(self, product_id: int, recipe: Recipe) -> None:
+        """FR-39.7: записать состав целиком (старый заменяется)."""
         ...
 
     async def rename(self, product_id: int, name: str) -> Product | None:

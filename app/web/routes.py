@@ -24,7 +24,7 @@ from app.application.assistant import Assistant
 from app.application.body_scans import BodyScanService, ScanCheck, from_reading
 from app.application.coach import LimitReached, clean_history
 from app.application.dto import SetPick, Unit
-from app.application.entities import StatedUse, User
+from app.application.entities import Recipe, StatedUse, User
 from app.application.results import (
     BodyScanRead,
     ClarificationNeeded,
@@ -1202,7 +1202,68 @@ async def product(
             }
             for at, g, k in history
         ],
+        # FR-39.7: у рецепта — состав. None при source=recipe значит «состава нет» (рецепт до
+        # 15.10.2026), и карточка предлагает собрать его заново.
+        "recipe": _recipe_json(await assistant.recipe_of(product_id))
+        if p.source == "recipe" else None,
     }
+
+
+def _recipe_json(r: Recipe | None) -> dict[str, Any] | None:
+    if r is None:
+        return None
+    return {
+        "yield_g": r.yield_g,
+        "total_g": round(sum(i.grams for i in r.items), 1),
+        "items": [
+            {
+                "name": i.name,
+                "grams": i.grams,
+                "product_id": i.product_id,
+                # Текущая плотность ингредиента: ею же считает сервер, поэтому предпросмотр
+                # в листе совпадает с результатом (MA-INV-68).
+                "kcal_per_100g": round(i.density.kcal_per_100g, 2),
+                "protein_per_100g": round(i.density.protein_per_100g, 2),
+                "fat_per_100g": round(i.density.fat_per_100g, 2),
+                "carb_per_100g": round(i.density.carb_per_100g, 2),
+            }
+            for i in r.items
+        ],
+    }
+
+
+@router.put("/products/{product_id}/recipe")
+async def edit_recipe(
+    product_id: int, body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant
+) -> dict[str, Any]:
+    """FR-39.7: новый состав рецепта. Клиент шлёт ЧТО и СКОЛЬКО, плотность считает сервер."""
+    raw = body.get("items")
+    if not isinstance(raw, list) or not 1 <= len(raw) <= 50:
+        raise bad_request("bad_recipe", "Нужен состав: от 1 до 50 ингредиентов.")
+    picks: list[SetPick] = []
+    try:
+        for x in raw:
+            grams = float(x["grams"])
+            src, pid = x.get("src"), x.get("product_id")
+            if not 0 < grams <= 20000 or (src is None) == (pid is None):
+                raise ValueError("ровно одно из src/product_id и вес в границах")
+            picks.append(SetPick(
+                grams=grams,
+                src=int(src) if src is not None else None,
+                product_id=int(pid) if pid is not None else None,
+            ))
+        yield_raw = body.get("yield_g")
+        yield_g = float(yield_raw) if yield_raw not in (None, "") else None
+        if yield_g is not None and not 0 < yield_g <= 50000:
+            raise ValueError("вес готового вне границ")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise bad_request("bad_recipe", "Состав рецепта не разобрать.") from exc
+    updated = await assistant.edit_recipe(product_id, picks, yield_g=yield_g)
+    if updated is None:
+        raise bad_request(
+            "bad_recipe", "Рецепт не найден или его состав изменился — открой карточку заново."
+        )
+    return {"product": product_json(updated, await assistant.usage_of(user, product_id))}
 
 
 @router.patch("/products/{product_id}")
