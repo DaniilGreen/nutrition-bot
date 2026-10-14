@@ -76,14 +76,14 @@ def gate_density(d: Density, *, alcohol: bool) -> Density:
     return clamp_density(d if alcohol else reconcile_density(d))
 
 
-def density_in_bounds(d: Density) -> bool:
+def density_in_bounds(d: Density, *, slack: float = 1.0) -> bool:
     """Физически возможная плотность. Для рецепта выход за границы значит, что вес готового
     не сходится с составом (опечатка «вышло 100 г» вместо 1000) — такое отказываем, а не жмём:
     зажать до 900 ккал/100 г = молча записать невозможное."""
-    if not 0 <= d.kcal_per_100g <= MAX_KCAL_PER_100G:
+    if not 0 <= d.kcal_per_100g <= MAX_KCAL_PER_100G * slack:
         return False
     return all(
-        0 <= v <= MAX_MACRO_PER_100G
+        0 <= v <= MAX_MACRO_PER_100G * slack
         for v in (d.protein_per_100g, d.fat_per_100g, d.carb_per_100g)
     )
 

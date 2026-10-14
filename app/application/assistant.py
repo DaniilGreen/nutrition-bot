@@ -192,7 +192,7 @@ class Assistant:
             try:
                 product = await self._meals.prepare_batch(parsed)
             except RecipeRejected as exc:
-                return Unknown(reason=str(exc))
+                return Unknown(reason="рецепт не сходится", say=str(exc))
             if product is None:
                 return Unknown(reason="не понял состав заготовки")
             return DishSaved(product=product, portions=parsed.batch_portions)

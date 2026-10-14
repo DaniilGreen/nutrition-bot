@@ -66,6 +66,8 @@ def format_result(result: Result) -> str:
     if isinstance(result, DishSaved):
         return format_recipe_saved(result)
     if isinstance(result, Unknown):
+        if result.say:  # готовый текст человеку — как есть (отказ рецепта и т.п.)
+            return f"🧾 {escape(result.say, quote=False)}"
         return _format_unknown(result.reason)
     return "⚠️ Не смог обработать. Переформулируй или напиши /help."
 

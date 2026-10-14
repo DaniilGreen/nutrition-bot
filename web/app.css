@@ -544,13 +544,17 @@ body.ai{padding-bottom:calc(var(--tabbar) + 76px + env(safe-area-inset-bottom))}
   .srow{flex-wrap:wrap;padding:6px 0}
   .srow .nm{flex-basis:100%}
   .srow .step:first-of-type,.srow .gin{margin-left:auto}
+  .srow .nm{white-space:normal;overflow-wrap:anywhere}  /* своя строка — пусть переносится */
 }
 /* FR-39.7: граммы ингредиента рецепта вводятся цифрами — точные веса партии. */
 .srow .gin{flex-shrink:0;display:flex;align-items:center;gap:4px;background:var(--surface-3);
   border-radius:var(--r-sm);padding:0 var(--s-2);min-height:40px}
 .srow .gin input{width:64px;background:none;border:0;color:var(--text);font:inherit;
   font-size:var(--f-body-s);text-align:right;outline:none;min-width:0}
-/* Длинное имя продукта в чипе поиска не должно выталкивать шторку вбок (ревью 15.10.2026). */
-.sheet .sh-chips .chip{flex-shrink:1;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+/* Длинное имя в чипе поиска — переносом, а не многоточием: на 320 «куриная грудка без кожи…»
+   ×3 выглядели одинаково, и добавлялось не то (ревью 15.10.2026). */
+.sheet .sh-chips .chip{flex-shrink:1;max-width:100%;white-space:normal;text-align:left;
+  overflow-wrap:anywhere;height:auto}
+.sh-chips:empty{display:none}
 /* Строки «имя — граммы» без потолка на 1100 разносили граммы на 970px от имени (responsive.md). */
 .rcard{max-width:520px}

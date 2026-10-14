@@ -213,3 +213,86 @@ async def test_card_preview_density_matches_the_server(client, fake_container):
         })
 
     assert abs(r.json()["product"]["kcal_per_100g"] - preview) < 0.05
+
+
+async def test_preview_matches_server_for_an_inconsistent_ingredient(client, fake_container):
+    """M6 / MA-INV-68 на API: в карточке плотность после gate, PUT считает так же."""
+    fc = fake_container
+    odd = await fc.products.create(Product(
+        canonical_key="odd_k6b", display_name="паста k6b", density=Density(400, 10, 0, 0),
+        source="manual", is_estimate=False,
+    ))
+    rec = await fc.products.create(Product(
+        canonical_key="rec_k6b", display_name="смесь k6b", density=Density(40, 10, 0, 0),
+        source="recipe", is_estimate=False,
+    ))
+    await fc.products.set_recipe(rec.id, Recipe(items=[
+        RecipeItem("паста k6b", 500, odd.density, odd.id, False),
+    ]))
+    async with client as c:
+        await c.get("/api/me", headers=_hdr())
+        items = (await c.get(f"/api/products/{rec.id}", headers=_hdr())).json()["recipe"]["items"]
+        preview = items[0]["kcal_per_100g"]
+        r = await c.put(f"/api/products/{rec.id}/recipe", headers=_hdr(), json={
+            "items": [{"src": 0, "name": items[0]["name"], "grams": 500}],
+        })
+
+    assert abs(r.json()["product"]["kcal_per_100g"] - preview) < 0.05
+
+
+async def test_stale_composition_has_its_own_code(client, fake_container):
+    """Аппка по коду recipe_stale перезагружает карточку, а не открывает старый состав."""
+    rec, _, _ = await _seed(fake_container)
+    async with client as c:
+        await c.get("/api/me", headers=_hdr())
+        r = await c.put(f"/api/products/{rec.id}/recipe", headers=_hdr(), json={
+            "items": [{"src": 0, "name": "не то", "grams": 100}],
+        })
+
+    assert r.status_code == 400 and r.json()["error"]["code"] == "recipe_stale"
+
+
+async def test_path_id_beyond_int4_is_400(client, fake_container):
+    async with client as c:
+        await c.get("/api/me", headers=_hdr())
+        r = await c.put(f"/api/products/{2**40}/recipe", headers=_hdr(),
+                        json={"items": [{"src": 0, "grams": 1}]})
+        s = await c.post(f"/api/meals/{2**40}/template", headers=_hdr(), json={"name": "x"})
+
+    assert r.status_code == 400 and s.status_code == 400
+
+
+async def test_sets_log_infinite_days_ago_is_not_500(client, fake_container):
+    async with client as c:
+        await c.get("/api/me", headers=_hdr())
+        r = await c.post("/api/sets/log", headers={**_hdr(), "Content-Type": "application/json"},
+                         content='{"name": "x", "items": [{"src": 0, "grams": 1}], '
+                                 '"days_ago": Infinity}')
+
+    assert r.status_code < 500
+
+
+async def test_recipe_refusal_reaches_the_app_with_its_reason(client, fake_container):
+    """Отказ рецепта через строку ввода аппки: ответ «unknown» с текстом причины, а не 500
+    и не общее «не понял» (регрессия: Unknown не был импортирован в routes)."""
+    from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
+    from tests.fakes import StubNlu
+
+    def ing(name, key, grams, kcal, p, f, c):
+        return ParsedItem(name=name, canonical_key=key, unit=Unit.GRAM, grams=grams,
+                          kcal_per_100g=kcal, protein_per_100g=p, fat_per_100g=f,
+                          carb_per_100g=c, confidence=0.9)
+
+    fake_container.nlu = StubNlu(ParsedMessage(
+        intent=Intent.BATCH, confidence=0.9, batch_name="курица с мазиком", batch_yield_g=100,
+        items=[ing("курица", "ch_api", 1100, 165, 31, 3.6, 0),
+               ing("майонез", "my_api", 200, 680, 1, 75, 1)],
+    ))
+    async with client as c:
+        await c.get("/api/me", headers=_hdr())
+        r = await c.post("/api/meals", headers=_hdr(),
+                         json={"text": "рецепт курица с мазиком: … вышло 100 г"})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["kind"] == "unknown" and "вес готового" in body["message"].lower()

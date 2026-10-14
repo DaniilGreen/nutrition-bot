@@ -187,9 +187,6 @@
         '<button class="sx" data-sdrop="' + k + '" aria-label="Убрать: ' + esc(it.name) + '">✕</button>' +
       '</div>';
     }).join('') || '<div class="state">Пусто — добавь что-нибудь ниже.</div>';
-    var found = sh.found.map(function (p) {
-      return '<button class="chip" data-sadd="' + p.id + '">+ ' + esc(p.name) + '</button>';
-    }).join('');
     var keep = setChanged(sh)
       ? '<div class="where" role="group" aria-label="Что сделать с изменениями">' +
           ['today', 'update'].map(function (v) {
@@ -213,7 +210,7 @@
           'value="' + esc(sh.q) + '" aria-label="Добавить продукт в набор" ' +
           'style="flex-grow:1;background:none;border:0;color:var(--text);font:inherit;' +
           'outline:none;min-width:0"></label>' +
-        (found ? '<div class="sh-chips">' + found + '</div>' : '') +
+        '<div class="sh-chips" id="schips">' + foundChips(sh) + '</div>' +
         /* Перенос блоками, а не словами: на 320 при больших числах «У 34» рвалось на две строки. */
         '<div class="sh-prev" style="flex-wrap:wrap"><span class="num" ' +
           'style="font-size:var(--f-t2);font-weight:700">' + n(t.kcal) + '</span>' +
@@ -226,11 +223,6 @@
         '<button class="primary" data-setgo="1"' + (sh.items.length ? '' : ' disabled') + '>' +
           'Записать · ' + n(t.kcal) + ' ккал</button>' +
       '</div>';
-    if (sh.qFocus) {
-      var q = document.getElementById('sq');
-      if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
-      sh.qFocus = false;
-    }
   }
 
   function setWrite() {
@@ -308,9 +300,6 @@
         '<button class="sx" data-sdrop="' + k + '" aria-label="Убрать: ' + esc(it.name) + '">✕</button>' +
       '</div>';
     }).join('') || '<div class="state">Пусто — найди ингредиенты ниже.</div>';
-    var found = sh.found.map(function (p) {
-      return '<button class="chip" data-sadd="' + p.id + '">+ ' + esc(p.name) + '</button>';
-    }).join('');
     sheetEl.innerHTML =
       '<div class="sheet-back" data-sclose="1"></div>' +
       '<div class="sheet" role="dialog" aria-modal="true" aria-label="Состав рецепта ' + esc(sh.title) + '">' +
@@ -325,7 +314,7 @@
           'value="' + esc(sh.q) + '" aria-label="Добавить ингредиент" ' +
           'style="flex-grow:1;background:none;border:0;color:var(--text);font:inherit;' +
           'outline:none;min-width:0"></label>' +
-        (found ? '<div class="sh-chips">' + found + '</div>' : '') +
+        '<div class="sh-chips" id="schips">' + foundChips(sh) + '</div>' +
         '<label class="field" style="margin:0"><span class="mic" style="flex-grow:1">' +
           'Вышло готового, г — если при готовке ушла вода</span>' +
           '<input id="ryield" class="num" type="number" inputmode="decimal" min="1" max="50000" ' +
@@ -334,11 +323,6 @@
         '<button class="primary" data-rsave="1"' + (sh.items.length ? '' : ' disabled') + '>' +
           'Сохранить рецепт</button>' +
       '</div>';
-    if (sh.qFocus) {
-      var q = document.getElementById('sq');
-      if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
-      sh.qFocus = false;
-    }
   }
 
   function recipeSave() {
@@ -346,6 +330,10 @@
     if (!sh || state.sending || !sh.items.length) return;
     var bad = sh.items.some(function (i) { return !(Number(i.grams) > 0); });
     if (bad) return toast('У каждого ингредиента нужен вес больше нуля.', true);
+    if (sh.items.some(function (i) { return Number(i.grams) > 20000; })) {
+      return toast('Ингредиент тяжелее 20 кг — проверь число.', true);
+    }
+    if (Number(sh.yieldG) > 50000) return toast('Вес готового больше 50 кг — проверь число.', true);
     state.sending = true;
     busy('Пересчитываю…');
     send('/api/products/' + sh.id + '/recipe', {
@@ -364,17 +352,41 @@
       renderProduct();
     }).catch(function (err) {
       oops(err);
+      if (err && err.code === 'recipe_stale') {
+        closeSheet();            // состав поменяли с другого устройства — открыть старый
+        return renderProduct();  // снова значило бы упереться в тот же отказ
+      }
       root.classList.remove('working');  // лист остаётся открытым — правку не теряем
     }).then(function () { state.sending = false; });
   }
 
   var setSearchTimer = null;
 
+  function foundChips(sh) {
+    return sh.found.map(function (p) {
+      return '<button class="chip" data-sadd="' + p.id + '">+ ' + esc(p.name) + '</button>';
+    }).join('');
+  }
+
+  /* Найденное — только в контейнер чипов, без перерисовки листа: медленный ответ поиска
+     иначе уводил фокус из поля граммов, а прокрутка прыгала наверх (ревью 15.10.2026). */
+  function showFound(sh) {
+    var box = document.getElementById('schips');
+    if (box && state.sheet === sh) box.innerHTML = foundChips(sh);
+  }
+
   function paintSheet() {
     var sh = state.sheet;
     if (!sh) { sheetEl.innerHTML = ''; return; }
-    if (sh.kind === 'set') return paintSetSheet(sh);
-    if (sh.kind === 'recipe') return paintRecipeSheet(sh);
+    if (sh.kind === 'set' || sh.kind === 'recipe') {
+      /* Добавил/убрал позицию — лист перерисован, но прокрутка остаётся, где была. */
+      var old = sheetEl.querySelector('.sheet');
+      var top = old ? old.scrollTop : 0;
+      (sh.kind === 'set' ? paintSetSheet : paintRecipeSheet)(sh);
+      var now = sheetEl.querySelector('.sheet');
+      if (now && top) now.scrollTop = top;
+      return;
+    }
     var ref = Math.round(sh.ref);
     var chips = sh.fixed ? '' : portions(sh.ref).map(function (g) {
       var on = !sh.own && g === sh.pick;
@@ -538,7 +550,7 @@
       var sh = state.sheet, q = e.target.value;
       sh.q = q;
       clearTimeout(setSearchTimer);
-      if (q.trim().length < 2) { sh.found = []; sh.qFocus = true; return paintSheet(); }
+      if (q.trim().length < 2) { sh.found = []; return showFound(sh); }
       setSearchTimer = setTimeout(function () {
         api('/api/products?sort=name&limit=6&q=' + encodeURIComponent(q.trim()))
           .then(function (d) {
@@ -546,8 +558,7 @@
             sh.found = d.items.filter(function (x) {
               return !x.stated && !(sh.kind === 'recipe' && x.id === sh.id);
             });
-            sh.qFocus = true;
-            paintSheet();
+            showFound(sh);
           }).catch(function () {});
       }, 250);
       return;
@@ -1241,6 +1252,11 @@
             field('pf', 'Жир, г', p.fat_per_100g) +
             field('pc', 'Углеводы, г', p.carb_per_100g) +
           '</div>' +
+          (p.source === 'recipe'
+            ? '<div class="mic" style="margin-top:var(--s-3);line-height:1.5">Это рецепт: ' +
+              'следующая правка состава пересчитает плотность из ингредиентов и заменит эти ' +
+              'цифры.</div>'
+            : '') +
           '<button class="primary" id="save">Сохранить</button>' +
           '<div class="mic" style="margin-top:var(--s-3);line-height:1.5">' +
             'Правка меняет будущие записи. Уже съеденное не двинется — в истории ' +
@@ -1262,10 +1278,11 @@
   function recipeCard(r, p) {
     if (p.source !== 'recipe') return '';
     if (!r) {
-      return card('Состав', '<div class="state" style="padding:var(--s-3) 0">Состав этого рецепта ' +
+      return card('Состав', '<div class="rcard"><div class="mic" style="padding:var(--s-2) 0 var(--s-3);' +
+        'line-height:1.5">Состав этого рецепта ' +
         'не сохранился — его заводили до 15.10, тогда состав не хранили. Собери его здесь: дальше ' +
         'его можно будет править, а плотность пересчитается сама.</div>' +
-        '<div class="rcard"><button class="primary" data-recipe="' + p.id + '">' +
+        '<button class="primary" style="margin-top:0" data-recipe="' + p.id + '">' +
           'Собрать состав</button></div>',
         'Съеденное раньше не изменится — в истории снимок на момент записи.');
     }

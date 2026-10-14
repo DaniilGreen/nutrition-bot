@@ -16,7 +16,7 @@ from typing import Annotated, Any
 from urllib.parse import unquote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, Path, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,6 +37,7 @@ from app.application.results import (
     LabelRead,
     MealLogged,
     PlateRead,
+    Unknown,
     VariantClarificationNeeded,
     WeightLogged,
 )
@@ -86,7 +87,7 @@ def _day_offset(value: Any) -> int:
     """
     try:
         days_ago = int(value or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # Infinity из JSON — 400/0, а не 500
         return 0
     return -max(0, min(30, days_ago))
 
@@ -748,6 +749,8 @@ def _result_json(
         return {"kind": "stats", "totals": remaining_json(result.remaining)}
 
     reason = getattr(result, "reason", None) or "Не понял, что записать."
+    if isinstance(result, Unknown) and result.say:
+        return {"kind": "unknown", "message": result.say}
     return {"kind": "unknown", "message": reason}
 
 @router.get("/stats/series")
@@ -1129,6 +1132,9 @@ async def sets(user: CurrentUser, assistant: CurrentAssistant) -> dict[str, Any]
 
 
 _INT4 = 2**31 - 1
+# id в пути новых маршрутов: за пределом int4 asyncpg падал 500; так — 400 через обработчик
+# кривого запроса (main_api.malformed).
+DbId = Annotated[int, Path(ge=1, le=_INT4)]
 
 
 def _id(v: Any) -> int:
@@ -1169,7 +1175,7 @@ def _picks(raw: Any, *, max_items: int, max_grams: float) -> list[SetPick]:
 
 @router.post("/meals/{meal_id}/template")
 async def save_set(
-    meal_id: int, body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant
+    meal_id: DbId, body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant
 ) -> dict[str, Any]:
     """FR-39.2: дать приёму имя набора прямо из карточки «Дня»."""
     name = str(body.get("name") or "").strip()
@@ -1265,7 +1271,7 @@ def _recipe_json(r: Recipe | None) -> dict[str, Any] | None:
 
 @router.put("/products/{product_id}/recipe")
 async def edit_recipe(
-    product_id: int, body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant,
+    product_id: DbId, body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant,
     request: Request,
 ) -> dict[str, Any]:
     """FR-39.7: новый состав рецепта. Клиент шлёт ЧТО и СКОЛЬКО, плотность считает сервер."""
@@ -1285,8 +1291,9 @@ async def edit_recipe(
     except RecipeRejected as exc:
         raise bad_request("bad_recipe", str(exc)) from exc
     if updated is None:
+        # Свой код: аппка по нему перезагружает карточку, а не открывает старый состав снова.
         raise bad_request(
-            "bad_recipe", "Рецепт не найден или его состав изменился — открой карточку заново."
+            "recipe_stale", "Рецепт не найден или его состав изменился — открой карточку заново."
         )
     return {"product": product_json(updated, await assistant.usage_of(user, product_id))}
 

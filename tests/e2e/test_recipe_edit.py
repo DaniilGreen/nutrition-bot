@@ -346,3 +346,132 @@ async def test_manual_density_fix_keeps_the_recipe() -> None:
 
     assert fixed.source == "recipe"
     assert await assistant.recipe_of(saved.product.id) is not None
+
+
+# ---------- второй проход ревью: тесты, которые убивают выжившие мутации M6/M14/M16 ----------
+
+async def test_gate_applies_to_an_atwater_inconsistent_catalog_density() -> None:
+    """M6: правка руками (FR-15) не сверяет Атвотер, поэтому в каталоге МОЖЕТ лежать «400 ккал
+    при 10 г белка». Рецепт обязан сверить её сам — до 40, как это делает превью."""
+    assistant, users, products = _build(StubNlu())
+    rec = await products.create(Product(
+        canonical_key="rec_k6", display_name="смесь k6", density=Density(100, 5, 5, 5),
+        source="recipe", is_estimate=True,
+    ))
+    odd = await products.create(Product(
+        canonical_key="odd_k6", display_name="паста k6", density=Density(130, 5, 1, 25),
+        source="llm", is_estimate=True,
+    ))
+    await assistant.fix_product_density(odd.id, Density(400, 10, 0, 0))
+
+    updated = await assistant.edit_recipe(
+        rec.id, [SetPick(grams=500, product_id=odd.id)], yield_g=None
+    )
+
+    assert abs(updated.density.kcal_per_100g - 40) < 1
+
+
+async def test_branded_wine_keeps_its_ethanol() -> None:
+    """M14: «вино Château Margaux» резолвится в продукт этикетки «Château Margaux», где слова
+    про алкоголь нет. 85 ккал при Атвотере 10.8 — за допуском, так что без флага этанол ушёл
+    бы. (Heineken 42 ккал в допуске и этого не видит.)"""
+    wine = _ing("вино Château Margaux", "chateau_margaux", 500, 85, 0.1, 0, 2.6)
+    stew = ParsedMessage(intent=Intent.BATCH, confidence=0.9, batch_name="говядина по-бургундски",
+                         items=[_ing("говядина", "beef_k14", 1000, 250, 26, 15, 0), wine])
+    assistant, users, products = _build(StubNlu(stew))
+    await products.create(Product(canonical_key="chateau_margaux", display_name="Château Margaux",
+                                  density=Density(85, 0.1, 0, 2.6), source="label",
+                                  is_estimate=False))
+    user = await _new_user(users)
+
+    saved = await assistant.process(user, "рецепт говядина по-бургундски: …")
+
+    assert abs(saved.product.density.kcal_per_100g - (1000 * 2.5 + 500 * 0.85) / 1500 * 100) < 1
+    assert (await assistant.recipe_of(saved.product.id)).items[1].alcohol is True
+
+
+async def test_stored_self_reference_is_treated_as_snapshot() -> None:
+    """M16: строка состава, указывающая на сам рецепт (старые/испорченные данные), — снимок:
+    иначе каждое сохранение подмешивало бы новую плотность в саму себя."""
+    from app.application.entities import Recipe, RecipeItem
+
+    assistant, users, products = _build(StubNlu())
+    chicken = await products.create(Product(
+        canonical_key="chicken_k16", display_name="курица k16", density=Density(165, 31, 3.6, 0),
+        source="llm", is_estimate=True,
+    ))
+    rec = await products.create(Product(
+        canonical_key="rec_k16", display_name="курица с мазиком k16",
+        density=Density(183.5, 23.7, 9.1, 0.9), source="recipe", is_estimate=True,
+    ))
+    await products.set_recipe(rec.id, Recipe(items=[
+        RecipeItem("курица k16", 1000, chicken.density, chicken.id, True),
+        RecipeItem("курица с мазиком k16", 500, Density(183.5, 23.7, 9.1, 0.9), rec.id, True),
+    ]))
+
+    assert (await assistant.recipe_of(rec.id)).items[1].product_id is None
+
+    picks = [SetPick(grams=1000, src=0), SetPick(grams=500, src=1)]
+    first = (await assistant.edit_recipe(rec.id, picks, yield_g=800)).density.kcal_per_100g
+    second = (await assistant.edit_recipe(rec.id, picks, yield_g=800)).density.kcal_per_100g
+    assert abs(first - second) < 0.01
+
+
+async def test_mutual_recipes_are_refused() -> None:
+    """A в B, а B в A — плотности раздувались бы друг через друга на каждом сохранении."""
+    from app.application.entities import Recipe, RecipeItem
+
+    assistant, users, products = _build(StubNlu())
+    a = await products.create(Product(canonical_key="rec_a", display_name="соус",
+                                      density=Density(300, 1, 30, 5), source="recipe"))
+    b = await products.create(Product(canonical_key="rec_b", display_name="салат с соусом",
+                                      density=Density(120, 3, 10, 5), source="recipe"))
+    await products.set_recipe(b.id, Recipe(items=[RecipeItem("соус", 50, a.density, a.id)]))
+
+    assert await assistant.edit_recipe(a.id, [SetPick(grams=100, product_id=b.id)],
+                                       yield_g=None) is None
+
+
+async def test_bot_says_why_a_recipe_is_refused() -> None:
+    """Отказ рецепта доходит до человека своим текстом, а не подсказкой «вес 20–400 кг»."""
+    from app.application.results import Unknown
+    from app.bot.formatters import format_result
+
+    bad = ParsedMessage(
+        intent=Intent.BATCH, confidence=0.9, batch_name="курица с мазиком", batch_yield_g=100,
+        items=[_ing(*CHICKEN[:2], 1100, *CHICKEN[2:]), _ing(*MAYO[:2], 200, *MAYO[2:])],
+    )
+    assistant, users, _ = _build(StubNlu(bad))
+    user = await _new_user(users)
+
+    result = await assistant.process(user, "рецепт курица с мазиком: … вышло 100 г")
+
+    assert isinstance(result, Unknown) and result.say
+    text = format_result(result)
+    assert "вес готового" in text.lower() and "20–400" not in text
+
+
+async def test_zero_yield_from_the_model_means_not_named() -> None:
+    zero = ParsedMessage(
+        intent=Intent.BATCH, confidence=0.9, batch_name="курица с мазиком", batch_yield_g=0,
+        items=[_ing(*CHICKEN[:2], 1100, *CHICKEN[2:]), _ing(*MAYO[:2], 200, *MAYO[2:])],
+    )
+    assistant, users, _ = _build(StubNlu(zero))
+    user = await _new_user(users)
+
+    saved = await assistant.process(user, "рецепт курица с мазиком: …")
+
+    assert abs(saved.product.density.kcal_per_100g - (1100 * 1.65 + 200 * 6.8) / 1300 * 100) < 1
+
+
+async def test_near_bound_density_is_clamped_not_refused() -> None:
+    """Топлёное масло у самой границы — шум округлений, жмём; явная опечатка — отказ."""
+    ghee = ParsedMessage(intent=Intent.BATCH, confidence=0.9, batch_name="гхи", batch_yield_g=950,
+                         items=[_ing("масло сливочное", "butter", 1000, 717, 0.9, 81, 0.1)])
+    assistant, users, _ = _build(StubNlu(ghee))
+    user = await _new_user(users)
+
+    saved = await assistant.process(user, "рецепт гхи: 1 кг масла, вышло 950 г")
+
+    assert saved.product.density.fat_per_100g <= 100
+    assert abs(saved.product.density.kcal_per_100g - 717 / 0.95) < 30

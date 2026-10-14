@@ -596,8 +596,10 @@ class MealService:
             return None
         total, grams_total, estimate = _cook(items)
         named = parsed.batch_yield_g
-        if named is not None and not 0 < named <= MAX_YIELD_G:
-            raise RecipeRejected("Вес готового вне разумных пределов — проверь число.")
+        if named is not None and named <= 0:
+            named = None  # модель вернула 0 — значит «не назван», как и у API
+        if named is not None and named > MAX_YIELD_G:
+            raise RecipeRejected("Вес готового больше 50 кг — проверь число.")
         # Вес готового: назвали — берём его (при варке вода ушла, масса не равна сумме сырья);
         # не назвали — сумма весов сырья, что для сборки без термообработки ТОЧНО, а не почти.
         yield_g = named or grams_total
@@ -612,10 +614,32 @@ class MealService:
         )
         assert product.id is not None
         for it in items:
-            if it.product_id == product.id:
-                it.product_id = None  # рецепт назван как свой ингредиент — не ссылаемся на себя
+            # Рецепт назван как свой ингредиент, или ингредиент — рецепт, в котором есть этот:
+            # ссылку не храним, остаётся снимок плотности — иначе цикл раздувал бы плотность.
+            if it.product_id is not None and (
+                it.product_id == product.id or await self._contains(it.product_id, product.id)
+            ):
+                it.product_id = None
         await self._products.set_recipe(product.id, Recipe(items=items, yield_g=named or None))
         return product
+
+    async def _contains(self, recipe_id: int | None, target_id: int, depth: int = 0) -> bool:
+        """Есть ли `target_id` в составе `recipe_id` — напрямую или через вложенные рецепты.
+        ponytail: обход в глубину без кэша — рецептов единицы; глубина 8 — страховка от
+        уже испорченных данных."""
+        if recipe_id is None or depth > 8:
+            return False
+        recipe = await self._products.get_recipe(recipe_id)
+        if recipe is None:
+            return False
+        for it in recipe.items:
+            if it.product_id == target_id:
+                return True
+            if it.product_id is not None and await self._contains(
+                it.product_id, target_id, depth + 1
+            ):
+                return True
+        return False
 
     async def recipe_view(self, product_id: int) -> Recipe | None:
         """FR-39.7: состав для карточки — с ТЕКУЩИМИ плотностями ингредиентов. Ровно ими же
@@ -668,6 +692,8 @@ class MealService:
                 live = await self._products.get_by_id(pick.product_id)
                 if live is None:
                     return None
+                if await self._contains(live.id, product_id):
+                    return None  # A в B, а B в A — плотность раздувалась бы на каждом сохранении
                 items.append(RecipeItem(
                     live.display_name, grams, live.density, live.id, live.is_estimate,
                     is_alcoholic(live.display_name),
@@ -675,7 +701,7 @@ class MealService:
         if not items:
             return None
         if yield_g is not None and not 0 < yield_g <= MAX_YIELD_G:
-            raise RecipeRejected("Вес готового вне разумных пределов — проверь число.")
+            raise RecipeRejected("Вес готового должен быть от 1 г до 50 кг — проверь число.")
         total, grams_total, estimate = _cook(items)
         new_yield = yield_g or grams_total
         unit_weight = None
@@ -832,6 +858,9 @@ def _cook(items: list[RecipeItem]) -> tuple[Macros, float, bool]:
     return sum_macros(pot), grams_total, any(it.is_estimate for it in items)
 
 
+_DENSITY_SLACK = 1.15  # до +15% над физической границей — округления, дальше — опечатка в весе
+
+
 class RecipeRejected(ValueError):
     """Рецепт не сходится физически: вес готового вне границ или плотность невозможна.
     Сообщение — человеку."""
@@ -846,11 +875,14 @@ def _recipe_density(total: Macros, grams: float) -> Density:
         fat_per_100g=total.fat / grams * 100,
         carb_per_100g=total.carb / grams * 100,
     )
-    if not density_in_bounds(raw):
-        raise RecipeRejected(
-            "Плотность выходит невозможной — скорее всего, вес готового меньше, чем должен быть."
-        )
-    return raw
+    if density_in_bounds(raw):
+        return raw
+    if density_in_bounds(raw, slack=_DENSITY_SLACK):
+        return clamp_density(raw)  # у самой границы (масло, топлёное) — шум округлений, жмём
+    raise RecipeRejected(
+        "Так не бывает: на 100 г выходит больше, чем физически возможно. Скорее всего, вес "
+        "готового указан меньше, чем на самом деле."
+    )
 
 
 def _canonical_key(llm_key: str, name: str) -> str:
