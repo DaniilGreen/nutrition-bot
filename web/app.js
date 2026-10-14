@@ -238,8 +238,11 @@
     if (!sh || state.sending || !sh.items.length) return;
     state.sending = true;
     busy('Записываю…');
+    /* Имя позиции — эхом: если набор успели обновить с другого устройства, сервер откажет,
+       а не положит граммы на чужую позицию. */
     var picks = sh.items.map(function (i) {
-      return i.src != null ? { src: i.src, grams: i.grams } : { product_id: i.product, grams: i.grams };
+      return i.src != null ? { src: i.src, name: i.name, grams: i.grams }
+                           : { product_id: i.product, grams: i.grams };
     });
     var update = setChanged(sh) && sh.keep === 'update';
     var sid = 'setlog:' + sh.name + ':' + JSON.stringify(picks) + ':' + update;
@@ -251,7 +254,10 @@
       closeSheet();
       if (update) loadFrequent();  // состав набора поменялся — и ккал в чипе тоже
       return r.kind === 'logged' ? logged(r, 0) : handle(r);
-    }).catch(function (err) { oops(err); }).then(function () { state.sending = false; });
+    }).catch(function (err) {
+      oops(err);
+      rerender();  // busy() погасил экран — без перерисовки он остался бы неживым
+    }).then(function () { state.sending = false; });
   }
 
   /* FR-39.7: лист правки состава рецепта. Граммы — цифрами в поле (точные веса партии), набор
@@ -348,7 +354,7 @@
       body: JSON.stringify({
         yield_g: Number(sh.yieldG) > 0 ? Number(sh.yieldG) : null,
         items: sh.items.map(function (i) {
-          return i.src != null ? { src: i.src, grams: Number(i.grams) }
+          return i.src != null ? { src: i.src, name: i.name, grams: Number(i.grams) }
                                : { product_id: i.product, grams: Number(i.grams) };
         })
       })
@@ -356,7 +362,10 @@
       closeSheet();
       toast('Рецепт пересчитан: ' + n(r.product.kcal_per_100g) + ' ккал на 100 г.');
       renderProduct();
-    }).catch(function (err) { oops(err); }).then(function () { state.sending = false; });
+    }).catch(function (err) {
+      oops(err);
+      root.classList.remove('working');  // лист остаётся открытым — правку не теряем
+    }).then(function () { state.sending = false; });
   }
 
   var setSearchTimer = null;
@@ -534,7 +543,9 @@
         api('/api/products?sort=name&limit=6&q=' + encodeURIComponent(q.trim()))
           .then(function (d) {
             if (state.sheet !== sh || sh.q !== q) return;  // пока шёл запрос, ввод ушёл дальше
-            sh.found = d.items.filter(function (x) { return !x.stated; });
+            sh.found = d.items.filter(function (x) {
+              return !x.stated && !(sh.kind === 'recipe' && x.id === sh.id);
+            });
             sh.qFocus = true;
             paintSheet();
           }).catch(function () {});
@@ -1254,7 +1265,8 @@
       return card('Состав', '<div class="state" style="padding:var(--s-3) 0">Состав этого рецепта ' +
         'не сохранился — его заводили до 15.10, тогда состав не хранили. Собери его здесь: дальше ' +
         'его можно будет править, а плотность пересчитается сама.</div>' +
-        '<button class="primary" data-recipe="' + p.id + '">Собрать состав</button>',
+        '<div class="rcard"><button class="primary" data-recipe="' + p.id + '">' +
+          'Собрать состав</button></div>',
         'Съеденное раньше не изменится — в истории снимок на момент записи.');
     }
     var rows = r.items.map(function (i) {
@@ -1264,10 +1276,10 @@
     var weight = 'Всего ' + n(r.total_g) + '\u00a0г' +
       (r.yield_g ? ' · вышло готового ' + n(r.yield_g) + '\u00a0г' : '');
     return card('Состав',
-      '<div class="items" style="padding-left:0">' + rows + '</div>' +
+      '<div class="rcard"><div class="items" style="padding-left:0">' + rows + '</div>' +
       '<div class="mic" style="padding:var(--s-2) 0">' + weight + '</div>' +
       '<button class="primary" style="margin-top:var(--s-2)" data-recipe="' + p.id + '">' +
-        'Править состав</button>',
+        'Править состав</button></div>',
       'Правка пересчитает плотность рецепта. Съеденное раньше не изменится.');
   }
 
@@ -4041,13 +4053,20 @@
   });
 
   function saveProduct() {
-    var body = {
-      name: document.getElementById('pname').value.trim(),
-      kcal_per_100g: Number(document.getElementById('pk').value),
-      protein_per_100g: Number(document.getElementById('pp').value),
-      fat_per_100g: Number(document.getElementById('pf').value),
-      carb_per_100g: Number(document.getElementById('pc').value)
-    };
+    var p = state.cat.card && state.cat.card.product;
+    var body = { name: document.getElementById('pname').value.trim() };
+    /* КБЖУ шлём, только если их правда поменяли. Иначе переименование переписывало бы
+       плотность округлёнными до 0,1 числами из полей (MA-INV-72). */
+    var ids = { pk: 'kcal_per_100g', pp: 'protein_per_100g', pf: 'fat_per_100g', pc: 'carb_per_100g' };
+    var changed = Object.keys(ids).some(function (id) {
+      var shown = p ? Math.round(Number(p[ids[id]]) * 10) / 10 : NaN;
+      return Number(document.getElementById(id).value) !== shown;
+    });
+    if (changed) {
+      Object.keys(ids).forEach(function (id) {
+        body[ids[id]] = Number(document.getElementById(id).value);
+      });
+    }
     busy('Сохраняю…');
     send('/api/products/' + state.cat.product, {
       method: 'PATCH',

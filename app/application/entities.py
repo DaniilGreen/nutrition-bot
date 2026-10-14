@@ -52,6 +52,9 @@ class RecipeItem:
     density: Density
     product_id: int | None = None
     is_estimate: bool = True
+    # INV-14 решаем по словам человека («пиво Heineken»), а не по имени в каталоге («Heineken»):
+    # иначе этанол уходил бы в Атвотер. Решение фиксируем вместе с составом.
+    alcohol: bool = False
 
 
 @dataclass

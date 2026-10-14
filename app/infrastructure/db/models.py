@@ -115,6 +115,7 @@ class RecipeItemORM(Base):
     fat_per_100g: Mapped[float] = mapped_column(Float)
     carb_per_100g: Mapped[float] = mapped_column(Float)
     is_estimate: Mapped[bool] = mapped_column(Boolean, default=True)
+    alcohol: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class MealORM(Base):

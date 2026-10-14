@@ -41,6 +41,7 @@ def upgrade() -> None:
         sa.Column("fat_per_100g", sa.Float(), nullable=False),
         sa.Column("carb_per_100g", sa.Float(), nullable=False),
         sa.Column("is_estimate", sa.Boolean(), nullable=False, server_default=sa.true()),
+        sa.Column("alcohol", sa.Boolean(), nullable=False, server_default=sa.false()),
     )
 
 

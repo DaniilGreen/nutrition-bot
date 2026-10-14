@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from app.domain.nutrition import reconcile_kcal
+from app.domain.nutrition import reconcile_density, reconcile_kcal
 from app.domain.value_objects import Density, Macros
 
 # Физические/санитарные границы.
@@ -59,12 +59,33 @@ def clamp_grams(grams: float) -> float:
 
 
 MAX_BATCH_G = 20000.0  # рецепт — партия, а не порция: 2.5 кг курицы законны
+MAX_YIELD_G = 50000.0  # вес готового: одна граница на бота, API и поле в аппке
 
 
 def clamp_batch_grams(grams: float) -> float:
     """Граммовка ингредиента рецепта (FR-39.7): 1…20 000 г. Граница порции (2000 г) тут не
     годится — «рецепт: 2.5 кг курицы» молча считался как 2 кг (баг 15.10.2026)."""
     return _clamp(grams, MIN_PORTION_G, MAX_BATCH_G)
+
+
+def gate_density(d: Density, *, alcohol: bool) -> Density:
+    """Gate ингредиента рецепта на уровне ПЛОТНОСТИ (INV-11): Атвотер-сверка (кроме алкоголя,
+    INV-14) и границы на 100 г. Не на итогах позиции: потолки порции (5000 ккал, 600 г макроса)
+    резали 3 кг курицы до 112 ккал/100 г вместо 165 — партия не порция (ревью 15.10.2026).
+    Идемпотентна: уже сверенная плотность проходит без изменений."""
+    return clamp_density(d if alcohol else reconcile_density(d))
+
+
+def density_in_bounds(d: Density) -> bool:
+    """Физически возможная плотность. Для рецепта выход за границы значит, что вес готового
+    не сходится с составом (опечатка «вышло 100 г» вместо 1000) — такое отказываем, а не жмём:
+    зажать до 900 ккал/100 г = молча записать невозможное."""
+    if not 0 <= d.kcal_per_100g <= MAX_KCAL_PER_100G:
+        return False
+    return all(
+        0 <= v <= MAX_MACRO_PER_100G
+        for v in (d.protein_per_100g, d.fat_per_100g, d.carb_per_100g)
+    )
 
 
 def clamp_macros(m: Macros) -> Macros:

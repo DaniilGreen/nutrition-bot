@@ -137,3 +137,4 @@ class SetPick:
     grams: float
     src: int | None = None
     product_id: int | None = None
+    name: str | None = None  # при `src`: имя позиции, как её видел клиент — сверка рассинхрона

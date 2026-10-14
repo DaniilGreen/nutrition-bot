@@ -39,10 +39,13 @@ from app.domain.naming import (
 from app.domain.nutrition import macros_for_grams, reconcile_density, split_macros_from_kcal
 from app.domain.plausibility import (
     FALLBACK_DENSITY,
+    MAX_YIELD_G,
     clamp_batch_grams,
     clamp_density,
     clamp_grams,
     clamp_macros,
+    density_in_bounds,
+    gate_density,
     is_alcoholic,
     vet_macros,
 )
@@ -493,6 +496,8 @@ class MealService:
                 if not 0 <= pick.src < len(src.items) or not src.items[pick.src].grams:
                     return None  # чужой индекс — клиент рассинхронился, писать наугад нельзя
                 it = src.items[pick.src]
+                if pick.name is not None and pick.name != it.name_snapshot:
+                    return None  # набор успели обновить с другого устройства
                 items.append(MealItem(
                     name_snapshot=it.name_snapshot, grams=grams,
                     macros=_times(it.macros, grams / it.grams),
@@ -563,7 +568,7 @@ class MealService:
 
     async def prepare_batch(self, parsed: ParsedMessage) -> Product | None:
         """FR-39.1: ингредиенты → рецепт в каталоге. Приём пищи НЕ пишем. Состав сохраняем
-        (FR-39.7) — иначе его потом не поправить."""
+        (FR-39.7) — иначе его потом не поправить. RecipeRejected — вес готового не сходится."""
         items: list[RecipeItem] = []
         for parsed_item in parsed.items:
             # Через каталог: у известного сырья — запиннутая плотность, не свежая выдумка (INV-2).
@@ -585,26 +590,31 @@ class MealService:
                 density=product.density,
                 product_id=product.id,  # None у непиннутого фолбэка — останется снимок
                 is_estimate=product.is_estimate,
+                alcohol=is_alcoholic(parsed_item.name) or is_alcoholic(product.display_name),
             ))
         if not items:
             return None
         total, grams_total, estimate = _cook(items)
+        named = parsed.batch_yield_g
+        if named is not None and not 0 < named <= MAX_YIELD_G:
+            raise RecipeRejected("Вес готового вне разумных пределов — проверь число.")
         # Вес готового: назвали — берём его (при варке вода ушла, масса не равна сумме сырья);
         # не назвали — сумма весов сырья, что для сборки без термообработки ТОЧНО, а не почти.
-        yield_g = parsed.batch_yield_g or grams_total
+        yield_g = named or grams_total
         if yield_g <= 0:
             return None
         portions = parsed.batch_portions if (parsed.batch_portions or 0) > 0 else None
         product = await self._pin_dish(
             (parsed.batch_name or parsed.items[0].name),
-            _density_from(total, yield_g),
+            _recipe_density(total, yield_g),
             unit_weight=round(yield_g / portions, 1) if portions else None,
             estimate=estimate,
         )
         assert product.id is not None
-        await self._products.set_recipe(
-            product.id, Recipe(items=items, yield_g=parsed.batch_yield_g or None)
-        )
+        for it in items:
+            if it.product_id == product.id:
+                it.product_id = None  # рецепт назван как свой ингредиент — не ссылаемся на себя
+        await self._products.set_recipe(product.id, Recipe(items=items, yield_g=named or None))
         return product
 
     async def recipe_view(self, product_id: int) -> Recipe | None:
@@ -614,6 +624,9 @@ class MealService:
         if recipe is None:
             return None
         for it in recipe.items:
+            if it.product_id == product_id:
+                it.product_id = None  # сам себе не ингредиент: только снимок, иначе раздувание
+                continue
             live = await self._products.get_by_id(it.product_id) if it.product_id else None
             if live is not None:
                 it.density, it.is_estimate = live.density, live.is_estimate
@@ -626,10 +639,12 @@ class MealService:
         self, product_id: int, picks: list[SetPick], *, yield_g: float | None
     ) -> Product | None:
         """FR-39.7: новый состав рецепта → пересчёт плотности. Цифры считает сервер: клиент
-        шлёт индекс позиции текущего состава (`src`) или `product_id` из каталога, плюс граммы.
+        шлёт индекс позиции текущего состава (`src`, с именем — сверяем, что это та же позиция)
+        или `product_id` из каталога, плюс граммы.
 
         Меняются будущие записи; съеденное не двигается — в приёмах снапшот (INV-3).
-        None — не рецепт, клиент рассинхронился с составом, пустой состав или чужой продукт.
+        None — не рецепт, состав успели изменить, пустой состав, чужой или несуществующий
+        продукт. RecipeRejected — вес готового вне границ или невозможная плотность.
         """
         recipe_product = await self._products.get_by_id(product_id)
         if recipe_product is None or recipe_product.source != "recipe":
@@ -642,7 +657,11 @@ class MealService:
                 if current is None or not 0 <= pick.src < len(current.items):
                     return None  # индекс мимо состава — писать наугад нельзя
                 it = current.items[pick.src]
-                items.append(RecipeItem(it.name, grams, it.density, it.product_id, it.is_estimate))
+                if pick.name is not None and pick.name != it.name:
+                    return None  # состав успели изменить с другого устройства
+                items.append(RecipeItem(
+                    it.name, grams, it.density, it.product_id, it.is_estimate, it.alcohol
+                ))
             elif pick.product_id is not None:
                 if pick.product_id == product_id:
                     return None  # рецепт не может входить сам в себя
@@ -650,19 +669,30 @@ class MealService:
                 if live is None:
                     return None
                 items.append(RecipeItem(
-                    live.display_name, grams, live.density, live.id, live.is_estimate
+                    live.display_name, grams, live.density, live.id, live.is_estimate,
+                    is_alcoholic(live.display_name),
                 ))
         if not items:
             return None
+        if yield_g is not None and not 0 < yield_g <= MAX_YIELD_G:
+            raise RecipeRejected("Вес готового вне разумных пределов — проверь число.")
         total, grams_total, estimate = _cook(items)
-        clean_yield = (
-            round(clamp_batch_grams(yield_g), 1) if yield_g and yield_g > 0 else None
-        )
+        new_yield = yield_g or grams_total
+        unit_weight = None
+        if recipe_product.unit_weight_g and current is not None:
+            # Партию делили на N порций — после правки порция = новый вес / N, иначе
+            # «1 порция» врала бы ровно на долю изменения (ревью 15.10.2026).
+            old_yield = current.yield_g or sum(i.grams for i in current.items)
+            portions = old_yield / recipe_product.unit_weight_g
+            if portions > 0:
+                unit_weight = round(new_yield / portions, 1)
         updated = await self._products.update_density(
-            product_id, _density_from(total, clean_yield or grams_total),
-            is_estimate=estimate, source="recipe",
+            product_id, _recipe_density(total, new_yield),
+            is_estimate=estimate, unit_weight_g=unit_weight, source="recipe",
         )
-        await self._products.set_recipe(product_id, Recipe(items=items, yield_g=clean_yield))
+        await self._products.set_recipe(
+            product_id, Recipe(items=items, yield_g=round(yield_g, 1) if yield_g else None)
+        )
         return updated
 
     async def _pin_dish(
@@ -790,28 +820,37 @@ def _times(m: Macros, times: float) -> Macros:
 def _cook(items: list[RecipeItem]) -> tuple[Macros, float, bool]:
     """Партия рецепта: КБЖУ, общий вес сырья, есть ли оценочный ингредиент.
 
-    Каждый ингредиент проходит тот же gate, что позиция приёма (INV-11.1, алкоголь — INV-14),
-    до сложения. Сумму Атвотером НЕ пересверяем: она уже сумма выверенного.
+    Gate каждого ингредиента — на уровне ПЛОТНОСТИ (`gate_density`): Атвотер и границы на
+    100 г. Не на итогах позиции — потолки порции резали большие партии (ревью 15.10.2026).
     """
     pot: list[Macros] = []
     grams_total = 0.0
     for it in items:
-        raw = macros_for_grams(it.density, it.grams)
-        pot.append(clamp_macros(raw) if is_alcoholic(it.name) else vet_macros(raw))
+        d = gate_density(it.density, alcohol=it.alcohol or is_alcoholic(it.name))
+        pot.append(macros_for_grams(d, it.grams))
         grams_total += it.grams
     return sum_macros(pot), grams_total, any(it.is_estimate for it in items)
 
 
-def _density_from(total: Macros, grams: float) -> Density:
-    """КБЖУ порции/котла → плотность на 100 г. Границы INV-11.2 — последним словом."""
-    return clamp_density(
-        Density(
-            kcal_per_100g=total.kcal / grams * 100,
-            protein_per_100g=total.protein / grams * 100,
-            fat_per_100g=total.fat / grams * 100,
-            carb_per_100g=total.carb / grams * 100,
-        )
+class RecipeRejected(ValueError):
+    """Рецепт не сходится физически: вес готового вне границ или плотность невозможна.
+    Сообщение — человеку."""
+
+
+def _recipe_density(total: Macros, grams: float) -> Density:
+    """Плотность партии. Вне физических границ — отказ, а не зажим: «вышло 100 г» вместо
+    1000 дало бы 900 ккал и 100 г жира на 100 г — молча записать невозможное нельзя."""
+    raw = Density(
+        kcal_per_100g=total.kcal / grams * 100,
+        protein_per_100g=total.protein / grams * 100,
+        fat_per_100g=total.fat / grams * 100,
+        carb_per_100g=total.carb / grams * 100,
     )
+    if not density_in_bounds(raw):
+        raise RecipeRejected(
+            "Плотность выходит невозможной — скорее всего, вес готового меньше, чем должен быть."
+        )
+    return raw
 
 
 def _canonical_key(llm_key: str, name: str) -> str:

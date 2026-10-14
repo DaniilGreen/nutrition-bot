@@ -305,3 +305,69 @@ async def test_свои_цифры_по_имени_последний_раз_т�
     assert len(rows) == 1 and rows[0].uses == 2
     assert rows[0].item_id == last.items[0].id and rows[0].macros.kcal == 400
     assert await repo.stated_usage(me.id, query="100%") == []
+
+
+# ---------- FR-39.7: состав рецепта на живом Postgres ----------
+
+async def _recipe_product(session, key: str, name: str) -> Product:
+    return await SqlProductRepo(session).create(
+        Product(canonical_key=key, display_name=name, density=_density(180), source="recipe")
+    )
+
+
+async def test_recipe_roundtrip_and_replace(session):
+    from app.application.entities import Recipe, RecipeItem
+
+    repo = SqlProductRepo(session)
+    a = await _product(session, "sql_r_a", "курица")
+    b = await _product(session, "sql_r_b", "майонез", kcal=680)
+    rec = await _recipe_product(session, "sql_r_rec", "курица с мазиком")
+    await repo.set_recipe(rec.id, Recipe(items=[
+        RecipeItem("курица", 1100, a.density, a.id, True),
+        RecipeItem("майонез", 200, b.density, b.id, False, alcohol=False),
+    ], yield_g=1250))
+
+    got = await repo.get_recipe(rec.id)
+    assert [(i.name, i.grams, i.product_id) for i in got.items] == [
+        ("курица", 1100, a.id), ("майонез", 200, b.id),
+    ]
+    assert got.yield_g == 1250
+
+    await repo.set_recipe(rec.id, Recipe(items=[RecipeItem("курица", 900, a.density, a.id)]))
+    again = await repo.get_recipe(rec.id)
+    assert len(again.items) == 1 and again.items[0].grams == 900 and again.yield_g is None
+
+
+async def test_merge_repoints_recipe_ingredients(session):
+    """Слили дубль ингредиента — состав ссылается на выжившего, а не на удалённый id."""
+    from app.application.entities import Recipe, RecipeItem
+
+    repo = SqlProductRepo(session)
+    loser = await _product(session, "sql_m_loser", "майонез домашний", kcal=680)
+    winner = await _product(session, "sql_m_winner", "майонез", kcal=620)
+    rec = await _recipe_product(session, "sql_m_rec", "салат")
+    await repo.set_recipe(rec.id, Recipe(items=[RecipeItem("майонез домашний", 100,
+                                                           loser.density, loser.id)]))
+
+    await repo.merge(winner.id, [loser.id])
+    session.expire_all()
+
+    assert (await repo.get_recipe(rec.id)).items[0].product_id == winner.id
+
+
+async def test_merge_into_the_recipe_itself_does_not_self_reference(session):
+    """Ингредиент слили в сам рецепт — ссылка обнуляется (ON DELETE SET NULL), а не
+    указывает на рецепт: иначе каждое сохранение раздувало бы плотность."""
+    from app.application.entities import Recipe, RecipeItem
+
+    repo = SqlProductRepo(session)
+    ing = await _product(session, "sql_s_ing", "курица")
+    rec = await _recipe_product(session, "sql_s_rec", "курица")
+    await repo.set_recipe(rec.id, Recipe(items=[RecipeItem("курица", 500, ing.density, ing.id)]))
+
+    await repo.merge(rec.id, [ing.id])
+    session.expire_all()
+
+    item = (await repo.get_recipe(rec.id)).items[0]
+    assert item.product_id is None
+    assert item.density.kcal_per_100g == ing.density.kcal_per_100g  # снимок цел

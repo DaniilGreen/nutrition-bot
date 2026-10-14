@@ -550,3 +550,7 @@ body.ai{padding-bottom:calc(var(--tabbar) + 76px + env(safe-area-inset-bottom))}
   border-radius:var(--r-sm);padding:0 var(--s-2);min-height:40px}
 .srow .gin input{width:64px;background:none;border:0;color:var(--text);font:inherit;
   font-size:var(--f-body-s);text-align:right;outline:none;min-width:0}
+/* Длинное имя продукта в чипе поиска не должно выталкивать шторку вбок (ревью 15.10.2026). */
+.sheet .sh-chips .chip{flex-shrink:1;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+/* Строки «имя — граммы» без потолка на 1100 разносили граммы на 970px от имени (responsive.md). */
+.rcard{max-width:520px}

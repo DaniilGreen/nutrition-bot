@@ -124,10 +124,10 @@ class InMemoryProductRepo:
 
     async def merge(self, winner_id: int, loser_ids: list[int]) -> int:
         losers = [i for i in loser_ids if i != winner_id]
-        for r in self._recipes.values():  # FR-39.7: состав ссылается на выжившего
-            for it in r.items:
+        for rid, r in self._recipes.items():  # FR-39.7: состав ссылается на выжившего,
+            for it in r.items:                   # кроме состава самого выжившего (SET NULL)
                 if it.product_id in losers:
-                    it.product_id = winner_id
+                    it.product_id = None if rid == winner_id else winner_id
         for i in losers:
             self._recipes.pop(i, None)  # ON DELETE CASCADE
         moved = sum(self._uses.pop(i, 0) for i in losers)

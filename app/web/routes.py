@@ -25,6 +25,7 @@ from app.application.body_scans import BodyScanService, ScanCheck, from_reading
 from app.application.coach import LimitReached, clean_history
 from app.application.dto import SetPick, Unit
 from app.application.entities import Recipe, StatedUse, User
+from app.application.meal_service import RecipeRejected
 from app.application.results import (
     BodyScanRead,
     ClarificationNeeded,
@@ -47,6 +48,7 @@ from app.domain.goals import Goal
 from app.domain.goals import edit_goal as consistent_goal
 from app.domain.label_portion import label_grams
 from app.domain.plate import MAX_COMPONENTS
+from app.domain.plausibility import MAX_BATCH_G, MAX_YIELD_G, gate_density, is_alcoholic
 from app.domain.prefs import day_start, sanitize
 from app.domain.prefs import merge as merge_prefs
 from app.domain.timeframe import local_date
@@ -1126,6 +1128,45 @@ async def sets(user: CurrentUser, assistant: CurrentAssistant) -> dict[str, Any]
     }
 
 
+_INT4 = 2**31 - 1
+
+
+def _id(v: Any) -> int:
+    """Целый id из JSON. bool — подкласс int в Python, «1.5» и «"0"» — не id: всё это отказ,
+    а не тихое int(1.5) = 1. Верхняя граница — int4, иначе asyncpg падает 500 (ревью 15.10)."""
+    if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= _INT4:
+        raise ValueError("id должен быть целым")
+    return v
+
+
+def _picks(raw: Any, *, max_items: int, max_grams: float) -> list[SetPick]:
+    """Позиции набора/рецепта: ровно одно из `src`/`product_id`, граммы в границах.
+    Любая кривизна — ValueError, ловится как 400 (не 500)."""
+    if not isinstance(raw, list) or not 1 <= len(raw) <= max_items:
+        raise ValueError("состав пуст или слишком длинный")
+    picks: list[SetPick] = []
+    for x in raw:
+        if not isinstance(x, dict):
+            raise ValueError("позиция — не объект")
+        g = x.get("grams")
+        if isinstance(g, bool) or not isinstance(g, (int, float)):
+            raise ValueError("граммы — не число")
+        grams = float(g)
+        if not 0 < grams <= max_grams:  # NaN и бесконечность сюда не проходят
+            raise ValueError("граммы вне границ")
+        src, pid = x.get("src"), x.get("product_id")
+        if (src is None) == (pid is None):
+            raise ValueError("ровно одно из src/product_id")
+        name = x.get("name")
+        picks.append(SetPick(
+            grams=grams,
+            src=_id(src) if src is not None else None,
+            product_id=_id(pid) if pid is not None else None,
+            name=str(name)[:255] if isinstance(name, str) else None,
+        ))
+    return picks
+
+
 @router.post("/meals/{meal_id}/template")
 async def save_set(
     meal_id: int, body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant
@@ -1149,22 +1190,11 @@ async def log_set(
     сервер — граница доверия: присланным ккал не верим, их тут даже нет в теле."""
     _throttle(request, user, "meals", limit=20, window=60)
     name = str(body.get("name") or "").strip()
-    raw = body.get("items")
-    if not name or not isinstance(raw, list) or not 1 <= len(raw) <= 30:
+    if not name:
         raise bad_request("bad_set", "Нужны имя набора и состав.")
-    picks: list[SetPick] = []
     try:
-        for x in raw:
-            grams = float(x["grams"])
-            src, pid = x.get("src"), x.get("product_id")
-            if not 0 < grams <= 5000 or (src is None) == (pid is None):
-                raise ValueError("ровно одно из src/product_id и вес в границах")
-            picks.append(SetPick(
-                grams=grams,
-                src=int(src) if src is not None else None,
-                product_id=int(pid) if pid is not None else None,
-            ))
-    except (KeyError, TypeError, ValueError) as exc:
+        picks = _picks(body.get("items"), max_items=30, max_grams=5000)
+    except (TypeError, ValueError, OverflowError) as exc:
         raise bad_request("bad_set", "Состав набора не разобрать.") from exc
     if idem.replay is not None:
         return idem.replay
@@ -1220,45 +1250,40 @@ def _recipe_json(r: Recipe | None) -> dict[str, Any] | None:
                 "name": i.name,
                 "grams": i.grams,
                 "product_id": i.product_id,
-                # Текущая плотность ингредиента: ею же считает сервер, поэтому предпросмотр
-                # в листе совпадает с результатом (MA-INV-68).
-                "kcal_per_100g": round(i.density.kcal_per_100g, 2),
-                "protein_per_100g": round(i.density.protein_per_100g, 2),
-                "fat_per_100g": round(i.density.fat_per_100g, 2),
-                "carb_per_100g": round(i.density.carb_per_100g, 2),
+                # Текущая плотность ингредиента ПОСЛЕ того же gate, что применит сервер, —
+                # предпросмотр в листе совпадает с результатом (MA-INV-68).
+                "kcal_per_100g": round(g.kcal_per_100g, 2),
+                "protein_per_100g": round(g.protein_per_100g, 2),
+                "fat_per_100g": round(g.fat_per_100g, 2),
+                "carb_per_100g": round(g.carb_per_100g, 2),
             }
             for i in r.items
+            for g in [gate_density(i.density, alcohol=i.alcohol or is_alcoholic(i.name))]
         ],
     }
 
 
 @router.put("/products/{product_id}/recipe")
 async def edit_recipe(
-    product_id: int, body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant
+    product_id: int, body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant,
+    request: Request,
 ) -> dict[str, Any]:
     """FR-39.7: новый состав рецепта. Клиент шлёт ЧТО и СКОЛЬКО, плотность считает сервер."""
-    raw = body.get("items")
-    if not isinstance(raw, list) or not 1 <= len(raw) <= 50:
-        raise bad_request("bad_recipe", "Нужен состав: от 1 до 50 ингредиентов.")
-    picks: list[SetPick] = []
+    _throttle(request, user, "products", limit=20, window=60)
     try:
-        for x in raw:
-            grams = float(x["grams"])
-            src, pid = x.get("src"), x.get("product_id")
-            if not 0 < grams <= 20000 or (src is None) == (pid is None):
-                raise ValueError("ровно одно из src/product_id и вес в границах")
-            picks.append(SetPick(
-                grams=grams,
-                src=int(src) if src is not None else None,
-                product_id=int(pid) if pid is not None else None,
-            ))
-        yield_raw = body.get("yield_g")
-        yield_g = float(yield_raw) if yield_raw not in (None, "") else None
-        if yield_g is not None and not 0 < yield_g <= 50000:
+        picks = _picks(body.get("items"), max_items=50, max_grams=MAX_BATCH_G)
+        y = body.get("yield_g")
+        if y is not None and (isinstance(y, bool) or not isinstance(y, (int, float))):
+            raise ValueError("вес готового — не число")
+        yield_g = float(y) if y else None
+        if yield_g is not None and not 0 < yield_g <= MAX_YIELD_G:
             raise ValueError("вес готового вне границ")
-    except (KeyError, TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise bad_request("bad_recipe", "Состав рецепта не разобрать.") from exc
-    updated = await assistant.edit_recipe(product_id, picks, yield_g=yield_g)
+    try:
+        updated = await assistant.edit_recipe(product_id, picks, yield_g=yield_g)
+    except RecipeRejected as exc:
+        raise bad_request("bad_recipe", str(exc)) from exc
     if updated is None:
         raise bad_request(
             "bad_recipe", "Рецепт не найден или его состав изменился — открой карточку заново."

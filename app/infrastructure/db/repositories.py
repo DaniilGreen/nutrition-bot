@@ -295,7 +295,7 @@ class SqlProductRepo:
                     density=Density(
                         r.kcal_per_100g, r.protein_per_100g, r.fat_per_100g, r.carb_per_100g
                     ),
-                    product_id=r.product_id, is_estimate=r.is_estimate,
+                    product_id=r.product_id, is_estimate=r.is_estimate, alcohol=r.alcohol,
                 )
                 for r in rows
             ],
@@ -313,6 +313,7 @@ class SqlProductRepo:
                 fat_per_100g=it.density.fat_per_100g,
                 carb_per_100g=it.density.carb_per_100g,
                 is_estimate=it.is_estimate,
+                alcohol=it.alcohol,
             ))
         orm = await self._s.get(ProductORM, product_id)
         if orm is not None:
@@ -390,7 +391,10 @@ class SqlProductRepo:
         # молча брал бы устаревший снимок плотности.
         await self._s.execute(
             update(RecipeItemORM)
-            .where(RecipeItemORM.product_id.in_(losers))
+            # Кроме состава самого выжившего: иначе рецепт стал бы ингредиентом себя, и каждое
+            # сохранение раздувало бы плотность. Его строки обнулит ON DELETE SET NULL —
+            # останется снимок плотности.
+            .where(RecipeItemORM.product_id.in_(losers), RecipeItemORM.recipe_id != winner_id)
             .values(product_id=winner_id)
         )
         await self._s.execute(delete(ProductORM).where(ProductORM.id.in_(losers)))

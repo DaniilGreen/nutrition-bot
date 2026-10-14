@@ -170,3 +170,179 @@ async def test_edit_refuses_bad_input() -> None:
     assert await edit(pid, SetPick(grams=100, product_id=99999)) is None
     assert await edit(plain.id, SetPick(grams=100, src=0)) is None, "не рецепт так не правят"
     assert await edit(pid) is None
+
+
+# ---------- по итогам ревью 15.10.2026 ----------
+
+def _single(name: str, key: str, grams: float, d: tuple) -> ParsedMessage:
+    return ParsedMessage(
+        intent=Intent.BATCH, confidence=0.9, batch_name=name,
+        items=[_ing(name, key, grams, *d)],
+    )
+
+
+async def test_big_batch_density_is_not_capped_like_a_portion() -> None:
+    """Регрессия ревью: потолки ПОРЦИИ (5000 ккал, 600 г белка на позицию) резали партию —
+    3 кг курицы давали 112 ккал / 20 г белка на 100 г вместо 165 / 31."""
+    assistant, users, _ = _build(StubNlu(_single("курица партия", "chicken_batch", 3000,
+                                                 (165, 31, 3.6, 0))))
+    user = await _new_user(users)
+
+    saved = await assistant.process(user, "рецепт курица партия: 3 кг курицы")
+
+    d = saved.product.density
+    assert abs(d.kcal_per_100g - 165) < 1 and abs(d.protein_per_100g - 31) < 0.1
+
+
+async def test_batch_with_two_ingredients_is_exact_at_scale() -> None:
+    assistant, users, _ = _build(StubNlu(_recipe(chicken_g=2500, mayo_g=200)))
+    user = await _new_user(users)
+
+    saved = await assistant.process(user, "рецепт курица с мазиком: …")
+
+    d = saved.product.density
+    assert abs(d.kcal_per_100g - (2500 * 1.65 + 200 * 6.8) / 2700 * 100) < 1
+    assert abs(d.protein_per_100g - (2500 * 0.31 + 200 * 0.01) / 2700 * 100) < 0.1
+
+
+async def test_ingredient_gate_reconciles_and_spares_alcohol() -> None:
+    """INV-11 на уровне плотности: «400 ккал при 10 г белка» сверяется Атвотером до 40;
+    водка (INV-14) Атвотером не трогается."""
+    weird = _single("смесь", "weird_mix", 100, (400, 10, 0, 0))
+    vodka = _single("водка", "vodka", 500, (235, 0, 0, 0.1))
+    assistant, users, _ = _build(StubNlu(weird, vodka))
+    user = await _new_user(users)
+
+    a = await assistant.process(user, "рецепт смесь: …")
+    b = await assistant.process(user, "рецепт водка: …")
+
+    assert abs(a.product.density.kcal_per_100g - 40) < 1
+    assert abs(b.product.density.kcal_per_100g - 235) < 1
+
+
+async def test_branded_beer_keeps_its_ethanol() -> None:
+    """INV-14 по словам человека: «пиво Heineken» резолвится в продукт этикетки «Heineken»,
+    в имени которого алкоголя нет, — этанол всё равно не уходит в Атвотер."""
+    beer_parse = _ing("пиво Heineken", "heineken", 500, 42, 0.5, 0, 3.2)
+    stew = ParsedMessage(intent=Intent.BATCH, confidence=0.9, batch_name="свинина в пиве",
+                         items=[_ing("свинина", "pork", 1000, 250, 17, 20, 0), beer_parse])
+    assistant, users, products = _build(StubNlu(stew))
+    await products.create(Product(canonical_key="heineken", display_name="Heineken",
+                                  density=Density(42, 0.5, 0, 3.2), source="label",
+                                  is_estimate=False))
+    user = await _new_user(users)
+
+    saved = await assistant.process(user, "рецепт свинина в пиве: …")
+
+    assert abs(saved.product.density.kcal_per_100g - (1000 * 2.5 + 500 * 0.42) / 1500 * 100) < 1
+
+
+async def test_edit_inherits_estimate_from_ingredients() -> None:
+    assistant, users, products = _build(StubNlu(_recipe()))
+    user = await _new_user(users)
+    saved = await assistant.process(user, "рецепт курица с мазиком: …")
+    curated = await products.create(Product(
+        canonical_key="rice", display_name="рис отварной", density=Density(130, 2.7, 0.3, 28),
+        source="curated", is_estimate=False,
+    ))
+
+    rid = saved.product.id
+    mixed = await assistant.edit_recipe(
+        rid, [SetPick(grams=500, src=0), SetPick(grams=500, product_id=curated.id)], yield_g=None
+    )
+    # Фейк отдаёт тот же объект продукта — снимаем значение сразу, до следующей правки.
+    mixed_estimate = mixed.is_estimate
+    clean = await assistant.edit_recipe(rid, [SetPick(grams=500, src=1)], yield_g=None)
+
+    assert mixed_estimate is True, "оценочная курица в составе — рецепт с «≈»"
+    assert clean.is_estimate is False, "только выверенный рис — «≈» снимается"
+
+
+async def test_plain_product_is_never_edited_as_a_recipe() -> None:
+    """M4: правка по чужому id не трогает обычный продукт."""
+    assistant, users, products = _build(StubNlu(_recipe()))
+    user = await _new_user(users)
+    await assistant.process(user, "рецепт курица с мазиком: …")
+    plain = await products.get_by_key("chicken_baked")
+    mayo = await products.get_by_key("mayo_home")
+
+    assert await assistant.edit_recipe(plain.id, [SetPick(grams=100, product_id=mayo.id)],
+                                       yield_g=None) is None
+    after = await products.get_by_id(plain.id)
+    assert after.source != "recipe" and after.density.kcal_per_100g == 165
+
+
+async def test_recipe_merged_with_its_own_ingredient_does_not_inflate() -> None:
+    """Слили ингредиент в сам рецепт — ссылка на себя обнуляется, плотность не растёт
+    от сохранения к сохранению."""
+    assistant, users, products = _build(StubNlu(_recipe()))
+    user = await _new_user(users)
+    saved = await assistant.process(user, "рецепт курица с мазиком: …")
+    rid = saved.product.id
+    chicken = await products.get_by_key("chicken_baked")
+    await assistant.merge_products(rid, [chicken.id])
+
+    picks = [SetPick(grams=1100, src=0), SetPick(grams=200, src=1)]
+    first = await assistant.edit_recipe(rid, picks, yield_g=None)
+    second = await assistant.edit_recipe(rid, picks, yield_g=None)
+
+    assert (await assistant.recipe_of(rid)).items[0].product_id is None
+    assert abs(first.density.kcal_per_100g - second.density.kcal_per_100g) < 0.01
+
+
+async def test_portion_weight_follows_the_new_yield() -> None:
+    """Партию делили на 4 — после правки порция = новый вес / 4, а не старые 500 г."""
+    plov = ParsedMessage(intent=Intent.BATCH, confidence=0.9, batch_name="плов", batch_portions=4,
+                         items=[_ing("рис", "rice_raw", 1000, 130, 2.7, 0.3, 28),
+                                _ing("свинина", "pork", 1000, 250, 17, 20, 0)])
+    assistant, users, _ = _build(StubNlu(plov))
+    user = await _new_user(users)
+    saved = await assistant.process(user, "рецепт плов: … на 4 порции")
+    assert saved.product.unit_weight_g == 500
+
+    updated = await assistant.edit_recipe(
+        saved.product.id, [SetPick(grams=1000, src=0), SetPick(grams=1000, src=1)], yield_g=1600
+    )
+
+    assert updated.unit_weight_g == 400
+
+
+async def test_impossible_yield_is_refused_not_clamped() -> None:
+    from app.application.meal_service import RecipeRejected
+
+    assistant, users, _ = _build(StubNlu(_recipe()))
+    user = await _new_user(users)
+    saved = await assistant.process(user, "рецепт курица с мазиком: …")
+    picks = [SetPick(grams=1100, src=0), SetPick(grams=200, src=1)]
+
+    for bad_yield in (100, 60000):
+        try:
+            await assistant.edit_recipe(saved.product.id, picks, yield_g=bad_yield)
+        except RecipeRejected:
+            continue
+        raise AssertionError(f"вес готового {bad_yield} г прошёл молча")
+
+
+async def test_stale_position_is_refused() -> None:
+    """Состав переписали с другого устройства — позиция №0 уже другая: отказ, а не подмена."""
+    assistant, users, _ = _build(StubNlu(_recipe()))
+    user = await _new_user(users)
+    saved = await assistant.process(user, "рецепт курица с мазиком: …")
+
+    stale = await assistant.edit_recipe(
+        saved.product.id, [SetPick(grams=500, src=0, name="майонез домашний")], yield_g=None
+    )
+
+    assert stale is None
+
+
+async def test_manual_density_fix_keeps_the_recipe() -> None:
+    """Форма «Править» (переименование/плотность) не превращает рецепт в обычный продукт."""
+    assistant, users, _ = _build(StubNlu(_recipe()))
+    user = await _new_user(users)
+    saved = await assistant.process(user, "рецепт курица с мазиком: …")
+
+    fixed = await assistant.fix_product_density(saved.product.id, Density(190, 24, 9, 1))
+
+    assert fixed.source == "recipe"
+    assert await assistant.recipe_of(saved.product.id) is not None

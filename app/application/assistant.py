@@ -29,7 +29,7 @@ from app.application.entities import (
     User,
     WeightLog,
 )
-from app.application.meal_service import MealService
+from app.application.meal_service import MealService, RecipeRejected
 from app.application.ports import (
     BugRepo,
     NluPort,
@@ -189,7 +189,10 @@ class Assistant:
 
         if parsed.intent is Intent.BATCH and parsed.items:
             # FR-39: наготовил впрок. Пиним блюдо, приём пищи НЕ пишем — он это не ел.
-            product = await self._meals.prepare_batch(parsed)
+            try:
+                product = await self._meals.prepare_batch(parsed)
+            except RecipeRejected as exc:
+                return Unknown(reason=str(exc))
             if product is None:
                 return Unknown(reason="не понял состав заготовки")
             return DishSaved(product=product, portions=parsed.batch_portions)
@@ -760,7 +763,14 @@ class Assistant:
     async def fix_product_density(self, product_id: int, density: Density) -> Product | None:
         # INV-11.2: ручную правку каталога тоже отсекаем по границам
         # (защита от опечатки «310 г белка»)
-        return await self._products.update_density(product_id, clamp_density(density))
+        current = await self._products.get_by_id(product_id)
+        # Рецепт остаётся рецептом: иначе ручная правка (даже просто «Сохранить» в форме с
+        # переименованием) прятала его состав и закрывала правку состава (ревью 15.10.2026).
+        # Следующая правка состава пересчитает плотность из ингредиентов — это ожидаемо.
+        source = "recipe" if current is not None and current.source == "recipe" else "manual"
+        return await self._products.update_density(
+            product_id, clamp_density(density), source=source
+        )
 
     async def _handle_meal(
         self, user: User, parsed: ParsedMessage, *, raw_input: str, input_type: str,
