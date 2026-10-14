@@ -21,7 +21,7 @@ RAG_THRESHOLD = 0.72
 # показываем, но не сливаем автоматически — решает человек (политика владельца, D-32).
 SAFE_SPREAD = 0.15
 
-SOURCE_RANK = {"curated": 3, "label": 3, "manual": 2, "llm": 0}
+SOURCE_RANK = {"curated": 3, "label": 3, "manual": 2, "recipe": 2, "llm": 0}
 
 _NUM_SUFFIX = re.compile(r"_[0-9]+$")
 

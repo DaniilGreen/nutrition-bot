@@ -129,7 +129,7 @@ class Assistant:
     ) -> Result:
         """`day_offset` — день, на который смотрит человек, когда пишет (0 = сегодня,
         −1 = вчера). Это ДЕФОЛТ: слово «вчера» в самой фразе его перебивает."""
-        # FR-39.2: своё блюдо («свёрток») — повторяем сохранённый состав, в LLM не идём вообще.
+        # FR-39.2: свой набор («курица в лаваше») — повторяем сохранённый состав, в LLM не идём.
         # Проверка ДО разбора: знакомая еда не должна стоить ни денег, ни задержки.
         if input_type == "text" and not photo:
             match = await self._meals.template_match(user, text)
@@ -559,7 +559,8 @@ class Assistant:
         """Страница каталога: продукты, всего, сколько раз ел, привычный вес, последний раз.
 
         `recent`/`frequent` — только то, что человек ел, по последнему разу или по числу раз
-        (§6.25); `name` — весь каталог по алфавиту."""
+        (§6.25); `mine` — свои рецепты (FR-39.5), их видно сразу, даже несъеденные;
+        `name` — весь каталог по алфавиту."""
         uid = _require_id(user)
         items: list[Product | StatedUse]
         if sort in ("recent", "frequent"):
@@ -588,7 +589,8 @@ class Assistant:
             total = ptotal + len(stated)
         else:
             items, total = await self._products.list_page(
-                offset=offset, limit=limit, query=query
+                offset=offset, limit=limit, query=query,
+                source="recipe" if sort == "mine" else None,
             )
             uses = await self._products.usage_counts([p.id for p in items if p.id], user_id=uid)
         # Привычная граммовка — из истории самого человека: без неё тап по
@@ -599,6 +601,10 @@ class Assistant:
             uid, [p.id for p in items if isinstance(p, Product) and p.id]
         )
         return items, total, uses, grams, last
+
+    async def sets(self, user: User) -> list[Meal]:
+        """FR-39.5: свои наборы для «Моё»."""
+        return await self._meals.sets(user)
 
     async def last_use_of(self, user: User, product_id: int) -> tuple[datetime, float] | None:
         """Когда и сколько человек ел продукт в последний раз — для карточки (§6.25)."""

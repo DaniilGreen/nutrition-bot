@@ -48,9 +48,9 @@ _JUNK_KEYS = frozenset(
 _MIN_KEY_LEN = 3
 _CORRECTION_LOOKBACK = 10  # сколько недавних записей просматриваем для «удали X»
 _CORRECTION_NAME_THRESHOLD = 0.8  # порог нечёткого совпадения имени при удалении
-# FR-39.2: «2 свёртка», «свёрток 2 шт». Только 1–2 цифры: «свёрток 150 г» — это вес, не штуки.
+# FR-39.2: «2 курицы в лаваше», «курица в лаваше 2 шт». Только 1–2 цифры: «… 150 г» — вес, не штуки.
 _COUNT_RE = re.compile(r"(?:^|(?<=\s))(\d{1,2})\s*(?:шт\.?)?(?=\s|$)")
-_MAX_TIMES = 10  # больше — скорее опечатка, чем десять свёртков за раз
+_MAX_TIMES = 10  # больше — скорее опечатка, чем десять порций за раз
 class MealService:
     def __init__(self, products: ProductRepo, meals: MealRepo, clock: Clock = utcnow) -> None:
         self._products = products
@@ -131,7 +131,7 @@ class MealService:
             user_is_specific = _coverage(product.display_name, parsed_item.name) >= 0.99
             display_name = (
                 product.display_name
-                if product.source in ("curated", "manual") and not user_is_specific
+                if product.source in ("curated", "manual", "recipe") and not user_is_specific
                 else parsed_item.name
             )
             # INV-7.1: вычли несъедобное — скажи об этом. Человек назвал 400 г с костью,
@@ -437,8 +437,8 @@ class MealService:
     async def save_template(self, user: User, meal_id: int, name: str) -> Meal | None:
         """FR-39.2: дать записанному приёму имя блюда своей сборки.
 
-        Продукт в каталоге НЕ заводим: сборка — это состав, а не плотность. Умножать свёрток
-        на вес нельзя (тяжёлый свёрток ≠ больше лаваша), а состав нужен, чтобы его править.
+        Продукт в каталоге НЕ заводим: сборка — это состав, а не плотность. Умножать набор
+        на вес нельзя (больше начинки ≠ больше лаваша), а состав нужен, чтобы его править.
         Сам приём не трогаем (INV-3) — добавляется только ярлык.
         """
         clean = name.strip()[:64]
@@ -454,18 +454,27 @@ class MealService:
     async def repeat_template(
         self, user: User, name: str, *, day_offset: int = 0, times: int = 1
     ) -> Meal | None:
-        """FR-39.2: «свёрток» → повторить самый свежий приём с этим именем. Без LLM."""
+        """FR-39.2: «курица в лаваше» → повторить самый свежий приём с этим именем. Без LLM."""
         src = await self._meals.latest_by_template(_require_id(user), name.strip())
         if src is None or src.id is None:
             return None
         return await self.repeat(user, src.id, day_offset=day_offset, times=times)
 
+    async def sets(self, user: User) -> list[Meal]:
+        """FR-39.5: по одному на имя — самый свежий состав (он и есть набор), свежие первыми."""
+        uid = _require_id(user)
+        found = [
+            await self._meals.latest_by_template(uid, name)
+            for name in await self._meals.template_names(uid)
+        ]
+        return sorted((m for m in found if m is not None), key=lambda m: m.eaten_at, reverse=True)
+
     async def template_match(self, user: User, text: str) -> tuple[str, int] | None:
         """Сообщение ЦЕЛИКОМ — своё блюдо? Возвращает (имя, сколько штук) или None.
 
-        СИММЕТРИЧНО, как RAG (INV-5.1): «свёрток и кофе» содержит «свёрток», но им не является.
+        СИММЕТРИЧНО, как RAG (INV-5.1): «курица в лаваше и кофе» содержит набор, но им не является.
         Асимметрия засчитала бы совпадение и молча выкинула кофе — съеденное пропало бы из дня.
-        Число рядом с именем — штуки: «2 свёртка», «свёрток 2 шт».
+        Число рядом с именем — штуки: «2 курицы в лаваше», «курица в лаваше 2 шт».
         """
         probe = text.strip()
         if not probe or len(probe) > 64:
@@ -536,7 +545,8 @@ class MealService:
         if existing is not None and _names_compatible(clean, existing.display_name):
             assert existing.id is not None
             updated = await self._products.update_density(
-                existing.id, density, is_estimate=estimate, unit_weight_g=unit_weight
+                existing.id, density, is_estimate=estimate, unit_weight_g=unit_weight,
+                source="recipe",
             )
             if updated is not None:
                 return updated
@@ -546,7 +556,9 @@ class MealService:
                 display_name=clean,
                 density=density,
                 unit_weight_g=unit_weight,
-                source="manual",  # выведено из взвешенного, а не угадано (FR-39)
+                # Свой источник, а не "manual": иначе рецепт не отличить от продукта,
+                # который просто поправили руками (FR-15), и «Моё» не собрать (FR-39.5).
+                source="recipe",
                 is_estimate=estimate,
             )
         )

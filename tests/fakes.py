@@ -95,9 +95,11 @@ class InMemoryProductRepo:
         return [p for p in self._by_key.values() if p.category == category]
 
     async def list_page(
-        self, *, offset: int, limit: int, query: str | None = None
+        self, *, offset: int, limit: int, query: str | None = None, source: str | None = None
     ) -> tuple[list[Product], int]:
         xs = list(self._by_key.values())
+        if source:
+            xs = [p for p in xs if p.source == source]
         if query:
             q = query.lower()
             xs = [p for p in xs if q in p.display_name.lower() or q in p.canonical_key.lower()]
@@ -147,13 +149,13 @@ class InMemoryProductRepo:
 
     async def update_density(
         self, product_id: int, density: Density, *,
-        is_estimate: bool = False, unit_weight_g: float | None = None,
+        is_estimate: bool = False, unit_weight_g: float | None = None, source: str = "manual",
     ) -> Product | None:
         for p in self._by_key.values():
             if p.id == product_id:
                 p.density = density
                 p.is_estimate = is_estimate
-                p.source = "manual"
+                p.source = source
                 if unit_weight_g is not None:
                     p.unit_weight_g = unit_weight_g
                 return p

@@ -1031,7 +1031,7 @@ async def repeat_item(
     return idem.remember(logged_json(result, user.timezone))
 
 
-SORTS = ("recent", "frequent", "name")
+SORTS = ("recent", "frequent", "mine", "name")
 
 
 def _last_json(last: tuple[datetime, float] | None, user: User) -> dict[str, Any]:
@@ -1061,7 +1061,7 @@ async def products(
     if offset < 0 or limit < 1 or limit > 100:
         raise bad_request("bad_paging", "Страница вне диапазона.")
     if sort not in SORTS:
-        raise bad_request("bad_sort", "Сортировка: recent, frequent или name.")
+        raise bad_request("bad_sort", "Сортировка: recent, frequent, mine или name.")
     items, total, uses, grams, last = await assistant.catalog_page(
         user, offset=offset, limit=limit, query=(q or "").strip() or None, sort=sort
     )
@@ -1094,6 +1094,31 @@ def _stated_json(s: StatedUse, user: User) -> dict[str, Any]:
         "carb_g": round(s.macros.carb, 1),
         "uses": s.uses,
     } | _last_json((s.last_at, s.grams), user)
+
+
+@router.get("/sets")
+async def sets(user: CurrentUser, assistant: CurrentAssistant) -> dict[str, Any]:
+    """FR-39.5: свои наборы для «Моё». Состав — чтобы было видно, что внутри, без захода."""
+    return {
+        "items": [
+            {
+                "name": m.template_name,
+                "kcal": round(m.totals.kcal, 1),
+                "protein_g": round(m.totals.protein, 1),
+                "fat_g": round(m.totals.fat, 1),
+                "carb_g": round(m.totals.carb, 1),
+                "items": [
+                    {
+                        "name": i.name_snapshot,
+                        "grams": round(i.grams, 1),
+                        "kcal": round(i.macros.kcal, 1),
+                    }
+                    for i in m.items
+                ],
+            }
+            for m in await assistant.sets(user)
+        ]
+    }
 
 
 @router.get("/products/{product_id}")

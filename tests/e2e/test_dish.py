@@ -123,6 +123,7 @@ async def test_batch_phrase_divides_the_pot_and_logs_no_meal() -> None:
 
     assert type(result).__name__ == "DishSaved"
     assert result.product.unit_weight_g == (1100 + 300 + 400) / 8  # 225 г
+    assert result.product.source == "recipe", "без своей метки рецепт не найти в «Моё» (FR-39.5)"
     day = await assistant.today(user)
     assert day.meals_count == 0, "заготовка — это не съеденное, день трогать нельзя"
 
@@ -165,6 +166,7 @@ async def test_cooking_the_same_dish_again_updates_it() -> None:
     assert type(result).__name__ == "DishSaved"
     keys = await products.all_keys()
     assert "соус_2" not in keys, "дубль заводить нельзя — обновляем существующее блюдо"
+    assert result.product.source == "recipe", "повторная готовка не делает рецепт «исправленным»"
     assert result.product.density.kcal_per_100g < 680  # разбавили водой — плотность упала
 
 

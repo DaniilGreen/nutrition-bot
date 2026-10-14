@@ -93,7 +93,7 @@ class NluResult(BaseModel):
     )
     batch_portions: int | None = Field(
         default=None,
-        description="intent=batch: на сколько равных порций разложено («на 8 свёртков», "
+        description="intent=batch: на сколько равных порций разложено («на 8 порций», "
         "«6 контейнеров»). null, если число порций не названо.",
     )
     confidence: float = Field(description="Общая уверенность разбора, 0..1")

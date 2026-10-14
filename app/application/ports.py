@@ -98,7 +98,7 @@ class ProductRepo(Protocol):
 
     async def update_density(
         self, product_id: int, density: Density, *,
-        is_estimate: bool = False, unit_weight_g: float | None = None,
+        is_estimate: bool = False, unit_weight_g: float | None = None, source: str = "manual",
     ) -> Product | None:
         """Ручная правка каталога (FR-15) и перерасчёт заготовки (FR-39).
         `is_estimate` по умолчанию False — правка руками снимает «≈»; заготовка
@@ -110,7 +110,7 @@ class ProductRepo(Protocol):
         ...
 
     async def list_page(
-        self, *, offset: int, limit: int, query: str | None = None
+        self, *, offset: int, limit: int, query: str | None = None, source: str | None = None
     ) -> tuple[list[Product], int]:
         """Страница каталога и общее число подходящих (§7.2).
 

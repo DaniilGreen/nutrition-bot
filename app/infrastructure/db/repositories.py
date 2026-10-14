@@ -251,7 +251,7 @@ class SqlProductRepo:
 
     async def update_density(
         self, product_id: int, density: Density, *,
-        is_estimate: bool = False, unit_weight_g: float | None = None,
+        is_estimate: bool = False, unit_weight_g: float | None = None, source: str = "manual",
     ) -> Product | None:
         orm = await self._s.get(ProductORM, product_id)
         if orm is None:
@@ -261,7 +261,7 @@ class SqlProductRepo:
         orm.fat_per_100g = density.fat_per_100g
         orm.carb_per_100g = density.carb_per_100g
         orm.is_estimate = is_estimate  # правка руками снимает «≈», заготовка наследует от сырья
-        orm.source = "manual"
+        orm.source = source  # рецепт остаётся рецептом при повторной готовке (FR-39.5)
         if unit_weight_g is not None:
             orm.unit_weight_g = unit_weight_g  # FR-39: перегатовил на другое число порций
         await self._s.flush()
@@ -282,10 +282,13 @@ class SqlProductRepo:
         return f"%{esc}%"
 
     async def list_page(
-        self, *, offset: int, limit: int, query: str | None = None
+        self, *, offset: int, limit: int, query: str | None = None, source: str | None = None
     ) -> tuple[list[Product], int]:
         stmt = select(ProductORM)
         count_stmt = select(func.count()).select_from(ProductORM)
+        if source:  # FR-39.5: «Моё» — только рецепты
+            stmt = stmt.where(ProductORM.source == source)
+            count_stmt = count_stmt.where(ProductORM.source == source)
         if query:
             pattern = self._like(query)
             cond = ProductORM.display_name.ilike(pattern, escape="\\") | (

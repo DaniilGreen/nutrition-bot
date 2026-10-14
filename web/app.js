@@ -737,9 +737,10 @@
 
   var PAGE = 20;
 
-  var SORTS = [['recent', 'Недавние'], ['frequent', 'Частые'], ['name', 'А–Я']];
+  /* FR-39.5: «Моё» вторым — рецепт должен находиться сразу после сохранения, даже несъеденный. */
+  var SORTS = [['recent', 'Недавние'], ['mine', 'Моё'], ['frequent', 'Частые'], ['name', 'А–Я']];
   var WHY = { curated: 'выверено вручную', label: 'с этикетки',
-              manual: 'исправлено тобой', llm: 'оценка модели' };
+              manual: 'исправлено тобой', recipe: 'твой рецепт', llm: 'оценка модели' };
 
   /* Граммовка «по умолчанию» для «+» и шторки: последний раз, иначе привычная. */
   function refGrams(p) { return p.last_grams || p.usual_grams || 100; }
@@ -757,6 +758,19 @@
       '<span class="num kk">' + n(p.kcal) + '<span class="per"> ккал</span></span>' +
       '<button class="plus" data-again-m="' + p.meal_id + '" data-again-i="' + p.item_id + '" ' +
         'aria-label="Записать ' + esc(p.name) + ' ещё раз сегодня">+</button></div>';
+  }
+
+  /* FR-39.5: набор — свой состав. Справа ккал целиком, «+» пишет тот же состав сегодня
+     (сервер узнаёт имя набора до похода в модель — бесплатно и мгновенно). */
+  function setRow(x) {
+    var parts = x.items.map(function (i) { return i.name + ' ' + n(i.grams) + ' г'; }).join(' · ');
+    return '<div class="item2">' +
+      '<div class="body"><span class="nm">' + esc(x.name) +
+        '<span class="badge">набор</span></span>' +
+        '<span class="mic use">' + esc(parts) + '</span></div>' +
+      '<span class="num kk">' + n(x.kcal) + '<span class="per"> ккал</span></span>' +
+      '<button class="plus" data-set="' + esc(x.name) + '" ' +
+        'aria-label="Записать набор ' + esc(x.name) + '">+</button></div>';
   }
 
   function statedSheet(p) {
@@ -792,8 +806,14 @@
     var sort = c.sort || 'recent';
     document.getElementById('title').textContent = 'Продукты';
     loadingFor('cat:list:' + sort);
-    api('/api/products?limit=' + PAGE + '&offset=' + c.offset + '&sort=' + sort +
-        (c.q ? '&q=' + encodeURIComponent(c.q) : ''))
+    var list = api('/api/products?limit=' + PAGE + '&offset=' + c.offset + '&sort=' + sort +
+        (c.q ? '&q=' + encodeURIComponent(c.q) : ''));
+    /* Наборы не листаются страницами (их единицы) и в поиск не попадают — показываем
+       на первой странице «Моё» без запроса. */
+    var withSets = sort === 'mine' && !c.offset && !c.q;
+    (withSets
+      ? Promise.all([list, api('/api/sets')]).then(function (r) { r[0].sets = r[1].items; return r[0]; })
+      : list)
       .then(function (d) {
         c.items = {};
         var lastDay = null;
@@ -801,7 +821,8 @@
           c.items[p.id] = p;
           var est = p.source === 'llm'
             ? '<span class="badge">оценка</span>'
-            : (p.source === 'label' ? '<span class="badge">с этикетки</span>' : '');
+            : p.source === 'label' ? '<span class="badge">с этикетки</span>'
+            : p.source === 'recipe' ? '<span class="badge">рецепт</span>' : '';
           var g = refGrams(p);
           /* §6.25, «Недавние»: группы по дню последнего раза. */
           var head = '';
@@ -824,8 +845,16 @@
             '<span class="num kk">' + n(p.kcal_per_100g) + '<span class="per">/100 г</span></span>' +
             '<button class="plus" data-quick="' + p.id + '" data-grams="' + g + '" ' +
               'aria-label="Записать ' + esc(p.name) + ' ' + n(g) + ' г">+</button></div>';
-        }).join('') || '<div class="state">' +
-          (sort === 'name' || c.q ? 'Ничего не нашлось.' : 'Пока ничего не записано.') + '</div>';
+        }).join('');
+        if (sort === 'mine') {
+          var sets = (d.sets || []).map(setRow).join('');
+          rows = (sets ? '<div class="dayhead">Наборы · ешь целиком</div>' + sets : '') +
+                 (rows ? '<div class="dayhead">Рецепты · берёшь по граммам</div>' + rows : '');
+        }
+        rows = rows || '<div class="state">' +
+          (sort === 'mine' && !c.q
+            ? 'Своего пока нет. Напиши «рецепт …» с ингредиентами — или сохрани набор из записи.'
+            : sort === 'name' || c.q ? 'Ничего не нашлось.' : 'Пока ничего не записано.') + '</div>';
         var hint = d.items.length
           ? '<div class="mic" style="padding:var(--s-2) var(--s-2) 0">' +
             'Тап — выбрать порцию. «+» — записать сразу.</div>'
@@ -3399,6 +3428,23 @@
       }).catch(function (err) {
         oops(err);
         return stay ? rerender() : renderDay();
+      }).then(function () { state.sending = false; });
+    }
+    if (b.dataset.set) {
+      if (state.sending) return;
+      state.sending = true;
+      busy('Записываю…');
+      var sid = 'set:' + b.dataset.set;
+      return send('/api/meals', {
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': keyFor(sid) },
+        body: JSON.stringify({ text: b.dataset.set, days_ago: writeDay() })
+      }).then(function (r) {
+        dropKey(sid);
+        /* FR-39.5: набор пишется с «Продуктов», как «+» у продукта — с вкладки не уводим. */
+        return r.kind === 'logged' ? logged(r, 0) : handle(r);
+      }).catch(function (err) {
+        oops(err);
+        return rerender();
       }).then(function () { state.sending = false; });
     }
     if (b.dataset.say) {

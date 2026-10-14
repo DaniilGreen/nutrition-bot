@@ -90,8 +90,8 @@ async def seed_curated(session_factory: object) -> int:
                 select(ProductORM).where(ProductORM.canonical_key == r["key"])
             )
             existing = res.scalar_one_or_none()
-            if existing is not None and existing.source == "manual":
-                continue  # юзер уже выверил вручную — не перетираем
+            if existing is not None and existing.source in ("manual", "recipe"):
+                continue  # юзер уже выверил вручную (или это его рецепт) — не перетираем
             target = existing or ProductORM(canonical_key=r["key"])
             target.display_name = r["name"]
             target.category = r.get("cat")
