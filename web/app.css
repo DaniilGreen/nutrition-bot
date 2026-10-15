@@ -510,6 +510,8 @@ body.ai{padding-bottom:calc(var(--tabbar) + 76px + env(safe-area-inset-bottom))}
 .where button.on{background:var(--surface-3);color:var(--text);font-weight:600}
 .sheet .ghost{background:var(--surface-2);border:0;color:var(--text);font:inherit;
   border-radius:var(--r-sm);min-height:44px;cursor:pointer}
+.sh-two{display:flex;flex-wrap:wrap;gap:var(--s-2)}
+.sh-two .ghost{flex:1 1 9em}
 .link{background:none;border:0;color:var(--accent);font:inherit;font-size:var(--f-body-s);
   min-height:44px;padding:0 var(--s-1);cursor:pointer}
 .dtiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}

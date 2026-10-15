@@ -349,15 +349,22 @@
     }).then(function (r) {
       closeSheet();
       toast('Рецепт пересчитан: ' + n(r.product.kcal_per_100g) + ' ккал на 100 г.');
-      renderProduct();
+      toCard(sh.id);
     }).catch(function (err) {
       oops(err);
       if (err && err.code === 'recipe_stale') {
         closeSheet();            // состав поменяли с другого устройства — открыть старый
-        return renderProduct();  // снова значило бы упереться в тот же отказ
+        return toCard(sh.id);    // снова значило бы упереться в тот же отказ
       }
       root.classList.remove('working');  // лист остаётся открытым — правку не теряем
     }).then(function () { state.sending = false; });
+  }
+
+  /* Лист рецепта открывают и из карточки, и из шторки в списке (§6.26) — итог смотрим в карточке. */
+  function toCard(id) {
+    state.cat.view = 'product';
+    state.cat.product = id;
+    renderProduct();
   }
 
   var setSearchTimer = null;
@@ -410,9 +417,13 @@
         '<button data-sto="' + sh.from + '" aria-pressed="' + (sh.to === sh.from) + '"' +
           (sh.to === sh.from ? ' class="on"' : '') + '>' + esc(sh.fromLabel) + '</button></div>'
       : '';
+    /* MA §6.26: у рецепта состав — в один тап отсюда, а не через карточку. */
     var extra = sh.src === 'cat' ? ''
       : sh.kind === 'item'
         ? '<button class="ghost" data-sedit="1">Править эту запись</button>'
+      : sh.recipe
+        ? '<div class="sh-two"><button class="ghost" data-srecipe="1">Состав рецепта ›</button>' +
+          '<button class="ghost" data-scard="1">Карточка ›</button></div>'
         : '<button class="ghost" data-scard="1">Карточка продукта ›</button>';
     sheetEl.innerHTML =
       '<div class="sheet-back" data-sclose="1"></div>' +
@@ -526,6 +537,13 @@
       closeSheet();
       state.editItem = item;
       return repaintDay();
+    }
+    if (t.dataset.srecipe) {
+      if (state.sending) return;
+      t.disabled = true;  // чтение, не запись: экран не гасим, шторка ждёт ответа
+      return api('/api/products/' + sh.product).then(function (d) {
+        if (state.sheet === sh) openRecipeSheet(d.product, d.recipe);
+      }).catch(function (err) { t.disabled = false; oops(err); });
     }
     if (t.dataset.scard) {
       var pid = sh.product;
@@ -1103,7 +1121,7 @@
     var last = p.last_days_ago != null
       ? ' · ' + dayName(p.last_days_ago, p.last_date, false) + ' ' + n(p.last_grams) + '\u00a0г' : '';
     openSheet({
-      kind: 'product', product: p.id, title: p.name,
+      kind: 'product', product: p.id, title: p.name, recipe: p.source === 'recipe',
       sub: n(p.kcal_per_100g) + ' ккал / 100 г · ' + (WHY[p.source] || p.source) + last,
       ref: refGrams(p), refLabel: p.last_grams ? 'как в прошлый раз' : 'обычно',
       per: { kcal: p.kcal_per_100g / 100, p: p.protein_per_100g / 100,
