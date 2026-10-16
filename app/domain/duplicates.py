@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from app.domain.naming import _coverage, _names_compatible, _qualifiers
+from app.domain.naming import _coverage, _names_compatible, _prefixes, _qualifiers_t
 
 # Порог, при котором две записи считаются одной едой по симметричному покрытию имён.
 RAG_THRESHOLD = 0.72
@@ -63,10 +63,15 @@ def group(rows: list[Candidate]) -> list[list[Candidate]]:
         )
         if head is None:
             # Ключ не подтверждает — сравниваем имена симметрично (INV-5.1).
+            # Дешёвые точные отсечки до покрытия: разные числа — разная еда (INV-4.3), а без
+            # общего начала слова покрытие заведомо 0 (`_prefixes`). Без них 529 продуктов
+            # сравнивались 4.5 с на каждое открытие «Итогов» (16.10.2026).
+            mine, quals = _prefixes(row.display_name), _qualifiers_t(row.display_name)
             candidates = [
                 g
                 for g in groups
-                if _qualifiers(row.display_name) == _qualifiers(g[0].display_name)
+                if quals == _qualifiers_t(g[0].display_name)
+                and not mine.isdisjoint(_prefixes(g[0].display_name))
                 and min(
                     _coverage(row.display_name, g[0].display_name),
                     _coverage(g[0].display_name, row.display_name),

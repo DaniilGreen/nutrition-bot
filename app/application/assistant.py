@@ -5,6 +5,9 @@
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import weakref
 from datetime import date, datetime
 from statistics import median
 from zoneinfo import ZoneInfo
@@ -87,6 +90,22 @@ from app.domain.spend import month_limit_reached
 from app.domain.value_objects import Density, Macros, sum_macros
 from app.domain.week import WeekBalance
 
+# ponytail: подпись каталога → группы дублей (id). Одна запись на процесс: бот и API считают
+# каждый своё. Потолок — каталог, меняющийся на каждом запросе; тогда кэш бесполезен, но не вреден.
+_GROUPS_MEMO: dict[str, list[list[int]]] = {}
+# Замок на цикл событий, а не один на модуль: asyncio.Lock привязывается к циклу при первой
+# конкуренции, а у тестов цикл свой на каждый тест.
+_GROUPS_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _groups_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _GROUPS_LOCKS.get(loop)
+    if lock is None:
+        lock = _GROUPS_LOCKS[loop] = asyncio.Lock()
+    return lock
 
 class Assistant:
     def __init__(
@@ -740,17 +759,39 @@ class Assistant:
         # Здесь без user_id намеренно: выжившего выбирает общий вес записи
         # в каталоге, а не частота у одного из двоих.
         uses = await self._products.usage_counts([p.id for p in items if p.id])
-        rows = [
-            Candidate(
-                id=p.id, canonical_key=p.canonical_key, display_name=p.display_name,
-                source=p.source, kcal_per_100g=p.density.kcal_per_100g,
-                uses=uses.get(p.id, 0),
-            )
-            for p in items
-            if p.id is not None
-        ]
         by_id = {p.id: p for p in items}
-        return [[by_id[c.id] for c in g] for g in group(rows)], uses
+        # Группы зависят только от id, ключа и имени (domain.duplicates.group). Каталог меняется
+        # редко, а «Итоги» спрашивают группы на каждом открытии и дважды (ккал и белок) —
+        # пересчитываем, только когда подпись каталога сменилась (16.10.2026: было 4.5 с).
+        sig = hashlib.md5(repr(sorted(
+            (p.id, p.canonical_key, p.display_name) for p in items if p.id is not None
+        )).encode()).hexdigest()
+        # Замок: «Итоги» спрашивают группы двумя запросами разом — без него оба считали бы заново.
+        async with _groups_lock():
+            ids = await self._groups_for(sig, items, uses)
+        return [[by_id[i] for i in g if i in by_id] for g in ids], uses
+
+    @staticmethod
+    async def _groups_for(
+        sig: str, items: list[Product], uses: dict[int, int]
+    ) -> list[list[int]]:
+        ids = _GROUPS_MEMO.get(sig)
+        if ids is None:
+            rows = [
+                Candidate(
+                    id=p.id, canonical_key=p.canonical_key, display_name=p.display_name,
+                    source=p.source, kcal_per_100g=p.density.kcal_per_100g,
+                    uses=uses.get(p.id, 0),
+                )
+                for p in items
+                if p.id is not None
+            ]
+            # Попарное сравнение — работа процессора: в потоке, чтобы не держать остальные запросы.
+            found = await asyncio.to_thread(group, rows)
+            ids = [[c.id for c in g] for g in found]
+            _GROUPS_MEMO.clear()
+            _GROUPS_MEMO[sig] = ids
+        return ids
 
     async def merge_products(self, winner_id: int, loser_ids: list[int]) -> int:
         """Слить дубли. История не движется: перепривязывается только связь (INV-3)."""

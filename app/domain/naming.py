@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 # Доля токенов имени, нашедших пару, при которой это одна еда (INV-4.2).
 _NAME_THRESHOLD = 0.72
@@ -44,8 +45,24 @@ _STOP_WORDS = frozenset({"с", "со", "из", "и", "в", "на", "для", "б
 def _name_tokens(name: str) -> list[str]:
     """Слова имени: ё→е, без предлогов и без цифр. Цифры целиком на совести `_qualifiers` —
     иначе общая «3.2» тянет совпадение вверх («кофе с молоком 3.2%» ≈ «молоко 3.2%»)."""
+    return list(_tokens(name))
+
+
+# Кэш по строке имени: группировка дублей сравнивает каталог попарно, и без него каждое имя
+# резалось на слова заново в каждой паре — 529 продуктов, 400 тыс. разборов, 4.5 с на открытие
+# «Итогов» (16.10.2026). Функции чистые, кэш смысла не меняет.
+@lru_cache(maxsize=8192)
+def _tokens(name: str) -> tuple[str, ...]:
     words = re.findall(r"[^\W\d_]+", _PORTION_RE.sub(" ", _norm(name).replace("ё", "е")))
-    return [w for w in words if w not in _STOP_WORDS] or words
+    return tuple([w for w in words if w not in _STOP_WORDS] or words)
+
+
+@lru_cache(maxsize=8192)
+def _prefixes(name: str) -> frozenset[str]:
+    """Первые три буквы каждого слова. `_same_word` совпадает только при общем начале из 3 букв
+    (или полном равенстве, а у равных слов и начало общее), поэтому имена без общих начал
+    точно не совпадут ни одним словом — сравнивать их незачем."""
+    return frozenset(t[:3] for t in _tokens(name))
 
 
 def _same_word(a: str, b: str) -> bool:
@@ -72,7 +89,7 @@ def _coverage(name: str, other: str) -> float:
     светлое» vs «светлое пиво нефильтрованное» = 0.714 при пороге 0.72), а в русском порядок
     свободный; и наоборот, роднила разные слова с общими буквами («жареные»/«варёные» = 0.86).
     """
-    tokens, pool = _name_tokens(name), _name_tokens(other)
+    tokens, pool = _tokens(name), list(_tokens(other))
     if not tokens or not pool:
         return 0.0
     hit = 0
@@ -87,8 +104,13 @@ def _coverage(name: str, other: str) -> float:
 def _qualifiers(name: str) -> list[str]:
     """Числа-квалификаторы имени (жирность «3.2%», «творог 5%») — часть идентичности (INV-4.3).
     Порционные числа вырезаны: «200 г» продукт не различает."""
+    return list(_qualifiers_t(name))
+
+
+@lru_cache(maxsize=8192)
+def _qualifiers_t(name: str) -> tuple[str, ...]:
     stripped = _PORTION_RE.sub(" ", _norm(name).replace(",", "."))
-    return sorted(re.findall(r"\d+[.,]?\d*", stripped))
+    return tuple(sorted(re.findall(r"\d+[.,]?\d*", stripped)))
 
 
 _KEY_RE = re.compile(r"[a-z0-9]+(?:_[a-z0-9]+)+")
