@@ -28,6 +28,7 @@ from app.application.entities import (
     MealItem,
     Product,
     Recipe,
+    RecipeItem,
     StatedUse,
     User,
     WeightLog,
@@ -636,6 +637,39 @@ class Assistant:
     async def sets(self, user: User) -> list[Meal]:
         """FR-39.5: свои наборы для «Моё»."""
         return await self._meals.sets(user)
+
+    async def ingredients_from_text(self, text: str) -> tuple[list[RecipeItem], list[str]]:
+        """FR-39.8: свой ингредиент текстом — тот же разбор, что у записи и «рецепт …», и через
+        каталог. Возвращает закреплённые в каталоге позиции и имена тех, что закрепить не вышло
+        (пустая оценка, INV-11.3): молча подставить фолбэк — неверная плотность навсегда."""
+        known_keys = await self._products.all_keys()
+        parsed = _consolidate(await self._nlu.parse_samples(text, known_keys=known_keys))
+        ok: list[RecipeItem] = []
+        skipped: list[str] = []
+        for item in parsed.items:
+            if item.total_kcal:  # «соус 120 ккал»: плотность из итога без веса не вывести
+                skipped.append(item.name)
+                continue
+            ing = await self._meals.ingredient(item)
+            (ok.append(ing) if ing.product_id is not None else skipped.append(item.name))
+        return ok, skipped
+
+    async def ingredient_from_label(
+        self, image: bytes, *, photo_file_id: str | None = None
+    ) -> RecipeItem | None:
+        """FR-39.8: фото этикетки → продукт с этикеточной плотностью (FR-27). Вес — порция с
+        этикетки, иначе пачка, иначе 100 г; правится цифрами в листе."""
+        if self._vision is None:
+            return None
+        item = await self._vision.read_label(image)
+        if item is None:
+            return None
+        item.from_label = True
+        item.label_photo_id = photo_file_id
+        item.unit = Unit.GRAM
+        item.grams = item.serving_g or item.unit_weight_g or 100.0
+        ing = await self._meals.ingredient(item)
+        return ing if ing.product_id is not None else None
 
     async def recipe_of(self, product_id: int) -> Recipe | None:
         """FR-39.7: состав рецепта для карточки — с текущими плотностями ингредиентов."""

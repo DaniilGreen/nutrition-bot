@@ -342,8 +342,9 @@ class SqlProductRepo:
         if source:  # FR-39.5: «Моё» — только рецепты
             stmt = stmt.where(ProductORM.source == source)
             count_stmt = count_stmt.where(ProductORM.source == source)
-        if query:
-            pattern = self._like(query)
+        # FR-39.8: по словам в любом порядке — «филе кур» находит «куриное филе».
+        for word in (query or "").split():
+            pattern = self._like(word)
             cond = ProductORM.display_name.ilike(pattern, escape="\\") | (
                 ProductORM.canonical_key.ilike(pattern, escape="\\")
             )

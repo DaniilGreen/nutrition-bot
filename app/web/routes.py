@@ -24,7 +24,7 @@ from app.application.assistant import Assistant
 from app.application.body_scans import BodyScanService, ScanCheck, from_reading
 from app.application.coach import LimitReached, clean_history
 from app.application.dto import SetPick, Unit
-from app.application.entities import Recipe, StatedUse, User
+from app.application.entities import Recipe, RecipeItem, StatedUse, User
 from app.application.meal_service import RecipeRejected
 from app.application.results import (
     BodyScanRead,
@@ -1211,6 +1211,52 @@ async def log_set(
     if result is None:
         raise bad_request("bad_set", "Набор не найден или его состав изменился — открой заново.")
     return idem.remember(_result_json(result, user, request, raw_input=name))
+
+
+async def _ingredients_json(
+    assistant: Assistant, items: list[RecipeItem], skipped: list[str]
+) -> dict[str, Any]:
+    out = []
+    for it in items:
+        p = await assistant.get_product(it.product_id or 0)
+        if p is not None:
+            out.append({"product": product_json(p, 0), "grams": round(it.grams, 1)})
+    return {"items": out, "skipped": skipped}
+
+
+@router.post("/ingredients/parse")
+async def ingredients_parse(
+    body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant, request: Request,
+) -> dict[str, Any]:
+    """FR-39.8: свой ингредиент текстом в листе состава. Разбор моделью → каталог; в состав
+    ничего не пишется — лист добавит строки, сохранит человек."""
+    text = str(body.get("text") or "").strip()
+    if not text:
+        raise bad_request("empty_text", "Напиши, что добавить.")
+    if len(text) > 300:
+        raise bad_request("text_too_long", "Слишком длинно — по одному-два продукта.")
+    _throttle(request, user, "ingredients", limit=10, window=60)
+    items, skipped = await assistant.ingredients_from_text(text)
+    return await _ingredients_json(assistant, items, skipped)
+
+
+@router.post("/ingredients/label")
+async def ingredients_label(
+    request: Request, user: CurrentUser, assistant: CurrentAssistant,
+) -> dict[str, Any]:
+    """FR-39.8: ингредиент по фото этикетки (FR-27). Тело — само фото, как у /meals/label."""
+    image = await request.body()
+    if not image:
+        raise bad_request("empty_image", "Фото пустое.")
+    if len(image) > 4_000_000:
+        raise bad_request("image_too_big", "Слишком большое фото — сними ближе.")
+    _throttle(request, user, "label", limit=6, window=60)
+    item = await assistant.ingredient_from_label(image)
+    if item is None:
+        raise bad_request(
+            "label_unread", "Не разобрал этикетку — сфоткай таблицу КБЖУ ближе и чётче."
+        )
+    return await _ingredients_json(assistant, [item], [])
 
 
 @router.get("/products/{product_id}")

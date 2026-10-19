@@ -566,32 +566,34 @@ class MealService:
                 return name, times
         return None
 
+    async def ingredient(self, parsed_item: ParsedItem) -> RecipeItem:
+        """Позиция разбора → ингредиент рецепта через каталог (FR-39.1, FR-39.8): у известного
+        сырья — запиннутая плотность, не свежая выдумка (INV-2); граммы — по INV-7."""
+        product = await self._resolve_product(parsed_item)
+        resolution = resolve_grams(
+            unit=parsed_item.unit.value,
+            quantity=parsed_item.quantity,
+            grams_estimate=parsed_item.grams,
+            portion_hint=parsed_item.portion_hint,
+            parsed_unit_weight_g=parsed_item.unit_weight_g,
+            product_unit_weight_g=product.unit_weight_g,
+            product_default_portion_g=product.default_portion_g,
+            product_portion_sizes=product.portion_sizes,
+            parsed_portion_sizes=parsed_item.portion_options,
+        )
+        return RecipeItem(
+            name=product.display_name,
+            grams=round(clamp_batch_grams(resolution.grams), 1),  # партия, не порция
+            density=product.density,
+            product_id=product.id,  # None у непиннутого фолбэка — останется снимок
+            is_estimate=product.is_estimate,
+            alcohol=is_alcoholic(parsed_item.name) or is_alcoholic(product.display_name),
+        )
+
     async def prepare_batch(self, parsed: ParsedMessage) -> Product | None:
         """FR-39.1: ингредиенты → рецепт в каталоге. Приём пищи НЕ пишем. Состав сохраняем
         (FR-39.7) — иначе его потом не поправить. RecipeRejected — вес готового не сходится."""
-        items: list[RecipeItem] = []
-        for parsed_item in parsed.items:
-            # Через каталог: у известного сырья — запиннутая плотность, не свежая выдумка (INV-2).
-            product = await self._resolve_product(parsed_item)
-            resolution = resolve_grams(
-                unit=parsed_item.unit.value,
-                quantity=parsed_item.quantity,
-                grams_estimate=parsed_item.grams,
-                portion_hint=parsed_item.portion_hint,
-                parsed_unit_weight_g=parsed_item.unit_weight_g,
-                product_unit_weight_g=product.unit_weight_g,
-                product_default_portion_g=product.default_portion_g,
-                product_portion_sizes=product.portion_sizes,
-                parsed_portion_sizes=parsed_item.portion_options,
-            )
-            items.append(RecipeItem(
-                name=product.display_name,
-                grams=round(clamp_batch_grams(resolution.grams), 1),  # партия, не порция
-                density=product.density,
-                product_id=product.id,  # None у непиннутого фолбэка — останется снимок
-                is_estimate=product.is_estimate,
-                alcohol=is_alcoholic(parsed_item.name) or is_alcoholic(product.display_name),
-            ))
+        items = [await self.ingredient(parsed_item) for parsed_item in parsed.items]
         if not items:
             return None
         total, grams_total, estimate = _cook(items)

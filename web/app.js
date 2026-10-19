@@ -209,7 +209,10 @@
           '<input id="sq" type="search" autocomplete="off" placeholder="Добавить: найди продукт" ' +
           'value="' + esc(sh.q) + '" aria-label="Добавить продукт в набор" ' +
           'style="flex-grow:1;background:none;border:0;color:var(--text);font:inherit;' +
-          'outline:none;min-width:0"></label>' +
+          'outline:none;min-width:0">' + '<button class="scam" data-scam="1" aria-label="Фото этикетки">' +
+          '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+          'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+          '<path d="M3 8h3l2-3h8l2 3h3v11H3z"/><circle cx="12" cy="13" r="3.5"/></svg></button>' + '</label>' +
         '<div class="sh-chips" id="schips">' + foundChips(sh) + '</div>' +
         /* Перенос блоками, а не словами: на 320 при больших числах «У 34» рвалось на две строки. */
         '<div class="sh-prev" style="flex-wrap:wrap"><span class="num" ' +
@@ -313,7 +316,10 @@
           '<input id="sq" type="search" autocomplete="off" placeholder="Добавить ингредиент" ' +
           'value="' + esc(sh.q) + '" aria-label="Добавить ингредиент" ' +
           'style="flex-grow:1;background:none;border:0;color:var(--text);font:inherit;' +
-          'outline:none;min-width:0"></label>' +
+          'outline:none;min-width:0">' + '<button class="scam" data-scam="1" aria-label="Фото этикетки">' +
+          '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+          'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+          '<path d="M3 8h3l2-3h8l2 3h3v11H3z"/><circle cx="12" cy="13" r="3.5"/></svg></button>' + '</label>' +
         '<div class="sh-chips" id="schips">' + foundChips(sh) + '</div>' +
         '<label class="field" style="margin:0"><span class="mic" style="flex-grow:1">' +
           'Вышло готового, г — если при готовке ушла вода</span>' +
@@ -370,10 +376,72 @@
   var setSearchTimer = null;
 
   function foundChips(sh) {
-    return sh.found.map(function (p) {
+    /* FR-39.8: набранное всегда можно добавить как есть — разберёт модель. Раньше в состав
+       попадало только найденное в каталоге, а набранный текст молча пропадал. */
+    var q = (sh.q || '').trim();
+    var free = sh.parsing
+      ? '<button class="chip" disabled>разбираю…</button>'
+      : q.length >= 2
+        ? '<button class="chip free" data-sfree="1">+ «' + esc(q) + '» — разобрать</button>'
+        : '';
+    return free + sh.found.map(function (p) {
       return '<button class="chip" data-sadd="' + p.id + '">+ ' + esc(p.name) + '</button>';
     }).join('');
   }
+
+  /* FR-39.8: строки от разбора текста или этикетки — в лист. Плотность на грамм из каталога —
+     это предпросмотр (MA-INV-68); сохраняет и пересчитывает сервер. */
+  function addIngredients(sh, r) {
+    (r.items || []).forEach(function (x) {
+      var p = x.product;
+      if (sh.kind === 'recipe' && p.id === sh.id) return;  // рецепт сам в себя не входит
+      sh.items.push({ product: p.id, name: p.name, grams: x.grams, base: null,
+                      per: { kcal: p.kcal_per_100g / 100, p: p.protein_per_100g / 100,
+                             f: p.fat_per_100g / 100, c: p.carb_per_100g / 100 } });
+    });
+    if (r.skipped && r.skipped.length) {
+      toast('Не понял: ' + r.skipped.join(', ') + '. Напиши продукт и вес иначе.', true);
+    } else if (!(r.items || []).length) {
+      toast('Не нашёл, что добавить — напиши продукт и вес.', true);
+    }
+  }
+
+  function ingredientsFrom(sh, req) {
+    sh.parsing = true;
+    showFound(sh);
+    req.then(function (r) {
+      if (state.sheet !== sh) return;
+      addIngredients(sh, r);
+      sh.q = ''; sh.found = [];
+    }).catch(function (err) { oops(err); })
+      .then(function () {
+        sh.parsing = false;
+        if (state.sheet === sh) paintSheet();
+      });
+  }
+
+  function parseIngredient(sh) {
+    var text = (sh.q || '').trim();
+    if (text.length < 2 || sh.parsing) return;
+    ingredientsFrom(sh, send('/api/ingredients/parse', {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text })
+    }));
+  }
+
+  /* Скрытое поле снаружи листа: лист перерисовывается, поле и его слушатель — нет. */
+  document.getElementById('ingshot').addEventListener('change', function (e) {
+    var f = e.target.files && e.target.files[0];
+    var sh = state.sheet;
+    e.target.value = '';
+    if (!f || !sh || sh.parsing) return;
+    shrink(f, function (blob) {
+      ingredientsFrom(sh, send('/api/ingredients/label', {
+        headers: { 'Content-Type': blob.type || 'image/jpeg' },
+        body: blob
+      }));
+    });
+  });
 
   /* Найденное — только в контейнер чипов, без перерисовки листа: медленный ответ поиска
      иначе уводил фокус из поля граммов, а прокрутка прыгала наверх (ревью 15.10.2026). */
@@ -495,6 +563,12 @@
     var t = e.target.closest('[data-sclose],button');
     if (!t) return;
     if (t.dataset.sclose) return closeSheet();
+    if ((sh.kind === 'recipe' || sh.kind === 'set') && t.dataset.sfree) return parseIngredient(sh);
+    if ((sh.kind === 'recipe' || sh.kind === 'set') && t.dataset.scam) {
+      e.preventDefault();  // кнопка внутри <label>: без этого фокус уезжал бы в поле поиска
+      if (!sh.parsing) document.getElementById('ingshot').click();
+      return;
+    }
     if (sh.kind === 'recipe') {
       if (t.dataset.sdrop) { sh.items.splice(Number(t.dataset.sdrop), 1); return paintSheet(); }
       if (t.dataset.rsave) return recipeSave();
@@ -567,6 +641,7 @@
         (state.sheet.kind === 'set' || state.sheet.kind === 'recipe')) {
       var sh = state.sheet, q = e.target.value;
       sh.q = q;
+      showFound(sh);  // чип «+ «текст»» следует за вводом сразу, не ждёт поиска
       clearTimeout(setSearchTimer);
       if (q.trim().length < 2) { sh.found = []; return showFound(sh); }
       setSearchTimer = setTimeout(function () {
@@ -589,6 +664,11 @@
   sheetEl.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') closeSheet();
     if (e.key === 'Enter' && e.target.id === 'sgrams') sheetWrite();
+    if (e.key === 'Enter' && e.target.id === 'sq' && state.sheet &&
+        (state.sheet.kind === 'set' || state.sheet.kind === 'recipe')) {
+      e.preventDefault();
+      parseIngredient(state.sheet);
+    }
   });
 
   /* Шторка позиции прошлого дня: снимок КБЖУ на грамм — из самой позиции (MA-INV-67). */

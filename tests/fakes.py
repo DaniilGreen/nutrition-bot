@@ -101,8 +101,7 @@ class InMemoryProductRepo:
         xs = list(self._by_key.values())
         if source:
             xs = [p for p in xs if p.source == source]
-        if query:
-            q = query.lower()
+        for q in (query or "").lower().split():
             xs = [p for p in xs if q in p.display_name.lower() or q in p.canonical_key.lower()]
         xs.sort(key=lambda p: p.display_name)
         return xs[offset : offset + limit], len(xs)
