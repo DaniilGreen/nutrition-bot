@@ -6,7 +6,15 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 from app.application.dto import ParsedItem, ParsedMessage, PlateReading
-from app.application.entities import Meal, Product, Recipe, RecipeItem, User, WeightLog
+from app.application.entities import (
+    Meal,
+    MealItem,
+    Product,
+    Recipe,
+    RecipeItem,
+    User,
+    WeightLog,
+)
 from app.domain.goals import Goal
 from app.domain.value_objects import Density, Macros, sum_macros
 
@@ -440,6 +448,21 @@ class InMemoryMealRepo:
         if not meal.items:
             self._meals.remove(meal)
             return None
+        meal.totals = sum_macros(i.macros for i in meal.items)
+        return meal
+
+    async def replace_item(
+        self, user_id: int, meal_id: int, item_id: int, items: list[MealItem]
+    ) -> Meal | None:
+        meal = next((m for m in self._meals if m.id == meal_id and m.user_id == user_id), None)
+        old = next((i for i in meal.items if i.id == item_id), None) if meal else None
+        if meal is None or old is None or not items:
+            return None
+        at = meal.items.index(old)
+        for it in items:
+            self._item_seq += 1
+            it.id = self._item_seq
+        meal.items[at:at + 1] = items
         meal.totals = sum_macros(i.macros for i in meal.items)
         return meal
 

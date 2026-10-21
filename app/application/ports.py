@@ -11,7 +11,15 @@ from datetime import datetime
 from typing import Protocol
 
 from app.application.dto import ParsedItem, ParsedMessage, PlateReading, ScanReading
-from app.application.entities import Meal, Product, Recipe, StatedUse, User, WeightLog
+from app.application.entities import (
+    Meal,
+    MealItem,
+    Product,
+    Recipe,
+    StatedUse,
+    User,
+    WeightLog,
+)
 from app.domain.body_scan import BodyScan
 from app.domain.goals import Goal
 from app.domain.value_objects import Density, Macros
@@ -263,6 +271,13 @@ class MealRepo(Protocol):
     async def delete(self, user_id: int, meal_id: int) -> Meal | None: ...
 
     async def remove_item(self, user_id: int, meal_id: int, item_id: int) -> Meal | None: ...
+
+    async def replace_item(
+        self, user_id: int, meal_id: int, item_id: int, items: list[MealItem]
+    ) -> Meal | None:
+        """Позиция → новые позиции в том же приёме, итоги пересчитаны (§6.27). None — приёма
+        или позиции нет (или они чужие)."""
+        ...
 
     async def update_item(
         self, user_id: int, meal_id: int, item_id: int, *, grams: float, macros: Macros

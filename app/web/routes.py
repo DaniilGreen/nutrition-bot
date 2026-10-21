@@ -7,8 +7,11 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
+import secrets
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
@@ -24,7 +27,7 @@ from app.application.assistant import Assistant
 from app.application.body_scans import BodyScanService, ScanCheck, from_reading
 from app.application.coach import LimitReached, clean_history
 from app.application.dto import SetPick, Unit
-from app.application.entities import Recipe, RecipeItem, StatedUse, User
+from app.application.entities import Meal, Recipe, RecipeItem, StatedUse, User
 from app.application.meal_service import RecipeRejected
 from app.application.results import (
     BodyScanRead,
@@ -650,6 +653,23 @@ async def apply_scan_goal(
     return idem.remember({"goal": goal_json(goal)})
 
 
+# MA-INV-69: снимок удалённого приёма на 10 минут — под «Вернуть». ponytail: память процесса API,
+# перезапуск теряет «Вернуть» (удалённое удалено осознанно); потолок — мягкое удаление колонкой.
+UNDO_TTL_S = 600
+_TRASH: dict[str, tuple[float, Meal]] = {}
+
+
+def _to_trash(meal: Meal) -> str:
+    now = time.monotonic()
+    for k in [k for k, (at, _) in _TRASH.items() if now - at > UNDO_TTL_S]:
+        del _TRASH[k]
+    token = secrets.token_urlsafe(12)
+    # Копия, а не ссылка: удаление позиции правит тот же объект приёма, и «Вернуть» вернуло бы
+    # уже обрезанный приём (поймано тестом 21.10.2026).
+    _TRASH[token] = (now, copy.deepcopy(meal))
+    return token
+
+
 @router.delete("/meals/{meal_id}")
 async def delete_meal(
     meal_id: int, user: CurrentUser, assistant: CurrentAssistant
@@ -658,7 +678,41 @@ async def delete_meal(
     if deleted is None or getattr(deleted, "meal", None) is None:
         raise not_found("meal_not_found", "Приём не найден.")
     stats = await assistant.today(user)
-    return {"deleted": True, "totals": remaining_json(stats.remaining)}
+    return {"deleted": True, "undo": _to_trash(deleted.meal),
+            "totals": remaining_json(stats.remaining)}
+
+
+@router.post("/meals/restore")
+async def restore_meal(
+    body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant
+) -> dict[str, Any]:
+    """«Вернуть» (MA-INV-69): приём как был до удаления. Токен одноразовый и только свой."""
+    entry = _TRASH.get(str(body.get("undo") or ""))
+    if entry is None or time.monotonic() - entry[0] > UNDO_TTL_S or entry[1].user_id != user.id:
+        raise not_found("undo_expired", "Вернуть уже нельзя — прошло слишком много времени.")
+    _TRASH.pop(str(body["undo"]), None)
+    result = await assistant.restore_meal(user, entry[1])
+    if result is None:
+        raise not_found("undo_expired", "Вернуть уже нельзя.")
+    return logged_json(result, user.timezone)
+
+
+@router.post("/meals/{meal_id}/items/{item_id}/fix")
+async def fix_item(
+    meal_id: int, item_id: int, body: dict[str, Any], user: CurrentUser,
+    assistant: CurrentAssistant, request: Request,
+) -> dict[str, Any]:
+    """«Поправить словами» (§6.27): позиция заменяется разобранным из слов, в том же приёме."""
+    text = str(body.get("text") or "").strip()
+    if not text:
+        raise bad_request("empty_text", "Напиши, что поправить.")
+    if len(text) > 300:
+        raise bad_request("text_too_long", "Слишком длинно — коротко, что это было.")
+    _throttle(request, user, "ingredients", limit=10, window=60)
+    result = await assistant.fix_item(user, meal_id, item_id, text)
+    if result is None:
+        raise bad_request("fix_failed", "Не понял, что поправить — скажи, что это было и сколько.")
+    return logged_json(result, user.timezone)
 
 
 @router.delete("/meals/{meal_id}/items/{item_id}")
@@ -670,12 +724,15 @@ async def delete_item(
     meal = await assistant.get_meal(user, meal_id)
     if meal is None or not any(i.id == item_id for i in meal.items):
         raise not_found("item_not_found", "Позиция не найдена.")
+    # Снимок ДО удаления: «Вернуть» возвращает приём, каким он был (MA-INV-69).
+    undo = _to_trash(meal)
     result = await assistant.remove_item(user, meal_id, item_id)
     stats = await assistant.today(user)
     # None означает «позиций не осталось, приём удалён целиком» — это успех,
     # а не 404. Отдавать ошибку на успешное действие значит врать интерфейсу.
     return {
         "meal": meal_json(result.meal, user.timezone) if result else None,
+        "undo": undo,
         "totals": remaining_json(stats.remaining),
     }
 

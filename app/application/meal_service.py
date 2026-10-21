@@ -16,7 +16,7 @@ import re
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 
-from app.application.dto import ParsedItem, ParsedMessage, SetPick
+from app.application.dto import ParsedItem, ParsedMessage, SetPick, Unit
 from app.application.entities import (
     Meal,
     MealItem,
@@ -74,6 +74,30 @@ class MealService:
         day_offset: int = 0,
     ) -> Meal:
         user_id = _require_id(user)
+        items, estimated = await self._build_items(parsed, raw_input)
+
+        # FR-33: «вчера»/«завтра» сдвигают ДЕНЬ приёма, время суток берём текущее (владелец: время
+        # неважно). Кламп — страховка от галлюцинации LLM (день из будущего/древности).
+        # Слово в тексте старше открытого экрана (`day_offset`): человек, листающий вчерашний
+        # день и сказавший «позавчера», имел в виду позавчера, а не «ещё на день раньше».
+        offset = max(-30, min(7, parsed.day_offset or day_offset))
+        meal = Meal(
+            user_id=user_id,
+            eaten_at=self._clock() + timedelta(days=offset),
+            input_type="photo" if parsed.photo else input_type,
+            raw_input=raw_input,
+            items=items,
+            source_confidence=parsed.confidence,
+            totals=sum_macros(item.macros for item in items),
+            estimated=estimated,
+        )
+        return await self._meals.add(meal)
+
+    async def _build_items(
+        self, parsed: ParsedMessage, raw_input: str
+    ) -> tuple[list[MealItem], bool]:
+        """Позиции разбора → снапшоты записи: каталог (INV-2), граммовка (INV-7), сверки (INV-11,
+        INV-14). Общее у записи и у «поправить словами» (§6.27)."""
         # FR-34: фото без веса — каждая позиция оценка, и это видно в ленте.
         guessed = parsed.weight_guessed
 
@@ -165,22 +189,39 @@ class MealService:
             )
             estimated = estimated or guessed
 
-        # FR-33: «вчера»/«завтра» сдвигают ДЕНЬ приёма, время суток берём текущее (владелец: время
-        # неважно). Кламп — страховка от галлюцинации LLM (день из будущего/древности).
-        # Слово в тексте старше открытого экрана (`day_offset`): человек, листающий вчерашний
-        # день и сказавший «позавчера», имел в виду позавчера, а не «ещё на день раньше».
-        offset = max(-30, min(7, parsed.day_offset or day_offset))
-        meal = Meal(
-            user_id=user_id,
-            eaten_at=self._clock() + timedelta(days=offset),
-            input_type="photo" if parsed.photo else input_type,
-            raw_input=raw_input,
-            items=items,
-            source_confidence=parsed.confidence,
-            totals=sum_macros(item.macros for item in items),
-            estimated=estimated,
-        )
-        return await self._meals.add(meal)
+        return items, estimated
+
+    async def fix_item(
+        self, user: User, meal_id: int, item_id: int, parsed: ParsedMessage, *, raw_input: str
+    ) -> Meal | None:
+        """«Поправить словами» (§6.27): позиция заменяется тем, что разобрано из слов человека, в
+        том же приёме. Вес не назван — остаётся прежний: «это был булгур» меняет еду, не порцию."""
+        user_id = _require_id(user)
+        meal = await self._meals.get(user_id, meal_id)
+        old = next((i for i in (meal.items if meal else []) if i.id == item_id), None)
+        if meal is None or old is None or not parsed.items:
+            return None
+        if len(parsed.items) == 1 and old.grams > 0:
+            it = parsed.items[0]
+            named = (it.unit in (Unit.GRAM, Unit.ML) and it.grams) or (
+                it.unit is Unit.PIECE and it.quantity
+            ) or it.total_kcal
+            if not named:
+                it.unit, it.grams, it.quantity, it.portion_hint = Unit.GRAM, old.grams, None, None
+        items, _ = await self._build_items(parsed, raw_input)
+        return await self._meals.replace_item(user_id, meal_id, item_id, items)
+
+    async def restore(self, meal: Meal) -> Meal:
+        """«Вернуть» (MA-INV-69): приём как был до удаления — время, снапшоты, имя набора."""
+        return await self._meals.add(Meal(
+            user_id=meal.user_id, eaten_at=meal.eaten_at, input_type=meal.input_type,
+            raw_input=meal.raw_input,
+            items=[MealItem(name_snapshot=i.name_snapshot, grams=i.grams, macros=i.macros,
+                            product_id=i.product_id, is_estimate=i.is_estimate)
+                   for i in meal.items],
+            source_confidence=meal.source_confidence, totals=meal.totals,
+            estimated=meal.estimated, template_name=meal.template_name,
+        ))
 
     async def recent(self, user: User, limit: int = 10) -> list[Meal]:
         return await self._meals.list_recent(_require_id(user), limit)

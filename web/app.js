@@ -96,13 +96,24 @@
   /* §6.25: запись в ДРУГОЙ день, чем открыт, — подтверждение тостом с отменой. Экран
      остаётся на месте: человек листает вчера и повторяет оттуда по одной позиции. */
   function toastUndo(text, mealId) {
+    toastAction(text, 'Отменить', 'data-undo="' + mealId + '"');
+  }
+
+  /* MA-INV-69: удалённое возвращается из тоста. 8 с — «Отменить» требует времени прочесть и
+     дотянуться (дизайн-системы дают 5–10 с, если в тосте есть действие). */
+  function toastAction(text, label, attr) {
     var el = document.getElementById('toast');
     el.innerHTML = '<span style="flex-grow:1">' + esc(text) + '</span>' +
-      '<button class="undo" data-undo="' + mealId + '">Отменить</button>';
+      '<button class="undo" ' + attr + '>' + esc(label) + '</button>';
     el.className = 'toast with-undo';
     el.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { el.hidden = true; }, 6000);
+    toastTimer = setTimeout(function () { el.hidden = true; }, 8000);
+  }
+
+  function restoreToast(text, token) {
+    if (token) toastAction(text, 'Вернуть', 'data-restore="' + esc(token) + '"');
+    else toast(text);
   }
 
   /* «Сегодня / Вчера / сб, 11 окт» — день последнего раза в каталоге (§6.25). День
@@ -453,6 +464,7 @@
   function paintSheet() {
     var sh = state.sheet;
     if (!sh) { sheetEl.innerHTML = ''; return; }
+    if (sh.mode === 'entry') return paintEntrySheet(sh);
     if (sh.kind === 'set' || sh.kind === 'recipe') {
       /* Добавил/убрал позицию — лист перерисован, но прокрутка остаётся, где была. */
       var old = sheetEl.querySelector('.sheet');
@@ -549,11 +561,21 @@
   }
 
   document.getElementById('toast').addEventListener('click', function (e) {
-    var b = e.target.closest('button[data-undo]');
+    var b = e.target.closest('button[data-undo],button[data-restore]');
     if (!b) return;
     this.hidden = true;
+    if (b.dataset.restore) {
+      return send('/api/meals/restore', {
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ undo: b.dataset.restore })
+      }).then(function (r) {
+        toast('Вернул.');
+        if (r.meal) { state.open[r.meal.id] = true; }
+        rerender();
+      }).catch(function (err) { oops(err); });
+    }
     send('/api/meals/' + b.dataset.undo, { method: 'DELETE' })
-      .then(function () { toast('Отменил.'); rerender(); })
+      .then(function () { state.fresh = null; toast('Отменил.'); rerender(); })
       .catch(function (err) { oops(err); });
   });
 
@@ -602,16 +624,16 @@
       }
       return;
     }
+    if (sh.mode === 'entry') {
+      if (t.dataset.ssave) return entryAct(sh, 'save');
+      if (t.dataset.sagain) return entryAct(sh, 'again');
+      if (t.dataset.sremove) return entryAct(sh, 'remove');
+      if (t.dataset.sfix) return entryAct(sh, 'fix');
+    }
     if (t.dataset.sg) { sh.pick = Number(t.dataset.sg); sh.own = false; return paintSheet(); }
     if (t.dataset.sown) { sh.own = true; return paintSheet(); }
     if (t.dataset.sto != null) { sh.to = Number(t.dataset.sto); return paintSheet(); }
     if (t.dataset.sgo) return sheetWrite();
-    if (t.dataset.sedit) {
-      var item = sh.item;
-      closeSheet();
-      state.editItem = item;
-      return repaintDay();
-    }
     if (t.dataset.srecipe) {
       if (state.sending) return;
       t.disabled = true;  // чтение, не запись: экран не гасим, шторка ждёт ответа
@@ -656,14 +678,24 @@
       }, 250);
       return;
     }
+    if (e.target.id === 'sfix' && state.sheet) { state.sheet.fix = e.target.value; return; }
     if (e.target.id !== 'sgrams' || !state.sheet) return;
+    var sv = document.getElementById('ssave');
+    if (sv) sv.textContent = 'Сохранить · ' + n(Number(e.target.value)) + ' г';
     state.sheet.pick = Number(e.target.value);
     var pv = document.getElementById('sprev');
     if (pv) pv.innerHTML = sheetPreview(state.sheet);
   });
   sheetEl.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') closeSheet();
-    if (e.key === 'Enter' && e.target.id === 'sgrams') sheetWrite();
+    if (e.key === 'Enter' && e.target.id === 'sfix' && state.sheet) {
+      e.preventDefault();
+      return entryAct(state.sheet, 'fix');
+    }
+    if (e.key === 'Enter' && e.target.id === 'sgrams') {
+      return state.sheet && state.sheet.mode === 'entry' ? entryAct(state.sheet, 'save')
+                                                         : sheetWrite();
+    }
     if (e.key === 'Enter' && e.target.id === 'sq' && state.sheet &&
         (state.sheet.kind === 'set' || state.sheet.kind === 'recipe')) {
       e.preventDefault();
@@ -671,22 +703,126 @@
     }
   });
 
-  /* Шторка позиции прошлого дня: снимок КБЖУ на грамм — из самой позиции (MA-INV-67). */
+  /* §6.27: шторка записи — одна на любой день. Снимок КБЖУ на грамм — из самой позиции
+     (MA-INV-67, INV-3); у «своих цифр» без веса граммы не выбираются, остальное доступно. */
   function itemSheet(mealId, itemId) {
     var d = state.lastDay;
     var m = d && (d.meals || []).filter(function (x) { return x.id === mealId; })[0];
     var i = m && (m.items || []).filter(function (x) { return x.id === itemId; })[0];
-    if (!i || !(i.grams > 0)) return;
+    if (!i) return;
+    var g = i.grams > 0 ? i.grams : 0;
     var label = dayName(state.daysAgo, d.day, false);
     openSheet({
-      kind: 'item', meal: mealId, item: itemId, title: i.name,
-      sub: label + ' ' + m.at + ' · ' + n(i.grams) + ' г · ' + n(i.kcal) + ' ккал' +
-           (INPUT_MARK[m.input_type] ? ' · ' + INPUT_MARK[m.input_type] : ''),
-      ref: i.grams, refLabel: 'как было',
-      per: { kcal: i.kcal / i.grams, p: i.protein_g / i.grams, f: i.fat_g / i.grams,
-             c: i.carb_g / i.grams },
-      from: state.daysAgo, fromLabel: label, to: 0
+      kind: 'item', mode: 'entry', meal: mealId, item: itemId, title: i.name,
+      sub: label + ' ' + m.at + ' · ' + (g ? n(g) + ' г · ' : 'свои цифры · ') +
+           n(i.kcal) + ' ккал' + (INPUT_MARK[m.input_type] ? ' · ' + INPUT_MARK[m.input_type] : ''),
+      ref: g, base: g, fixed: !g, fix: '',
+      per: g ? { kcal: i.kcal / g, p: i.protein_g / g, f: i.fat_g / g, c: i.carb_g / g }
+             : { kcal: i.kcal, p: i.protein_g, f: i.fat_g, c: i.carb_g },
+      from: state.daysAgo, to: 0
     });
+  }
+
+  /* Вес чипами: половина · как есть · полтора · ×2 (ресёрч §6.27: популярные порции под
+     пальцем, без набора цифр) и «своё». */
+  function entryChips(sh) {
+    var g = Math.round(sh.base);
+    var xs = [Math.round(g / 2), g, Math.round(g * 1.5), g * 2];
+    return xs.filter(function (x, k) { return x > 0 && xs.indexOf(x) === k; }).map(function (x) {
+      var on = !sh.own && x === sh.pick;
+      var tail = x === g ? ' · как есть' : x === g * 2 ? ' · ×2' : '';
+      return '<button class="chip' + (on ? ' on' : '') + '" data-sg="' + x + '" aria-pressed="' +
+        on + '">' + n(x) + ' г' + tail + '</button>';
+    }).join('') + '<button class="chip' + (sh.own ? ' on' : '') + '" data-sown="1" aria-pressed="' +
+      sh.own + '">своё…</button>';
+  }
+
+  function paintEntrySheet(sh) {
+    var changed = !sh.fixed && Number(sh.pick) !== Math.round(sh.base);
+    var own = sh.own
+      ? '<label class="composer" style="margin:0">' +
+        '<input id="sgrams" type="number" inputmode="numeric" min="1" max="5000" ' +
+        'value="' + (sh.pick || '') + '" aria-label="Граммы" ' +
+        'style="flex-grow:1;background:none;border:0;color:var(--text);font:inherit;' +
+        'outline:none;min-width:0"><span class="mic">г</span></label>'
+      : '';
+    sheetEl.innerHTML =
+      '<div class="sheet-back" data-sclose="1"></div>' +
+      '<div class="sheet" role="dialog" aria-modal="true" aria-label="' + esc(sh.title) + '">' +
+        '<div class="grip" aria-hidden="true"></div>' +
+        '<div style="display:flex;gap:var(--s-2);align-items:flex-start">' +
+          '<div style="flex-grow:1;min-width:0"><div class="sh-t">' + esc(sh.title) + '</div>' +
+          '<div class="mic" style="margin-top:4px">' + esc(sh.sub) + '</div></div>' +
+          '<button class="x" data-sclose="1" aria-label="Закрыть">✕</button></div>' +
+        (sh.fixed ? '' : '<div class="sh-chips">' + entryChips(sh) + '</div>') + own +
+        '<label class="composer" style="margin:0">' +
+          '<input id="sfix" type="text" autocomplete="off" enterkeyhint="done" ' +
+          'placeholder="Поправить словами: «это был булгур»" value="' + esc(sh.fix) + '" ' +
+          'aria-label="Поправить словами" style="flex-grow:1;background:none;border:0;' +
+          'color:var(--text);font:inherit;outline:none;min-width:0">' +
+          '<button class="scam" data-sfix="1" aria-label="Поправить" style="width:auto;' +
+            'padding:0 12px;font:inherit;font-size:var(--f-body-s)">' +
+            (sh.busy === 'fix' ? '…' : 'Ок') + '</button></label>' +
+        '<div class="sh-prev" id="sprev">' + sheetPreview(sh) + '</div>' +
+        /* При «своё…» кнопка есть всегда: набор цифр не перерисовывает шторку (фокус),
+           подпись обновляется на месте. */
+        (changed || sh.own
+          ? '<button class="primary" id="ssave" data-ssave="1">Сохранить · ' + n(sh.pick) +
+            ' г</button>'
+          : '') +
+        '<div class="sh-two">' +
+          '<button class="ghost" data-sagain="1">↻ Ещё раз сегодня</button>' +
+          '<button class="ghost danger" data-sremove="1">Убрать</button></div>' +
+      '</div>';
+    if (sh.own) {
+      var inp = document.getElementById('sgrams');
+      if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+    }
+  }
+
+  function entryAct(sh, what) {
+    if (state.sending || sh.busy) return;
+    var base = '/api/meals/' + sh.meal + '/items/' + sh.item;
+    var g = Number(sh.pick);
+    if (what === 'save' && !(g > 0 && g <= 5000)) return toast('Вес вне разумных пределов.', true);
+    var key = 'entry:' + what + ':' + sh.item + ':' + g;
+    var req;
+    if (what === 'save') {
+      req = send(base, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                         body: JSON.stringify({ grams: g }) });
+    } else if (what === 'again') {
+      req = send(base + '/repeat', {
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': keyFor(key) },
+        body: JSON.stringify(sh.fixed ? { days_ago: 0 } : { grams: g, days_ago: 0 }) });
+    } else if (what === 'remove') {
+      req = send(base, { method: 'DELETE' });
+    } else {
+      var text = (sh.fix || '').trim();
+      if (text.length < 2) return toast('Напиши, что это было: «это был булгур», «индейка 150 г».', true);
+      req = send(base + '/fix', { headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ text: text }) });
+    }
+    sh.busy = what;
+    state.sending = true;
+    if (what === 'fix') paintSheet();  // «…» на кнопке: разбор идёт к модели, это секунды
+    req.then(function (r) {
+      dropKey(key);
+      closeSheet();
+      if (what === 'again') return logged(r, 0);
+      if (what === 'remove') {
+        restoreToast('Убрал: ' + sh.title + (r.meal ? '' : ' — приём опустел и удалён'), r.undo);
+      } else if (what === 'save') {
+        toast(sh.title + ': было ' + n(r.old_grams) + ' г, стало ' + n(r.item.grams) + ' г.');
+      } else {
+        toast('Поправил: ' + mealTitle(r.meal) + '.');
+        state.open[r.meal.id] = true;
+      }
+      renderDay();
+    }).catch(function (err) {
+      sh.busy = null;
+      oops(err);
+      if (state.sheet === sh) paintSheet();  // шторка остаётся — правку не теряем
+    }).then(function () { state.sending = false; });
   }
 
   /* Telegram в части клиентов глушит window.confirm — он молча возвращает
@@ -930,6 +1066,7 @@
     var meals = feedOrder() === 'new_first' ? d.meals.slice().reverse() : d.meals;
     var rows = meals.map(function (m) {
       var opened = !!state.open[m.id];
+      var isFresh = state.fresh === m.id && state.daysAgo === 0;
       var mark = m.estimated ? ' <span style="color:var(--text-faint)">≈</span>' : '';
       var head =
         '<button class="meal" data-meal="' + m.id + '" aria-expanded="' + opened + '">' +
@@ -941,14 +1078,10 @@
         '</button>';
       if (!opened) return head;
       var items = m.items.map(function (i) {
-        /* MA-INV-22: после ухода карточки «Записал» правка обязана быть
-           достижима отсюда — иначе «пишем сразу» превращается в
-           «записал мусор навсегда». Стейтед-позиции без веса не правим:
-           масштабировать не от чего. */
-        var editing = state.editItem === i.id;
-        var can = i.grams > 0;
-        return '<div class="row"' + (can ? ' data-item="' + i.id + '" data-meal="' + m.id +
-               '" style="cursor:pointer"' : '') + '>' +
+        /* MA-INV-22, §6.27: правка достижима из ленты всегда — тап по строке открывает
+           шторку этой записи в любой день, и у «своих цифр» тоже (без чипов веса). */
+        return '<div class="row" data-item="' + i.id + '" data-meal="' + m.id +
+               '" style="cursor:pointer">' +
           '<span style="flex-grow:1">' + esc(i.name) +
             itemMark(i) + '</span>' +
           (i.grams > 0 ? '<span class="num g">' + n(i.grams) + ' г</span>'
@@ -960,7 +1093,7 @@
             ? '<button class="again" data-again-m="' + m.id + '" data-again-i="' + i.id + '" ' +
               'aria-label="Записать ' + esc(i.name) + ' в сегодня">↻</button>'
             : '') +
-        '</div>' + (editing ? gramsEditor(m.id, i) : '');
+        '</div>';
       }).join('');
       var macros = '<div class="row" style="border-top:1px solid var(--separator);margin-top:4px;padding-top:8px">' +
         '<span style="flex-grow:1">Б ' + n(m.protein_g) + ' · Ж ' + n(m.fat_g) + ' · У ' + n(m.carb_g) + '</span></div>';
@@ -988,10 +1121,14 @@
             (canSet ? '<button class="link" data-setname="' + m.id + '">Сохранить набор</button>' : '');
       /* На 320 подпись «↻ сегодня» у каждой позиции съедала строку — кнопка-иконка,
          а смысл один раз над позициями. */
-      var hint = state.daysAgo > 0
-        ? '<div class="mic" style="padding:2px 0 4px">↻ — записать ещё раз в сегодня. ' +
-          'Тап по позиции — выбрать вес.</div>' : '';
-      return head + '<div class="items">' + hint + items + macros + acts + '</div>';
+      var hint = isFresh
+        ? '<div class="mic" style="padding:2px 0 4px;color:var(--accent)">только что · ' +
+          'тап по строке — поправить</div>'
+        : state.daysAgo > 0
+          ? '<div class="mic" style="padding:2px 0 4px">↻ — ещё раз сегодня. ' +
+            'Тап по позиции — поправить.</div>' : '';
+      var body = head + '<div class="items">' + hint + items + macros + acts + '</div>';
+      return isFresh ? '<div class="fresh">' + body + '</div>' : body;
     }).join('');
     var newFirst = feedOrder() === 'new_first';
     var head = '<div style="display:flex;align-items:center;margin-bottom:var(--s-2)">' +
@@ -1000,53 +1137,6 @@
         '" aria-label="Порядок записей">' +
         (newFirst ? 'сначала новое' : 'сначала старое') + '</button></div>';
     return '<section class="card" style="margin-top:var(--s-3)">' + head + rows + '</section>';
-  }
-
-  function gramsEditor(mealId, item) {
-    return '<div class="composer" style="margin:6px 0 10px">' +
-      '<input id="newg" type="number" inputmode="numeric" min="1" max="5000" ' +
-        'value="' + n(item.grams) + '" ' +
-        'style="flex-grow:1;background:none;border:0;color:var(--text);font:inherit;' +
-        'outline:none;min-width:0"> ' +
-      '<span class="mic" style="margin-right:6px">г</span>' +
-      '<button data-save-g="' + item.id + '" data-save-m="' + mealId + '" ' +
-        'aria-label="Сохранить вес">' +
-        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-        'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-        '<path d="M20 6L9 17l-5-5"/></svg></button>' +
-      '</div>' +
-      '<div class="actions" style="margin:0 0 10px">' +
-        '<button data-del-i="' + item.id + '" data-del-m="' + mealId + '" class="danger">' +
-        'Убрать позицию</button></div>';
-  }
-
-  function dropItem(mealId, itemId) {
-    ask('Убрать эту позицию из приёма?', function () {
-      state.editItem = null;
-      busy('Убираю…');
-      send('/api/meals/' + mealId + '/items/' + itemId, { method: 'DELETE' })
-        .then(function (r) {
-          toast(r.meal ? 'Убрал позицию.' : 'Позиций не осталось — приём удалён.');
-          renderDay();
-        })
-        .catch(function (e) { toast(e.message, true); renderDay(); });
-    });
-  }
-
-  function saveGrams(mealId, itemId) {
-    var el = document.getElementById('newg');
-    var v = (el && el.value || '').trim();
-    if (!v) return;
-    state.editItem = null;
-    busy('Сохраняю…');
-    send('/api/meals/' + mealId + '/items/' + itemId, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grams: Number(v) })
-    }).then(function (r) {
-      toast('Было ' + n(r.old_grams) + ' г, стало ' + n(r.item.grams) + ' г.');
-      renderDay();
-    }).catch(function (e) { toast(e.message, true); renderDay(); });
   }
 
   /* ── экраны ──────────────────────────────────────────────────────────── */
@@ -1061,8 +1151,7 @@
 
   function dayHtml(d) {
     var extra = '';
-    if (state.justLogged) extra = justCard(state.justLogged);
-    else if (state.clarify) extra = clarifyCard(state.clarify);
+    if (state.clarify) extra = clarifyCard(state.clarify);
     else if (state.label) extra = labelCard(state.label);
     else if (state.photo) extra = photoCard(state.photo);
     else if (state.scan) extra = scanCard(state.scan);
@@ -1082,7 +1171,12 @@
     show(dayHtml(d));
     var inp = document.getElementById('say');
     if (inp && state.keepFocus) { inp.focus(); state.keepFocus = false; }
-    armJustTimer();
+    if (state.freshScroll) {
+      state.freshScroll = false;
+      var fr = root.querySelector('.fresh');
+      /* По центру, а не «до края»: у нижнего края запись пряталась под тостом и панелью. */
+      if (fr && fr.scrollIntoView) fr.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
   }
 
   /* Раскрыть приём, открыть правку веса, сменить порядок — это раскладка
@@ -1091,7 +1185,6 @@
   function repaintDay() {
     if (!state.lastDay || state.shownDay !== state.daysAgo) return renderDay();
     show(dayHtml(state.lastDay));
-    armJustTimer();
   }
 
   /* Скелет — только когда показывать нечего: холодный старт или переход на
@@ -1114,34 +1207,6 @@
       // Быстрое листание: ответ на уже пролистанный день не рисуем.
       if (want === state.daysAgo) paintDay(d);
     }).catch(failure);
-  }
-
-  /* MA-INV-22: карточка «Записал» живёт 5 секунд, потом уходит сама. Правка
-     после этого достижима тапом по строке ленты — иначе «пишем сразу»
-     превращается в «записал мусор навсегда».
-
-     Таймер снимается при каждой перерисовке: без этого два подряд приёма
-     оставляли два таймера, и второй гасил карточку раньше срока. */
-  function armJustTimer() {
-    if (!state.justLogged) {
-      clearTimeout(state.justTimer);
-      state.justArmed = null;
-      return;
-    }
-    /* Пять секунд считаются от записи, а не от последней перерисовки: раньше
-       любое касание экрана заводило таймер заново и карточка не уходила
-       вовсе — ровно то, на что жаловались («через пять сек не пропадает»). */
-    if (state.justArmed === state.justLogged.id) return;
-    clearTimeout(state.justTimer);
-    var shown = state.justLogged.id;
-    state.justArmed = shown;
-    state.justTimer = setTimeout(function () {
-      state.justArmed = null;
-      if (state.justLogged && state.justLogged.id === shown && state.tab === 'day') {
-        state.justLogged = null;
-        repaintDay();
-      }
-    }, 5000);
   }
 
   /* ── Продукты ────────────────────────────────────────────────────────── */
@@ -2649,23 +2714,6 @@
 
   /* Пишем сразу, превью не показываем (решение владельца): записанное можно
      тут же поправить, а лишний клик стоит дороже ошибки. */
-  function justCard(m) {
-    var items = m.items.map(function (i) {
-      return '<div class="row"><span style="flex-grow:1">' + esc(i.name) +
-        (i.is_estimate ? ' <span style="color:var(--text-faint)">≈</span>' : '') + '</span>' +
-        '<span class="num g">' + n(i.grams) + ' г</span>' +
-        '<span class="num" style="width:52px;text-align:right">' + n(i.kcal) + '</span></div>';
-    }).join('');
-    return '<section class="card just" style="margin-top:var(--s-3)">' +
-      '<div style="display:flex;align-items:baseline;gap:var(--s-2)">' +
-        '<span class="ttl" style="flex-grow:1">Записал</span>' +
-        '<span class="num" style="font-weight:600">' + n(m.kcal) + ' ккал</span></div>' +
-      '<div class="items" style="padding-left:0;padding-bottom:0">' + items + '</div>' +
-      '<div class="actions">' +
-        '<button data-undo="' + m.id + '" class="danger">Отменить</button></div>' +
-      '</section>';
-  }
-
   /* §6.20 «Добор дня». Дневник теряет не дни целиком, а вторую половину дня:
      полный день идёт до 20:24, брошенный обрывается в 15:20. Карточка сравнивает
      сегодняшний темп с ЛИЧНОЙ нормой к этому же часу.
@@ -3554,9 +3602,14 @@
     state.label = null;
     state.photo = null;
     state.scan = null;
-    state.justLogged = null;
     if (res.kind === 'logged') {
-      state.justLogged = res.meal;
+      /* §6.27 (1Б): отдельной карточки «Записал» нет — она дублировала строку ленты и через
+         5 с уходила, а поправить в ней было нечего. Запись раскрыта и подсвечена в ленте,
+         правка — тапом по строке; «Отменить» — в тосте. */
+      state.fresh = res.meal.id;
+      state.freshScroll = true;
+      state.open[res.meal.id] = true;
+      toastUndo('Записал · ' + n(res.meal.kcal) + ' ккал', res.meal.id);
       if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
     } else if (res.kind === 'clarify') {
       state.clarify = res;
@@ -3782,8 +3835,7 @@
     if (!b) return;
     state.tab = b.dataset.tab;
     state.daysAgo = 0;
-    clearTimeout(state.justTimer);
-    state.justLogged = null;
+    state.fresh = null;
     [].forEach.call(nav.querySelectorAll('button'), function (x) {
       if (x.dataset.tab === state.tab) x.setAttribute('aria-current', 'page');
       else x.removeAttribute('aria-current');
@@ -3816,14 +3868,9 @@
 
     var row = e.target.closest('.row[data-item]');
     if (row && !e.target.closest('.composer')) {
-      /* На прошлом дне тап — «ещё раз» (шторка), на сегодняшнем — правка веса. Правка
-         прошлого дня достижима из шторки (MA-INV-22). */
-      if (state.daysAgo > 0 && state.editItem !== Number(row.dataset.item)) {
-        return itemSheet(Number(row.dataset.meal), Number(row.dataset.item));
-      }
-      var id = Number(row.dataset.item);
-      state.editItem = state.editItem === id ? null : id;
-      return repaintDay();
+      /* §6.27: одна шторка записи на любой день — вес, «поправить словами», «ещё раз
+         сегодня», «убрать». Раньше сегодня открывалось голое поле граммов, вчера — шторка. */
+      return itemSheet(Number(row.dataset.meal), Number(row.dataset.item));
     }
 
     var b = e.target.closest('button');
@@ -3860,13 +3907,24 @@
         .then(function () { state.sending = false; });
     }
     if (b.dataset.drop) {
+      /* MA-INV-69: без «Вы уверены?» — его прокликивают не читая. Удалено сразу, «Вернуть»
+         в тосте возвращает приём целиком. */
       var did = b.dataset.drop;
-      return ask('Удалить этот приём?', function () {
-        busy('Удаляю…');
-        send('/api/meals/' + did, { method: 'DELETE' })
-          .then(function () { delete state.open[did]; toast('Удалил.'); renderDay(); })
-          .catch(function (err) { toast(err.message, true); renderDay(); });
-      });
+      var dm = state.lastDay && (state.lastDay.meals || []).filter(function (x) {
+        return String(x.id) === did;
+      })[0];
+      if (state.sending) return;
+      state.sending = true;
+      busy('Удаляю…');
+      return send('/api/meals/' + did, { method: 'DELETE' })
+        .then(function (r) {
+          delete state.open[did];
+          if (state.fresh === Number(did)) state.fresh = null;
+          restoreToast('Удалил' + (dm ? ': ' + mealTitle(dm) : '.'), r.undo);
+          renderDay();
+        })
+        .catch(function (err) { oops(err); renderDay(); })
+        .then(function () { state.sending = false; });
     }
     if (b.dataset.quick) {
       if (state.sending) return;
@@ -3955,16 +4013,6 @@
       state.keepFocus = true;
       return submitText();
     }
-    if (b.dataset.undo) {
-      var id = b.dataset.undo;
-      if (state.sending) return;
-      state.sending = true;
-      busy('Отменяю…');
-      return send('/api/meals/' + id, { method: 'DELETE' })
-        .then(function () { state.justLogged = null; toast('Отменил.'); renderDay(); })
-        .catch(function (err) { oops(err); renderDay(); })
-        .then(function () { state.sending = false; });
-    }
     /* ── каталог ─────────────────────────────────────────────────────── */
     if (b.dataset.psheet) {
       var sp = (state.cat.items || {})[b.dataset.psheet] ||
@@ -4049,12 +4097,6 @@
     }
     if (b.dataset.merge != null) return doMerge(Number(b.dataset.merge));
 
-    if (b.dataset.delI) {
-      return dropItem(Number(b.dataset.delM), Number(b.dataset.delI));
-    }
-    if (b.dataset.saveG) {
-      return saveGrams(Number(b.dataset.saveM), Number(b.dataset.saveG));
-    }
     if (b.dataset.grams) {
       var gi = document.getElementById('grams');
       var grams = (gi && gi.value || '').trim();

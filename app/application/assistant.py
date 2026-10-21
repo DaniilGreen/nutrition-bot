@@ -638,6 +638,34 @@ class Assistant:
         """FR-39.5: свои наборы для «Моё»."""
         return await self._meals.sets(user)
 
+    async def fix_item(
+        self, user: User, meal_id: int, item_id: int, text: str
+    ) -> MealLogged | None:
+        """«Поправить словами» (§6.27): «это был булгур», «индейка 150 г» — тот же разбор и
+        каталог, что у записи; позиция заменяется в том же приёме. None — не понял или нет такой."""
+        known_keys = await self._products.all_keys()
+        parsed = _consolidate(await self._nlu.parse_samples(text, known_keys=known_keys))
+        if parsed.intent is not Intent.MEAL or not parsed.items:
+            return None
+        for it in parsed.items:
+            it.clarify_options = None  # человек сам сказал, что это, — не переспрашиваем
+        meal = await self._meals.fix_item(user, meal_id, item_id, parsed, raw_input=text)
+        if meal is None:
+            return None
+        stats = await self._stats.daily(user)
+        return MealLogged(meal=meal, remaining=stats.remaining)
+
+    async def restore_meal(self, user: User, snapshot: Meal) -> MealLogged | None:
+        """«Вернуть» (MA-INV-69). Приём ещё есть (убрали позицию) — сперва убираем его нынешний
+        вид, потом кладём снимок: восстанавливается ровно то, что было до удаления."""
+        if snapshot.user_id != user.id:
+            return None
+        if snapshot.id is not None and await self._meals.get(user, snapshot.id) is not None:
+            await self._meals.delete(user, snapshot.id)
+        meal = await self._meals.restore(snapshot)
+        stats = await self._stats.daily(user)
+        return MealLogged(meal=meal, remaining=stats.remaining)
+
     async def ingredients_from_text(self, text: str) -> tuple[list[RecipeItem], list[str]]:
         """FR-39.8: свой ингредиент текстом — тот же разбор, что у записи и «рецепт …», и через
         каталог. Возвращает закреплённые в каталоге позиции и имена тех, что закрепить не вышло

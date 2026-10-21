@@ -735,6 +735,30 @@ class SqlMealRepo:
         await self._s.flush()
         return _meal_to_domain(orm)
 
+    async def replace_item(
+        self, user_id: int, meal_id: int, item_id: int, items: list[MealItem]
+    ) -> Meal | None:
+        res = await self._s.execute(
+            select(MealORM).where(MealORM.id == meal_id, MealORM.user_id == user_id)
+        )
+        orm = res.scalar_one_or_none()
+        old = next((i for i in orm.items if i.id == item_id), None) if orm else None
+        if orm is None or old is None or not items:
+            return None
+        orm.items.remove(old)
+        for it in items:
+            orm.items.append(MealItemORM(
+                product_id=it.product_id, name_snapshot=it.name_snapshot, grams=it.grams,
+                kcal=it.macros.kcal, protein=it.macros.protein, fat=it.macros.fat,
+                carb=it.macros.carb, is_estimate=it.is_estimate,
+            ))
+        orm.total_kcal = round(sum(i.kcal for i in orm.items), 1)
+        orm.total_protein = round(sum(i.protein for i in orm.items), 1)
+        orm.total_fat = round(sum(i.fat for i in orm.items), 1)
+        orm.total_carb = round(sum(i.carb for i in orm.items), 1)
+        await self._s.flush()
+        return _meal_to_domain(orm)
+
     async def update_item(
         self, user_id: int, meal_id: int, item_id: int, *, grams: float, macros: Macros
     ) -> Meal | None:
