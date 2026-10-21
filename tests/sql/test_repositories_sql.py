@@ -371,3 +371,19 @@ async def test_merge_into_the_recipe_itself_does_not_self_reference(session):
     item = (await repo.get_recipe(rec.id)).items[0]
     assert item.product_id is None
     assert item.density.kcal_per_100g == ing.density.kcal_per_100g  # снимок цел
+
+
+async def test_замена_позиции_в_том_же_приёме(session):
+    """§6.27 «поправить словами»: старая строка уходит, новая встаёт, итоги пересчитаны."""
+    me = await _user(session, 9501)
+    p = await _product(session, "rx_buckwheat", "гречка", 110)
+    meal = await _meal(session, me, p, 250)
+    repo = SqlMealRepo(session)
+    new = MealItem(name_snapshot="булгур отварной", grams=250,
+                   macros=Macros(207.5, 7.8, 0.5, 46.5), product_id=None)
+    out = await repo.replace_item(me.id, meal.id, meal.items[0].id, [new])
+    assert [i.name_snapshot for i in out.items] == ["булгур отварной"]
+    assert out.totals.kcal == 207.5 and out.id == meal.id
+    again = await repo.get(me.id, meal.id)
+    assert [i.name_snapshot for i in again.items] == ["булгур отварной"]
+    assert await repo.replace_item(me.id + 1, meal.id, again.items[0].id, [new]) is None
