@@ -51,6 +51,7 @@ from app.application.results import (
     ClarificationNeeded,
     CorrectionFailed,
     DailyStats,
+    DishSaved,
     ItemAdjusted,
     ItemPickNeeded,
     ItemRemoved,
@@ -116,6 +117,7 @@ from app.bot.keyboards import (
     main_menu_keyboard,
     meal_actions_keyboard,
     onboarding_intro_keyboard,
+    open_in_app,
     photo_keyboard,
     portion_keyboard,
     prod_edit_keyboard,
@@ -443,10 +445,13 @@ async def cmd_products(
     # `/products тофу` — поиск по каталогу (FR-15.1). Голый `/products` — 10 последних оценок.
     query = (command.args or "").strip() or None
     products = await assistant.fixable_products(limit=10, query=query)
-    if not products:
-        await _rich(message, screens.products(products, query))  # пустой экран сам объяснит
+    if not products:  # пустой экран сам объяснит; каталог целиком — в аппке (FR-46)
+        await _rich(message, screens.products(products, query), open_in_app("cat"))
         return
-    await _rich(message, screens.products(products, query), products_fix_keyboard(products))
+    await _rich(
+        message, screens.products(products, query),
+        open_in_app("cat", products_fix_keyboard(products)),
+    )
 
 
 @router.message(Command("ask"))
@@ -489,7 +494,7 @@ def _asked(result: Result) -> bool:
 
 @router.message(Command("profile"))
 async def cmd_profile(message: Message, state: FSMContext) -> None:
-    await _start_profile(message, state)
+    await _start_profile(message, state, app=True)
 
 
 # --- кнопки постоянного меню (приходят как обычный текст) ----------------------
@@ -539,7 +544,7 @@ async def btn_goal(
 
 @router.message(F.text == BTN_PROFILE)
 async def btn_profile(message: Message, state: FSMContext) -> None:
-    await _start_profile(message, state)
+    await _start_profile(message, state, app=True)
 
 
 @router.message(F.text == BTN_UNDO)
@@ -1095,10 +1100,11 @@ async def on_scan_btn(
     head = "💾 Замер обновлён." if updated else "💾 Замер сохранён — он в «Итогах» мини-аппа."
     prop = overview.proposal
     if prop is None or not prop.changed:
-        await callback.message.answer(head)
+        await callback.message.answer(head, reply_markup=open_in_app("body"))  # FR-46
         return
     await callback.message.answer(
-        head + "\n\n" + format_goal_proposal(prop), reply_markup=scan_apply_keyboard()
+        head + "\n\n" + format_goal_proposal(prop),
+        reply_markup=open_in_app("body", scan_apply_keyboard()),
     )
 
 
@@ -2860,11 +2866,14 @@ async def on_stale_callback(callback: CallbackQuery) -> None:
 # --- helpers ------------------------------------------------------------------
 
 
-async def _start_profile(message: Message, state: FSMContext) -> None:
+async def _start_profile(message: Message, state: FSMContext, *, app: bool = False) -> None:
+    """app — кнопка «📱 Открыть в приложении» на настройки (FR-46): из «⚙️ Профиль» и /profile.
+    Визарду первого запуска её не даём — выход в аппку оборвал бы настройку цели."""
     await state.clear()
     await state.set_state(ProfileStates.sex)
     await message.answer(
-        "⚙️ Настрою дневную цель по профилю.\nТвой пол?", reply_markup=sex_keyboard()
+        "⚙️ Настрою дневную цель по профилю.\nТвой пол?",
+        reply_markup=open_in_app("set", sex_keyboard()) if app else sex_keyboard(),
     )
 
 
@@ -2875,7 +2884,9 @@ async def _show_today(message: Message, app_user: User, assistant: Assistant) ->
 async def _show_week(
     message: Message, app_user: User, assistant: Assistant, scans: object | None = None
 ) -> None:
-    await _rich(message, screens.week(await gather(assistant, app_user, scans)))
+    await _rich(
+        message, screens.week(await gather(assistant, app_user, scans)), open_in_app("tot-week")
+    )
 
 
 async def _show_weight(message: Message, app_user: User, assistant: Assistant) -> None:
@@ -3045,6 +3056,10 @@ async def _reply_screen(
         await _rich(message, screens.item_removed(result))
     elif isinstance(result, ItemAdjusted):
         await _rich(message, screens.item_adjusted(result))
+    elif isinstance(result, DishSaved) and result.product.id:  # FR-46: состав — в аппке
+        await message.answer(
+            format_result(result), reply_markup=open_in_app(f"recipe-{result.product.id}")
+        )
     else:  # WeightLogged / CorrectionFailed / Unknown — короткий текст + возможный график веса
         await message.answer(format_result(result))
         await _maybe_weight_chart(message, app_user, assistant, result)

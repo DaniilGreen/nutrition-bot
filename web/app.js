@@ -1413,13 +1413,32 @@
   }
 
   function renderProduct() {
+    document.getElementById('title').textContent = 'Продукт';
     loadingFor('cat:product:' + state.cat.product);
-    api('/api/products/' + state.cat.product).then(function (d) {
+    /* MA-INV-78: вход «recipe-<id>» открывает состав один раз — флаг снимается до
+       ответа, иначе упавшая загрузка оставила бы его до следующей карточки. */
+    var withRecipe = state.cat.recipe;
+    state.cat.recipe = false;
+    /* Ответ опоздал — человек уже на другом экране или продукте: не рисуем ни
+       карточку, ни ошибку, ни шторку поверх чужого экрана. */
+    var pid = state.cat.product;
+    var here = function () {
+      return state.tab === 'cat' && state.cat.view === 'product' && state.cat.product === pid;
+    };
+    api('/api/products/' + pid).then(function (d) {
+      if (!here()) return;
       state.cat.card = d;
       state.cat.editing = false;
       state.cat.pick = Math.round(refGrams(d.product));
       paintProduct();
-    }).catch(failure);
+      if (withRecipe && d.product.source === 'recipe') openRecipeSheet(d.product, d.recipe);
+    }).catch(function (e) {
+      if (!here()) return;
+      /* Продукта нет (удалили, слили, устаревший id в адресе — MA-INV-78): вкладка
+         «Продукты» дальше открывает список, а не ту же ошибку по кругу. */
+      state.cat.view = 'list'; state.cat.product = null;
+      failure(e);
+    });
   }
 
   /* §6.25, В1: карточка начинается с записи — пришёл за продуктом, чтобы съесть его ещё
@@ -1548,9 +1567,9 @@
   }
 
   function renderDups() {
+    document.getElementById('title').textContent = 'Дубли';
     loadingFor('cat:dups');
     api('/api/products/duplicates/groups').then(function (d) {
-      document.getElementById('title').textContent = 'Дубли';
       /* MA-INV-25: человек должен знать заранее, что история не поедет.
          Иначе он ждёт пересчёта съеденного и считает его отсутствие багом. */
       var vow = '<div class="mic" style="padding:0 var(--s-2) var(--s-3);line-height:1.55">' +
@@ -1793,6 +1812,11 @@
       api('/api/week?weeks_ago=' + (state.weekAgo || 0)).catch(nothing),
       api('/api/body-scans').catch(nothing)
     ]).then(function (res) {
+      /* Опоздавший ответ — с вкладки ушли или период уже другой (чип, настройки):
+         рисовать его значит показать не тот период поверх верного. */
+      if (state.tab !== 'tot' || activePeriod() !== days) return;
+      var land = state.land;   /* MA-INV-78: прокрутка к карточке — только при входе */
+      state.land = null;
       var d = res[0], w = res[1], rec = res[2], con = res[3], pro = res[4], acc = res[5];
       var wk = res[6] && res[6].week ? weekCard(res[6].week, state.weekAgo || 0) : '';
       var comp = compCard(res[7]);
@@ -1804,7 +1828,7 @@
           card('За этот период записей нет',
                '<div class="state">Выбери период побольше или запиши приём — ' +
                'графики появятся сами.</div>', ''));
-        return;
+        return landAt(land);
       }
       show(wk + periods() +
            reconcileCard(rec) +
@@ -1827,7 +1851,10 @@
                    'пропустил его — просел весь день.'
            }) +
            accuracyCard(acc));
-    }).catch(failure);
+      landAt(land);
+    }).catch(function (e) {
+      if (state.tab === 'tot' && activePeriod() === days) failure(e);
+    });
   }
 
   /* Флагманская панель §4.0: сходится ли дневник с весами.
@@ -1999,6 +2026,12 @@
       return '<button data-period="' + p[0] + '" aria-pressed="' +
         (activePeriod() === p[0]) + '">' + p[1] + '</button>';
     }).join('') + '</div>';
+  }
+
+  /* Карточка, к которой прокрутить «Итоги» при входе (MA-INV-78). Нет её — верх. */
+  function landAt(cls) {
+    var el = cls && root.querySelector('.' + cls);
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'start' });
   }
 
   function card(title, body, note) {
@@ -4522,11 +4555,80 @@
     paintDay(d, act === 'around');
   }
 
+  /* MA-INV-78: экран входа по кнопке бота (`?s=`). Белый список явными ветками, без
+     поиска по объекту: иначе `constructor` нашёлся бы в прототипе. Id только выбирает
+     экран: каталог общий, данные те же, что в списке; в разметку id не попадает.
+     Всё, что не совпало целиком, — «День».
+     Чистая функция: ветки проверяет `node web/check.mjs`. */
+  function landing(search) {
+    var m = /(?:^\?|&)s=([^&]*)/.exec(search || '');
+    var v = m ? m[1] : '';
+    var id = /^(cat|recipe)-([1-9][0-9]{0,9})$/.exec(v);
+    if (id) return { tab: 'cat', product: id[2], recipe: id[1] === 'recipe' };
+    if (v === 'cat') return { tab: 'cat' };
+    if (v === 'dupes') return { tab: 'cat', dups: true };
+    if (v === 'tot') return { tab: 'tot' };
+    if (v === 'tot-week') return { tab: 'tot', period: 7 };
+    if (v === 'body') return { tab: 'tot', land: 'comp' };
+    if (v === 'set') return { tab: 'set' };
+    return { tab: 'day' };
+  }
+
+  /* Что делать на старте с экраном входа и сохранённым днём (MA-INV-74, MA-INV-78).
+     paint    — сохранённый день, который рисуем сразу: только при входе на «День»,
+                на другом экране он мигнул бы чужим кадром;
+     enter    — открыть экран входа сразу, не дожидаясь дня;
+     dayError — ошибка стартового дня показывается на экране: только на «Дне»,
+                у экрана входа своя загрузка и свои ошибки.
+     Чистая функция: ветки проверяет `node web/check.mjs`. */
+  function bootPlan(to, saved) {
+    var day = to.tab === 'day';
+    return { paint: day && saved ? saved : null, enter: !day, dayError: day };
+  }
+
+  /* Открыть экран входа тем же состоянием, что оставили бы тапы по вкладке и по
+     кнопке экрана: «назад» у карточки и дублей ведёт к списку, как обычно. Настройки
+     живут под «Днём» (шестерёнка) — подсвечена его вкладка. */
+  function enter(to) {
+    state.tab = to.tab;
+    if (to.tab === 'cat') {
+      state.cat = { q: '', offset: 0, view: to.dups ? 'dups' : to.product ? 'product' : 'list',
+                    product: to.product || null, dup: null, recipe: !!to.recipe };
+    }
+    if (to.period) state.period = to.period;
+    state.land = to.land || null;
+    var lit = to.tab === 'set' ? 'day' : to.tab;
+    [].forEach.call(nav.querySelectorAll('button'), function (x) {
+      if (x.dataset.tab === lit) x.setAttribute('aria-current', 'page');
+      else x.removeAttribute('aria-current');
+    });
+    render();
+  }
+
   /* MA-INV-75: настройки, день и частое уходят разом — раньше день ждал
      настроек, и холодный старт стоил два оборота подряд вместо одного. */
   function boot() {
-    var saved = bootCache(readBoot(), Date.now());
-    var settingsReq = api('/api/settings').catch(function () { return null; });
+    var to = landing(location.search);
+    var plan = bootPlan(to, bootCache(readBoot(), Date.now()));
+    var saved = plan.paint;
+    /* Настройки применяются, как только пришли, а не вместе с днём: упавший день
+       не должен выбросить удачные настройки — без пояса не сохранится и день. */
+    var prefsWas = null;
+    var settingsReq = api('/api/settings').then(function (s) {
+      prefsWas = JSON.stringify(state.prefs);
+      var period = activePeriod();
+      if (!state.settingsEdited) applySettings(s);
+      /* MA-INV-78: «Итоги», открытые до настроек, взяли период из сохранённого или
+         30. Другой период по умолчанию — перерисовать, если явно его не выбирали. */
+      if (state.tab === 'tot' && !state.period && activePeriod() !== period) {
+        state.land = to.land || null;
+        renderTotals();
+      }
+    }).catch(function () {
+      if (prefsWas === null) prefsWas = JSON.stringify(state.prefs);
+    }).then(function () {
+      if (!state.prefs) state.prefs = {};   /* не пришли — вид по умолчанию */
+    });
     var dayReq = api('/api/day?days_ago=0');
     loadFrequent();
     document.getElementById('gear').setAttribute('aria-pressed', false);
@@ -4539,18 +4641,24 @@
         paintDay(saved.day);
       } catch (e) { saved = null; state.lastDay = state.staleDay = null; }  /* как без кэша */
     }
+    if (plan.enter) {
+      /* MA-INV-78: вид — из сохранённого, если есть (период «Итогов» и прочее); день
+         из него не рисуем, свежий в фоне только запомнится (shouldRepaint → store). */
+      var raw = readBoot();
+      try { if (raw && raw.settings) applySettings(raw.settings); } catch (e) { /* как без кэша */ }
+      enter(to);
+    }
     /* Без сохранённого — скелет, пока не придут И день, И настройки: иначе
        панель мигнёт видом по умолчанию и только потом переключится на выбранный. */
-    if (!saved) loadingDay();
+    else if (!saved) loadingDay();
     var base = state.lastDay;
+    /* «День» без сохранённого по-прежнему рисуется, когда пришли оба (MA-INV-75). */
     Promise.all([settingsReq, dayReq]).then(function (r) {
-      var s = r[0], d = r[1];
-      var prefsWas = JSON.stringify(state.prefs);
-      if (s && !state.settingsEdited) applySettings(s);
-      else if (!state.prefs) state.prefs = {};  /* не пришли — вид по умолчанию */
+      var d = r[1];
       settle(d, base, !!saved && JSON.stringify(state.prefs) === prefsWas &&
                       JSON.stringify(d) === JSON.stringify(saved.day));
     }).catch(function (e) {
+      if (!plan.dayError) return;   /* экран входа грузит и ругается сам (MA-INV-78) */
       if (!saved || e.code === 'init_data_expired' || e.code === 'inactive') return failure(e);
       /* Сохранённый день остаётся, но подписан своим временем — до следующей
          удачной загрузки. Тост исчез бы, а цифры продолжили бы выглядеть текущими. */

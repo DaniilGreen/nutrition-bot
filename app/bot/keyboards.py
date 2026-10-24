@@ -3,14 +3,23 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re
 from collections.abc import Sequence
 from datetime import date
+from functools import cache
 from zoneinfo import ZoneInfo
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    WebAppInfo,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 from app.application.entities import Meal, MealItem, Product
+from app.assets import asset_version
+from app.config import get_settings
 from app.domain.plausibility import MAX_PORTION_G, MIN_PORTION_G
 
 PORTION_CALLBACK_PREFIX = "portion"
@@ -60,6 +69,41 @@ MENU_BUTTONS = (
     BTN_TODAY, BTN_WEEK, BTN_HISTORY, BTN_WEIGHT, BTN_GOAL, BTN_PROFILE,
     BTN_FREQUENT, BTN_UNDO, BTN_BUG,
 )
+
+
+OPEN_APP_TEXT = "📱 Открыть в приложении"
+# FR-46: экраны, на которые бот открывает аппку, — тот же белый список, что у `landing` в
+# web/app.js (MA-INV-78). Значение вне него аппка молча открыла бы на «Дне»; ловим до отправки.
+# `[0-9]`, а не `\d`: тот в Python принимает и «٣».
+_APP_SCREEN = re.compile(r"day|cat|dupes|tot|tot-week|body|set|(?:cat|recipe)-[1-9][0-9]{0,9}")
+
+
+@cache
+def _app_version() -> str:
+    """Отпечаток статики — раз на процесс: `app` и `web` входят в образ, и любой деплой с их
+    правкой пересоздаёт контейнер бота. Кнопка меню (menu.py) берёт его так же, на старте."""
+    return asset_version()
+
+
+def open_in_app(
+    screen: str, markup: InlineKeyboardMarkup | None = None
+) -> InlineKeyboardMarkup | None:
+    """FR-46: `📱 Открыть в приложении` последним рядом под `markup` — сразу на экран `screen`.
+
+    web_app-кнопка, а не ссылка `startapp` (D-MA-28): адрес тот же, что у кнопки меню, с
+    отпечатком статики (MA-INV-35), плюс `&s=`. Id в экране — только выбор экрана: каталог общий,
+    данные те же, что видны в списке.
+    Без MINIAPP_URL кнопки нет — `markup` возвращается как был (в том числе None).
+    """
+    if not _APP_SCREEN.fullmatch(screen):
+        raise ValueError(f"экрана аппки «{screen}» нет в белом списке (MA-INV-78)")
+    base = get_settings().miniapp_url.rstrip("/")
+    if not base:
+        return markup
+    url = f"{base}/?v={_app_version()}&s={screen}"
+    button = InlineKeyboardButton(text=OPEN_APP_TEXT, web_app=WebAppInfo(url=url))
+    rows = markup.inline_keyboard if markup else []
+    return InlineKeyboardMarkup(inline_keyboard=[*rows, [button]])
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:

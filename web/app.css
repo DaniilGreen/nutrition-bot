@@ -244,6 +244,9 @@ nav button[aria-current="page"]{color:var(--accent)}
 .rows .field .num,.comp .field .num{font-size:var(--f-body-s)}
 
 /* ── состав тела и замер (§6.24) ─────────────────────────────────────── */
+/* Вход из бота прокручивает сюда (MA-INV-78): тот же верхний отступ, что у body, —
+   иначе в полноэкранном режиме заголовок карточки уходит под вырез. */
+.comp{scroll-margin-top:calc(var(--s-2) + var(--top-inset, env(safe-area-inset-top, 0px)))}
 .comp .chart svg{max-width:420px}
 .comprow{display:flex;justify-content:space-between;max-width:420px;
   font-size:var(--f-micro);color:var(--text-muted);margin-top:4px}

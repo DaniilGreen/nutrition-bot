@@ -192,6 +192,84 @@ if (!sr) {
   }
 }
 
+/* ── Вход по кнопке бота: только белый список (MA-INV-78) ────────────────
+ *
+ * Бот открывает аппку на нужном экране адресом `?s=…`. Адрес — чужой ввод:
+ * его можно переписать руками. Всё, что не совпало целиком, — «День», а id
+ * берётся только цифрами без ведущих нулей.
+ */
+const ld = src.match(/function landing\([\s\S]*?\n  \}/);
+if (!ld) {
+  problems.push('Не нашёл function landing — на нём держится вход из бота на экран.');
+} else {
+  const landing = new Function('return ' + ld[0])();
+  const day = { tab: 'day' };
+  const cases = [
+    ['', day, 'без параметра — «День»'],
+    ['?v=abc', day, 'только отпечаток — «День»'],
+    ['?v=abc&s=day', day, '«День» явно'],
+    ['?v=abc&s=cat', { tab: 'cat' }, 'каталог'],
+    ['?s=cat-7&v=abc', { tab: 'cat', product: '7', recipe: false }, 'карточка продукта, s первым'],
+    ['?v=abc&s=recipe-42', { tab: 'cat', product: '42', recipe: true }, 'состав рецепта'],
+    ['?v=abc&s=dupes', { tab: 'cat', dups: true }, 'дубли'],
+    ['?v=abc&s=tot', { tab: 'tot' }, 'итоги'],
+    ['?v=abc&s=tot-week', { tab: 'tot', period: 7 }, 'итоги за неделю'],
+    ['?v=abc&s=body', { tab: 'tot', land: 'comp' }, 'состав тела'],
+    ['?v=abc&s=set', { tab: 'set' }, 'настройки'],
+    ['?s=foo', day, 'неизвестный экран'],
+    ['?s=ai', day, 'вкладка, которой нет в списке входа'],
+    ['?s=CAT', day, 'регистр не угадываем'],
+    ['?s=constructor', day, 'имя из прототипа объекта'],
+    ['?s=__proto__', day, 'имя из прототипа объекта'],
+    ['?s=cat-0', day, 'id ноль'],
+    ['?s=cat-01', day, 'ведущий ноль'],
+    ['?s=cat-1e3', day, 'id не число'],
+    ['?s=cat-7x', day, 'хвост за id'],
+    ['?s=cat-12345678901', day, 'id длиннее 10 цифр'],
+    ['?s=recipe', day, 'рецепт без id'],
+    ['?s=tot-x', day, 'неизвестный раздел итогов'],
+    ['?s=cat%2D7', day, 'закодированное не раскодируем'],
+    ['?s=cat-7%3Cb%3E', day, 'разметка в id'],
+    ['?xs=cat', day, 'чужой параметр с тем же хвостом'],
+  ];
+  for (const [arg, want, why] of cases) {
+    const got = JSON.stringify(landing(arg));
+    if (got !== JSON.stringify(want)) {
+      problems.push(`Вход из бота: ${why} (${arg || 'пусто'}) — ожидалось ` +
+                    `${JSON.stringify(want)}, получено ${got}.`);
+    }
+  }
+}
+
+/* ── Старт с экрана входа не трогает «День» (MA-INV-74, MA-INV-78) ───────
+ *
+ * Сохранённый день рисуется только при входе на «День»: на каталоге он мигнул
+ * бы чужим кадром (AC-173). Ошибка стартового дня на экране входа не
+ * показывается — она затёрла бы открытый каталог (AC-174).
+ */
+const bp = src.match(/function bootPlan\([\s\S]*?\n  \}/);
+if (!bp) {
+  problems.push('Не нашёл function bootPlan — на нём держится старт с экрана входа.');
+} else {
+  const bootPlan = new Function('return ' + bp[0])();
+  const S = { day: { day: '2026-10-24', days_ago: 0 } };
+  const cases = [
+    [{ tab: 'day' }, S, { paint: S, enter: false, dayError: true }, '«День» с сохранённым — рисуем сразу'],
+    [{ tab: 'day' }, null, { paint: null, enter: false, dayError: true }, '«День» без сохранённого — скелет'],
+    [{ tab: 'cat' }, S, { paint: null, enter: true, dayError: false }, 'каталог: сохранённый день не рисуем (AC-173)'],
+    [{ tab: 'cat', product: '7', recipe: true }, S, { paint: null, enter: true, dayError: false }, 'рецепт: то же'],
+    [{ tab: 'tot', land: 'comp' }, null, { paint: null, enter: true, dayError: false }, 'итоги: ошибка дня не затирает экран (AC-174)'],
+    [{ tab: 'set' }, S, { paint: null, enter: true, dayError: false }, 'настройки: то же'],
+  ];
+  for (const [to, saved, want, why] of cases) {
+    const got = bootPlan(to, saved);
+    const ok = got.paint === want.paint && got.enter === want.enter && got.dayError === want.dayError;
+    if (!ok) {
+      problems.push(`Старт: ${why} — ожидалось ${JSON.stringify(want)}, получено ${JSON.stringify(got)}.`);
+    }
+  }
+}
+
 /* ── Верхний вырез ────────────────────────────────────────────────────────
  *
  * Нижний `env(safe-area-inset-bottom)` был в четырёх местах, верхнего не было
