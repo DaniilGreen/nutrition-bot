@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -15,7 +17,10 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import QueryParams
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response
+from starlette.types import Scope
 
 from app.assets import WEB_DIR, asset_version
 from app.config import Settings
@@ -24,6 +29,7 @@ from app.logging import setup_logging
 from app.web.drafts import DraftStore
 from app.web.limits import IdempotencyStore, RateLimiter
 from app.web.routes import router as api_router
+from app.web.warmup import warm_up
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +48,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.drafts = DraftStore()
     app.state.idempotency = IdempotencyStore()
     app.state.limiter = RateLimiter()
+    # MA-INV-77: прогрев фоном — старт его не ждёт, первый запрос не платит за
+    # соединение и компиляцию. Ссылку держим: задачу без ссылки соберёт GC.
+    app.state.warmup = asyncio.create_task(warm_up(app.state.container))
     yield
+    # Дождаться отмены ДО dispose: иначе прогрев держит соединение закрываемого пула.
+    app.state.warmup.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await app.state.warmup
     await app.state.container.db.dispose()
 
 
@@ -139,8 +152,33 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+# MA-INV-76: файл по адресу с ТЕКУЩЕЙ версией не меняется никогда — браузер держит
+# его год и не переспрашивает (раньше каждое открытие стоило 304 на app.js и app.css,
+# по обороту ~270 мс). Без версии или со старой — «переспроси»: такой адрес
+# приходит только со старой страницы, и вечный кэш на нём закрепил бы не тот файл.
+IMMUTABLE = "public, max-age=31536000, immutable"
+VERSIONED = frozenset({"app.js", "app.css"})
+# Наружу — только то, что грузит страница: check.mjs и responsive.md живут в web/
+# ради разработки, публиковать их незачем.
+PUBLIC = VERSIONED | {"index.html"}
+
+
+class WebStatic(StaticFiles):
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        if path not in PUBLIC:
+            raise StarletteHTTPException(404)
+        response = await super().get_response(path, scope)
+        if path in VERSIONED:
+            pinned = QueryParams(scope.get("query_string", b"")).get("v") == asset_version()
+            response.headers["Cache-Control"] = IMMUTABLE if pinned else "no-cache"
+        elif path.endswith(".html"):
+            # /index.html в обход корня: та же точка входа, тот же запрет (MA-INV-35).
+            response.headers["Cache-Control"] = "no-store, must-revalidate"
+        return response
+
+
 # Монтируется последним: иначе StaticFiles на "/" перехватил бы /api и /health.
 # html=True отдаёт index.html на корень; на пропавший файл — честный 404, а не
 # HTML с кодом 200 (тот баг у соседа ломал запуск после каждой выкатки, §5.7).
 if WEB_DIR.is_dir():
-    app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
+    app.mount("/", WebStatic(directory=WEB_DIR, html=True), name="web")

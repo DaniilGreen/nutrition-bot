@@ -123,6 +123,11 @@ nav button[aria-current="page"]{color:var(--accent)}
 /* Занятость экрана без композера: гасим, но не стираем. Скелет вместо готовой
    разметки схлопывал высоту страницы и подбрасывал прокрутку. */
 #screen.working{opacity:.5;pointer-events:none;transition:opacity .12s}
+/* MA-INV-74: сохранённый день, ещё не подтверждённый сервером, — то же приглушение,
+   но поле ввода живое: записать можно, не дожидаясь сети. */
+#screen.stale>:not(#composer){opacity:.5;pointer-events:none;transition:opacity .12s}
+/* Свежий так и не пришёл: цифры подписаны временем, на которое они верны. */
+.stale-mark{font-size:var(--f-caption-s);color:var(--alert);margin-bottom:var(--s-2)}
 @media (prefers-reduced-motion:reduce){.skel{animation:none}.track>i{transition:none}}
 
 /* ── поле ввода: посередине экрана, между панелью и лентой (§6.3) ────── */

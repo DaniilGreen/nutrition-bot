@@ -101,3 +101,37 @@ async def test_сбой_кнопки_не_роняет_бота():
     bot = AsyncMock()
     bot.set_chat_menu_button.side_effect = RuntimeError("телега молчит")
     await setup_miniapp_button(bot, "https://example.test")  # не бросает
+
+
+async def test_версионный_адрес_кэшируется_навсегда(client):
+    """MA-INV-76: файл по текущей версии не меняется — переспрашивать его незачем.
+    Каждый переспрос стоил оборот ~270 мс на открытии аппки."""
+    v = asset_version()
+    async with client as c:
+        js = await c.get(f"/app.js?v={v}")
+        css = await c.get(f"/app.css?v={v}")
+    for r in (js, css):
+        assert r.status_code == 200
+        assert r.headers["cache-control"] == "public, max-age=31536000, immutable"
+
+
+async def test_адрес_без_версии_или_со_старой_переспрашивается(client):
+    """Вечный кэш на чужой версии закрепил бы не тот файл: адрес со старым хэшем
+    отдаёт уже новое содержимое."""
+    async with client as c:
+        bare = await c.get("/app.js")
+        old = await c.get("/app.js?v=0000000000")
+        page = await c.get("/index.html")
+    assert bare.headers["cache-control"] == "no-cache"
+    assert old.headers["cache-control"] == "no-cache"
+    assert "no-store" in page.headers["cache-control"]
+
+
+
+async def test_служебные_файлы_web_не_отдаются(client):
+    """Наружу — только то, что грузит страница. check.mjs и заметки по вёрстке
+    лежат в web/ рядом, но публиковать их незачем."""
+    async with client as c:
+        for path in ("/check.mjs", "/responsive.md"):
+            r = await c.get(path)
+            assert r.status_code == 404, path

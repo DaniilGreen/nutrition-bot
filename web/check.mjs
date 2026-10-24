@@ -130,6 +130,68 @@ if (!fn) {
   }
 }
 
+/* ── Сохранённый день — только сегодняшний (MA-INV-74) ───────────────────
+ *
+ * Аппка рисует последний день из localStorage до ответа сервера. Вчерашний
+ * день под заголовком «Сегодня» — это неверные цифры, а точность учёта тут
+ * главное. «Сегодня» считается как на сервере: по поясу человека и с его
+ * началом дня (`local_date` в app/domain/timeframe.py).
+ */
+const bc = src.match(/function bootCache\([\s\S]*?\n  \}/);
+if (!bc) {
+  problems.push('Не нашёл function bootCache — на нём держится мгновенный старт.');
+} else {
+  const bootCache = new Function('return ' + bc[0])();
+  const saved = (day, tz, dayStart, ago = 0) =>
+    ({ day: { day, days_ago: ago }, settings: { timezone: tz, prefs: { day_start: dayStart } } });
+  const at = Date.parse('2026-10-24T20:30:00Z');   // в Москве 23:30, в GMT+7 уже 03:30 25-го
+  const cases = [
+    [saved('2026-10-24', 'Europe/Moscow', 0), true, 'тот же день по поясу человека'],
+    [saved('2026-10-23', 'Europe/Moscow', 0), false, 'вчерашний день не рисуется как сегодня'],
+    [saved('2026-10-24', 'Etc/GMT-7', 0), false, 'у человека в GMT+7 уже наступило 25-е'],
+    [saved('2026-10-24', 'Etc/GMT-7', 4), true, 'день с 04:00: в 03:30 ещё 24-е'],
+    [saved('2026-10-25', 'Etc/GMT-7', 0), true, 'сегодня по его поясу, а не по нашему'],
+    [saved('2026-10-24', 'Europe/Moscow', 0, 1), false, 'прошлый день из ленты — не стартовый'],
+    [saved('2026-10-24', undefined, 0), false, 'пояс неизвестен — не сверить, не рисуем'],
+    [saved('2026-10-24', 'Нет/Такого', 0), false, 'пояс клиенту непонятен — не рисуем'],
+    [null, false, 'сохранённого нет'],
+  ];
+  for (const [arg, want, why] of cases) {
+    const got = !!bootCache(arg, at);
+    if (got !== want) problems.push(`Сохранённый день: ${why} — ожидалось ${want}, получено ${got}.`);
+  }
+}
+
+/* ── Фоновый свежий день: рисовать или нет (MA-INV-74, MA-INV-32) ─────────
+ *
+ * Свежий день приходит, пока человек уже что-то делает. Каждая ветка — чей-то
+ * реальный сбой: старый ответ поверх записи вернул бы прошлое, перерисовка во
+ * время записи стёрла бы экран, пересозданное поле ввода сбило бы набор.
+ */
+const sr = src.match(/function shouldRepaint\([\s\S]*?\n  \}/);
+if (!sr) {
+  problems.push('Не нашёл function shouldRepaint — на нём держится фоновое обновление.');
+} else {
+  const shouldRepaint = new Function('return ' + sr[0])();
+  const base = { untouched: true, tab: 'day', daysAgo: 0, busy: false, same: false, typing: false };
+  const cases = [
+    [{}, 'paint', 'ничего не мешает → перерисовать поверх'],
+    [{ untouched: false }, 'skip', 'день уже перерисовало действие → старый ответ не рисуем'],
+    [{ untouched: false, tab: 'set' }, 'skip', 'перерисованное действием не трогаем и с другой вкладки'],
+    [{ tab: 'set' }, 'store', 'человек в настройках → только запомнить'],
+    [{ daysAgo: 1 }, 'store', 'человек листает вчера → только запомнить'],
+    [{ busy: true }, 'store', 'идёт запись → рисует она сама (MA-INV-32)'],
+    [{ busy: true, typing: true }, 'store', 'запись важнее набора'],
+    [{ same: true }, 'undim', 'то же, что на экране → снять приглушение, разметку не трогать'],
+    [{ same: true, typing: true }, 'undim', 'то же и печатает → тоже только снять приглушение'],
+    [{ typing: true }, 'around', 'печатает → всё, кроме поля ввода'],
+  ];
+  for (const [over, want, why] of cases) {
+    const got = shouldRepaint({ ...base, ...over });
+    if (got !== want) problems.push(`Фоновый день: ${why} — ожидалось ${want}, получено ${got}.`);
+  }
+}
+
 /* ── Верхний вырез ────────────────────────────────────────────────────────
  *
  * Нижний `env(safe-area-inset-bottom)` был в четырёх местах, верхнего не было

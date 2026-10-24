@@ -7,6 +7,10 @@
   'use strict';
 
   var tg = window.Telegram && window.Telegram.WebApp;
+  /* Версия фронта — из адреса этого же скрипта (`/app.js?v=<хэш>`, MA-INV-35).
+     currentScript есть только при синхронном исполнении, поэтому берём сразу. */
+  var V = ((document.currentScript && document.currentScript.src || '')
+    .match(/[?&]v=([^&]+)/) || [])[1] || '';
   var root = document.getElementById('screen');
   var nav = document.getElementById('tabs');
   var state = { tab: 'day', daysAgo: 0, open: {}, prefs: null,
@@ -836,7 +840,38 @@
     if (window.confirm(text)) then();
   }
 
-  function show(html) { root.classList.remove('working'); root.innerHTML = html; }
+  function show(html) { root.classList.remove('working'); root.innerHTML = html; markStale(); }
+
+  /* MA-INV-74: сохранённый, ещё не подтверждённый сервером день приглушён и не
+     нажимается — кроме поля ввода: записать можно сразу, ввод не ждёт сети. */
+  function markStale() {
+    root.classList.toggle('stale', state.tab === 'day' && !!state.staleDay &&
+                                   state.lastDay === state.staleDay);
+  }
+
+  /* Перерисовать всё, КРОМЕ поля ввода: узел композера не покидает документ, и
+     фокус, каретка и набор через IME не сбиваются. Пересоздание под пальцем
+     человека — то же стирание экрана, что запрещает MA-INV-32. */
+  function showAround(html) {
+    var keep = document.getElementById('composer');
+    var tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    var slot = tmp.querySelector('#composer');
+    if (!keep || keep.parentNode !== root || !slot) return show(html);
+    root.classList.remove('working');
+    [].slice.call(root.childNodes).forEach(function (x) { if (x !== keep) root.removeChild(x); });
+    var before = true;
+    [].slice.call(tmp.childNodes).forEach(function (x) {
+      if (x === slot) { before = false; return; }
+      root.insertBefore(x, before ? keep : null);
+    });
+    markStale();
+  }
+
+  function typing() {
+    var s = document.getElementById('say');
+    return !!s && (document.activeElement === s || !!s.value.trim());
+  }
 
   /* §6.2: поле ввода активно сразу, ввод не ждёт загрузки. Раньше скелет
      затирал весь экран вместе с композером — и записать во время загрузки
@@ -900,9 +935,16 @@
 
   function hero(d) {
     var kind = (state.prefs && state.prefs.hero) || 'bars';
-    if (kind === 'rings') return heroRings(d);
-    if (kind === 'kcal') return heroKcal(d);
-    return heroBars(d);
+    var html = kind === 'rings' ? heroRings(d) : kind === 'kcal' ? heroKcal(d) : heroBars(d);
+    /* MA-INV-74: свежий не пришёл — цифры остаются, но подписаны своим временем,
+       пока следующая загрузка не пройдёт. Устаревшее не выдаёт себя за текущее. */
+    var off = state.offline;
+    if (!off || off.day !== d) return html;
+    var t = new Date(off.at);
+    return html.replace('<section class="card">', '<section class="card">' +
+      '<div class="stale-mark" role="status">не обновлено · ' +
+      (t.getHours() < 10 ? '0' : '') + t.getHours() + ':' +
+      (t.getMinutes() < 10 ? '0' : '') + t.getMinutes() + '</div>');
   }
 
   /* Кольца: все четыре макроса разом, как в Apple Fitness. */
@@ -1162,13 +1204,14 @@
     return hero(d) + composer() + chips() + pace + extra + feed(d);
   }
 
-  function paintDay(d) {
+  function paintDay(d, around) {
     state.lastDay = d;
     state.shownDay = state.daysAgo;
+    if (state.offline && state.offline.day !== d) state.offline = null;
     document.getElementById('title').textContent = title(d);
     document.getElementById('nav-day').classList.toggle('hidden', false);
     document.getElementById('fwd').disabled = state.daysAgo === 0;
-    show(dayHtml(d));
+    if (around) showAround(dayHtml(d)); else show(dayHtml(d));
     var inp = document.getElementById('say');
     if (inp && state.keepFocus) { inp.focus(); state.keepFocus = false; }
     if (state.freshScroll) {
@@ -1204,8 +1247,9 @@
     }
     var want = state.daysAgo;
     api('/api/day?days_ago=' + want).then(function (d) {
+      if (want === 0) saveBoot(d);
       // Быстрое листание: ответ на уже пролистанный день не рисуем.
-      if (want === state.daysAgo) paintDay(d);
+      if (want === state.daysAgo) paintDay(d, typing());
     }).catch(failure);
   }
 
@@ -2067,6 +2111,7 @@
     ]).then(function (res) {
       var d = res[0], o = res[1];
       state.settings = d;
+      state.tz = d.timezone;
       var p = d.prefs, g = d.goal;
       show(
         group('Вид',
@@ -2378,6 +2423,9 @@
   }
 
   function patch(path, body, ok, quiet) {
+    /* Поздний ответ стартовых настроек не должен затереть то, что человек
+       поменял, пока он шёл (MA-INV-74). */
+    state.settingsEdited = true;
     return send(path, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -2387,6 +2435,7 @@
       // иначе переключатель выглядит сломанным (MA-INV-31).
       if (d && d.prefs) state.prefs = d.prefs;
       if (state.settings && d && d.prefs) state.settings.prefs = d.prefs;
+      if (d && d.timezone) state.tz = d.timezone;  // по нему сверяется сохранённый день
       toast(ok);
       // `quiet` — настройка, которая ничего не меняет на этом экране: отметку
       // мы уже переключили на месте, а перерисовка тут была бы тем самым
@@ -2701,6 +2750,10 @@
     ]).then(function (r) {
       state.frequent = r[0].items;
       state.sets = r[1].items;
+      /* Чипы — в сохранённый старт: со следующего открытия строка на месте с
+         первого кадра, лента не съезжает вниз. */
+      if (state.lastDay && state.lastDay.days_ago === 0 && state.lastDay !== state.staleDay &&
+          !state.offline) saveBoot(state.lastDay);
       if (state.tab !== 'day') return;
       /* Вставляем строку чипов на место, а не перерисовкой всего дня: та
          ходила в API заново и мигала экраном ради оформления. */
@@ -3643,8 +3696,18 @@
   /* 409 in_flight значит «первый запрос ещё идёт» — это не сбой, и говорить о
      нём человеку нечего: кнопка и так в состоянии «пишу». */
   function oops(e) {
-    if (e && e.code === 'in_flight') return;
+    if (e && e.code === 'in_flight') return false;
     toast(e.message, true);
+    /* MA-INV-74: экран мог быть нарисован из сохранённого дня, а приём к тому
+       времени удалили с другого устройства. Ошибки мало — день надо освежить,
+       иначе человек тапает по тому, чего уже нет. Поверх экрана, без скелета. */
+    if (e && (e.code === 'meal_not_found' || e.code === 'item_not_found') &&
+        state.tab === 'day') {
+      if (state.sheet) closeSheet();
+      renderDay();
+      return true;
+    }
+    return false;
   }
 
   function submitText() {
@@ -3784,7 +3847,7 @@
           headers: { 'Content-Type': blob.type, 'Idempotency-Key': keyFor('voice') },
           body: blob
         }).then(function (r) { dropKey('voice'); return handle(r); })
-          .catch(function (e) { oops(e); renderDay(); });
+          .catch(function (e) { if (!oops(e)) renderDay(); });
       };
       recorder.start();
       state.recording = true;
@@ -3871,7 +3934,7 @@
       return send('/api/meals/' + b.dataset.repeat + '/repeat?days_ago=0',
                   { headers: { 'Idempotency-Key': keyFor(rid) } })
         .then(function (r) { dropKey(rid); return logged(r, 0); })
-        .catch(function (err) { oops(err); renderDay(); })
+        .catch(function (err) { if (!oops(err)) renderDay(); })
         .then(function () { state.sending = false; });
     }
     if (b.dataset.drop) {
@@ -3891,7 +3954,7 @@
           restoreToast('Удалил' + (dm ? ': ' + mealTitle(dm) : '.'), r.undo);
           renderDay();
         })
-        .catch(function (err) { oops(err); renderDay(); })
+        .catch(function (err) { if (!oops(err)) renderDay(); })
         .then(function () { state.sending = false; });
     }
     if (b.dataset.quick) {
@@ -3953,7 +4016,7 @@
         toast('Набор «' + r.name + '» сохранён — он в «Продуктах» → «Моё».');
         renderDay();
         loadFrequent();  // чип нового набора — сразу, а не после перезапуска аппки
-      }).catch(function (err) { oops(err); renderDay(); })
+      }).catch(function (err) { if (!oops(err)) renderDay(); })
         .then(function () { state.sending = false; });
     }
     if (b.dataset.set) {
@@ -4353,18 +4416,152 @@
       tg.onEvent('viewportChanged', applyTopInset);
     } catch (e) { /* старый клиент не знает этих событий */ }
   }
-  loadFrequent();
-  /* Настройки нужны до первой отрисовки: иначе панель мигнёт видом по умолчанию
-     и только потом переключится на выбранный. */
-  api('/api/settings').then(function (d) {
-    state.prefs = d.prefs;
+  /* ── быстрый старт (§5.13) ──────────────────────────────────────────── */
+
+  /* MA-INV-74: сохранённый день рисуется сразу, пока свежий в пути. Ключ — на
+     человека (телефон бывает общим) и на версию фронта: данные, сохранённые
+     старым кодом, новый не рисует — форма ответа могла смениться. Без
+     localStorage (приватный режим) всё работает, просто без мгновенного кадра. */
+  function bootKey() {
+    var u = tg.initDataUnsafe && tg.initDataUnsafe.user;
+    return u && u.id ? 'boot:' + V + ':' + u.id : null;
+  }
+
+  function readBoot() {
+    var k = bootKey();
+    if (!k) return null;
+    try { return JSON.parse(localStorage.getItem(k) || 'null'); }
+    catch (e) { return null; }
+  }
+
+  function saveBoot(d) {
+    var k = bootKey();
+    if (!k || !state.tz) return;   /* без пояса сохранённое не сверить с сегодня */
+    var id = k.split(':').pop();
+    try {
+      /* Записи того же человека от прошлых версий — мусор: прочесть их уже нельзя. */
+      for (var i = localStorage.length - 1; i >= 0; i--) {
+        var o = localStorage.key(i);
+        if (o && o !== k && o.indexOf('boot:') === 0 && o.split(':').pop() === id) {
+          localStorage.removeItem(o);
+        }
+      }
+      localStorage.setItem(k, JSON.stringify({
+        at: Date.now(), day: d, frequent: state.frequent || null, sets: state.sets || null,
+        settings: { prefs: state.prefs || {}, timezone: state.tz } }));
+    } catch (e) { /* переполнено или запрещено — переживём */ }
+  }
+
+  /* Сохранённый день годится, только если он и сейчас «сегодня» человека: по его
+     поясу и с его началом дня (§6.5, `day_start`). Вчерашний день под заголовком
+     «Сегодня» — неверные цифры, а это хуже секунды ожидания. Пояс неизвестен или
+     клиент его не понимает — не рисуем. Чистая функция: её проверяет
+     `node web/check.mjs`. */
+  function bootCache(saved, now) {
+    if (!saved || !saved.day || !saved.settings || saved.day.days_ago !== 0) return null;
+    var tz = saved.settings.timezone;
+    if (!tz) return null;
+    var start = Number((saved.settings.prefs || {}).day_start) || 0;
+    var p = {};
+    try {
+      new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit',
+                                         day: '2-digit' })
+        .formatToParts(new Date(now - start * 3600000))
+        .forEach(function (x) { p[x.type] = x.value; });
+    } catch (e) { return null; }
+    return saved.day.day === p.year + '-' + p.month + '-' + p.day ? saved : null;
+  }
+
+  /* Что делать со свежим днём, пришедшим в фоне. Чистая функция: каждую ветку
+     проверяет `node web/check.mjs`.
+     skip   — день уже перерисовало действие человека: наш ответ старше.
+     store  — запомнить, не рисовать: человек на другом экране или дне, либо идёт
+              запись — её собственная перерисовка и покажет (MA-INV-32).
+     undim  — то же, что на экране: снять приглушение, разметку не трогать.
+     around — человек печатает: перерисовать всё, кроме поля ввода.
+     paint  — перерисовать поверх, без скелета. */
+  function shouldRepaint(o) {
+    if (!o.untouched) return 'skip';
+    if (o.tab !== 'day' || o.daysAgo !== 0 || o.busy) return 'store';
+    if (o.same) return 'undim';
+    if (o.typing) return 'around';
+    return 'paint';
+  }
+
+  function applySettings(s) {
+    state.prefs = s.prefs || {};
     /* Настройка обязана иметь поведение за собой (MA-INV-31). Раньше здесь
        значение просто присваивалось и не читалось нигде — переключатель
        выглядел рабочим и не делал ничего. */
-    state.micFirst = !!d.prefs.mic_first;
-  }).catch(function () {
-    /* Настройки не пришли — рисуем с видом по умолчанию, а не пустой экран. */
-    state.prefs = {};
-  }).then(render);
+    state.micFirst = !!state.prefs.mic_first;
+    state.tz = s.timezone;
+  }
+
+  /* Свежий день пришёл в фоне: решить и сделать. `base` — день, что был на
+     экране, когда старт ушёл в сеть; `same` — свежий не отличается от видимого. */
+  function settle(d, base, same) {
+    var act = shouldRepaint({
+      untouched: state.lastDay === base || state.lastDay === d,
+      tab: state.tab, daysAgo: state.daysAgo,
+      busy: !!(state.sending || state.recording),
+      same: same, typing: typing()
+    });
+    if (act === 'skip') return;
+    saveBoot(d);
+    if (act === 'store') {
+      state.lastDay = d; state.shownDay = 0;
+      /* Запись упала, не перерисовав, — приглушение не должно остаться навсегда:
+         дождёмся конца записи и решим заново. */
+      if (state.tab === 'day' && (root.classList.contains('stale') || root.querySelector('.skel'))) {
+        setTimeout(function () { settle(d, base, same); }, 300);
+      }
+      return;
+    }
+    state.staleDay = null;
+    if (act === 'undim') { state.lastDay = d; return markStale(); }
+    paintDay(d, act === 'around');
+  }
+
+  /* MA-INV-75: настройки, день и частое уходят разом — раньше день ждал
+     настроек, и холодный старт стоил два оборота подряд вместо одного. */
+  function boot() {
+    var saved = bootCache(readBoot(), Date.now());
+    var settingsReq = api('/api/settings').catch(function () { return null; });
+    var dayReq = api('/api/day?days_ago=0');
+    loadFrequent();
+    document.getElementById('gear').setAttribute('aria-pressed', false);
+    if (saved) {
+      try {
+        applySettings(saved.settings);
+        if (saved.frequent) state.frequent = saved.frequent;
+        if (saved.sets) state.sets = saved.sets;
+        state.staleDay = saved.day;
+        paintDay(saved.day);
+      } catch (e) { saved = null; state.lastDay = state.staleDay = null; }  /* как без кэша */
+    }
+    /* Без сохранённого — скелет, пока не придут И день, И настройки: иначе
+       панель мигнёт видом по умолчанию и только потом переключится на выбранный. */
+    if (!saved) loadingDay();
+    var base = state.lastDay;
+    Promise.all([settingsReq, dayReq]).then(function (r) {
+      var s = r[0], d = r[1];
+      var prefsWas = JSON.stringify(state.prefs);
+      if (s && !state.settingsEdited) applySettings(s);
+      else if (!state.prefs) state.prefs = {};  /* не пришли — вид по умолчанию */
+      settle(d, base, !!saved && JSON.stringify(state.prefs) === prefsWas &&
+                      JSON.stringify(d) === JSON.stringify(saved.day));
+    }).catch(function (e) {
+      if (!saved || e.code === 'init_data_expired' || e.code === 'inactive') return failure(e);
+      /* Сохранённый день остаётся, но подписан своим временем — до следующей
+         удачной загрузки. Тост исчез бы, а цифры продолжили бы выглядеть текущими. */
+      state.staleDay = null;
+      state.offline = { day: saved.day, at: saved.at };
+      if (state.tab === 'day' && state.daysAgo === 0 && state.lastDay === saved.day) {
+        paintDay(saved.day, typing());
+      }
+    });
+  }
+
+  boot();
   if (tg.setHeaderColor) { try { tg.setHeaderColor('#000000'); } catch (e) { /* старый клиент */ } }
 })();
