@@ -63,6 +63,7 @@ from app.bot.formatters import (  # текстовые подсказки вну
 )
 from app.bot.keyboards import (
     BTN_BUG,
+    BTN_FREQUENT,
     BTN_GOAL,
     BTN_HISTORY,
     BTN_PROFILE,
@@ -73,6 +74,8 @@ from app.bot.keyboards import (
     DAY_DEL_PREFIX,
     DAY_NAV_PREFIX,
     DISH_SAVE_PREFIX,
+    FREQ_PREFIX,
+    FREQ_TOP,
     GOAL_TARGET_PREFIX,
     LABEL_G_PREFIX,
     ONBOARD_PREFIX,
@@ -82,6 +85,7 @@ from app.bot.keyboards import (
     WIZ_CANCEL,
     activity_keyboard,
     day_nav_keyboard,
+    frequent_keyboard,
     goal_target_keyboard,
     goal_type_keyboard,
     label_grams_keyboard,
@@ -95,6 +99,7 @@ from app.bot.keyboards import (
     products_fix_keyboard,
     scan_apply_keyboard,
     scan_keyboard,
+    set_key,
     sex_keyboard,
     undo_picker_keyboard,
     variant_keyboard,
@@ -475,6 +480,37 @@ async def btn_undo(
 ) -> None:
     await state.clear()
     await _show_undo_picker(message, app_user, assistant)
+
+
+_FREQ_HEAD = "⚡ <b>Частое</b> — тап сразу запишет в сегодня."
+_FREQ_HEAD_SETS = "\n📌 — наборы, остальное — твоя обычная порция."
+_FREQ_EMPTY = (
+    "⚡ Пока пусто — тут появится то, что ешь чаще всего.\n"
+    "Запиши пару приёмов как обычно; несколько позиций сохраняются «📌 Сохранить набор»."
+)
+
+
+@router.message(F.text == BTN_FREQUENT)
+async def btn_frequent(
+    message: Message, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
+    """FR-40: наборы и частое кнопками. Данные — те же, что у чипов аппки (`sets`, `frequent`)."""
+    await state.clear()
+    sets = await assistant.sets(app_user)
+    # Тот же топ, что у аппки: бот не показывает продукт, которого нет в её чипах. Имя — из
+    # каталога (так его запишет log_quick и покажет карточка), а не из снапшотов; продукт,
+    # которого в каталоге уже нет (слили/удалили), кнопкой не показываем.
+    rows = []
+    for pid, _name, grams, times in await assistant.frequent(app_user, days=30, limit=FREQ_TOP):
+        product = await assistant.get_product(pid) if pid else None
+        if product is not None:
+            rows.append((pid, product.display_name, grams, times))
+    markup = frequent_keyboard(sets, rows)
+    if markup is None:
+        await message.answer(_FREQ_EMPTY)
+        return
+    has_sets = any(m.template_name for m in sets)  # строка про 📌 — только когда наборы есть
+    await message.answer(_FREQ_HEAD + (_FREQ_HEAD_SETS if has_sets else ""), reply_markup=markup)
 
 
 _BUG_PROMPT = "🐛 Опиши, что не так — одним сообщением. Приложу последние записи."
@@ -1193,6 +1229,98 @@ async def on_meal_repeat(callback: CallbackQuery, app_user: User, assistant: Ass
     if result is None:
         await callback.message.answer("Запись уже удалена — повторять нечего.")
         return
+    await _send_meal_card(callback.message, result, app_user, assistant)
+
+
+FREQ_TAP_WINDOW_S = 5.0
+FREQ_IN_FLIGHT_S = 60.0  # дольше записи не бывает; упавший без release ключ отпустится сам
+# (user_id, callback) → (момент, записано ли уже). Пока не записано — первый тап ещё в работе.
+_freq_taps: dict[tuple[int, str], tuple[float, bool]] = {}
+
+
+def _claim_tap(user_id: int, data: str) -> str | None:
+    """FR-40: та же кнопка ещё раз — двойной тап, а не вторая порция. None — тап свежий, ключ
+    занят; "busy" — первый ещё пишет; "done" — записан меньше FREQ_TAP_WINDOW_S назад.
+
+    `IdempotencyStore` аппки тут не годится: там ключ намерения шлёт клиент, а у кнопки Telegram
+    его нет — id колбэка свой на каждый тап, и на двойной тоже. Отличает двойной тап от второй
+    порции только время. Проверка и отметка — без await между ними, поэтому два параллельных
+    апдейта (aiogram гоняет их задачами) не проскочат оба.
+    ponytail: словарь в памяти процесса — рестарт сбрасывает окно, второй инстанс бота защиты
+    не даст; понадобится — ключ в БД.
+    """
+    now = time.monotonic()
+    for key in [
+        k for k, (at, done) in _freq_taps.items()
+        if now - at > (FREQ_TAP_WINDOW_S if done else FREQ_IN_FLIGHT_S)
+    ]:
+        del _freq_taps[key]
+    found = _freq_taps.get((user_id, data))
+    if found is not None:
+        return "done" if found[1] else "busy"
+    _freq_taps[(user_id, data)] = (now, False)
+    return None
+
+
+async def _log_frequent(user: User, assistant: Assistant, data: str) -> MealLogged | None:
+    """Кнопка «⚡ Частое» → запись в сегодня тем же use-case, что у чипа аппки. None — кнопка
+    устарела (продукт слили или удалили, набор переименован) или callback кривой."""
+    parts = data.split(":")
+    if len(parts) == 4 and parts[1] == "p":
+        try:
+            product_id, grams = int(parts[2]), float(parts[3])
+        except ValueError:
+            return None
+        if not 0 < grams <= 5000:  # NaN и бесконечность сюда тоже не проходят
+            return None
+        result = await assistant.log_quick(user, product_id, grams)
+        return result if isinstance(result, MealLogged) else None
+    if len(parts) == 3 and parts[1] == "s":
+        # Набор — по имени (его идентичность), а не по id приёма: тот меняется с каждым повтором.
+        # Повтор самого свежего приёма с этим именем — ровно то, что делает и чип аппки (FR-39.2).
+        found = next(
+            (m for m in await assistant.sets(user)
+             if m.template_name and set_key(m.template_name) == parts[2]),
+            None,
+        )
+        if found is None or found.id is None:
+            return None
+        return await assistant.repeat_meal(user, found.id)
+    return None
+
+
+@router.callback_query(F.data.startswith(f"{FREQ_PREFIX}:"))
+async def on_frequent_tap(
+    callback: CallbackQuery, app_user: User, assistant: Assistant, session: AsyncSession
+) -> None:
+    """FR-40: тап пишет сразу, без модели; дальше — обычная карточка приёма с её кнопками.
+    Сообщение с кнопками остаётся: можно тут же дописать второе."""
+    if not isinstance(callback.message, Message):
+        await callback.answer("Сообщение устарело — открой ⚡ Частое заново.", show_alert=True)
+        return
+    assert app_user.id is not None
+    data = callback.data or ""
+    key = (app_user.id, data)
+    seen = _claim_tap(*key)
+    if seen == "busy":
+        await callback.answer("Уже записываю…")
+        return
+    if seen == "done":
+        await callback.answer("Уже записал. Если это ещё одна порция — тапни через пару секунд.")
+        return
+    await callback.answer()  # гасим спиннер сразу
+    try:
+        result = await _log_frequent(app_user, assistant, data)
+        if result is not None:
+            await session.commit()  # фиксируем ДО карточки — «записал» не врёт
+    except Exception:
+        _freq_taps.pop(key, None)  # не записали — «Уже записал» не должен держать повтор
+        raise
+    if result is None:
+        _freq_taps.pop(key, None)
+        await callback.message.answer("Этой кнопки уже нет — открой ⚡ Частое заново.")
+        return
+    _freq_taps[key] = (time.monotonic(), True)  # окно двойного тапа — от момента записи
     await _send_meal_card(callback.message, result, app_user, assistant)
 
 

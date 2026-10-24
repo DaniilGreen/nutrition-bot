@@ -387,3 +387,40 @@ async def test_замена_позиции_в_том_же_приёме(session):
     again = await repo.get(me.id, meal.id)
     assert [i.name_snapshot for i in again.items] == ["булгур отварной"]
     assert await repo.replace_item(me.id + 1, meal.id, again.items[0].id, [new]) is None
+
+
+async def _loose(session, user: User, name: str, grams: float, days_ago=0) -> Meal:
+    """Позиция без продукта — как запись, которую LLM не запиннил."""
+    m = Macros(kcal=grams, protein=0, fat=0, carb=0)
+    return await SqlMealRepo(session).add(
+        Meal(
+            user_id=user.id, eaten_at=datetime.now(UTC) - timedelta(days=days_ago, hours=1),
+            input_type="text", raw_input=name,
+            items=[MealItem(name_snapshot=name, grams=grams, macros=m)],
+            source_confidence=1.0, totals=m,
+        )
+    )
+
+
+async def test_незакреплённое_группируется_по_имени_без_регистра(session):
+    """FR-40: coalesce(product_id, -1) склеивал ВСЕ записи без продукта в одну строку."""
+    u = await _user(session, 900040)
+    await _loose(session, u, "СКЛ Суп дня", 300)
+    await _loose(session, u, "скл суп дня", 300)
+    await _loose(session, u, "СКЛ салат", 150)
+    rows = [r for r in await SqlMealRepo(session).frequent_items(u.id, days=30, limit=10)
+            if r[1].casefold().startswith("скл")]
+    assert sorted((r[1].casefold(), r[3]) for r in rows) == [("скл салат", 1), ("скл суп дня", 2)]
+    assert all(r[0] is None for r in rows)
+
+
+async def test_ничья_по_частоте_свежее_выше(session):
+    """FR-40: при равных счётчиках порядок детерминирован — свежее съеденное первым."""
+    u = await _user(session, 900041)
+    old = await _product(session, "sql_tie_old", "СКЛ старое")
+    new = await _product(session, "sql_tie_new", "СКЛ новое")
+    await _meal(session, u, old, 100, days_ago=5)
+    await _meal(session, u, new, 100, days_ago=1)
+    rows = [r for r in await SqlMealRepo(session).frequent_items(u.id, days=30, limit=10)
+            if r[1].startswith("СКЛ")]
+    assert [r[0] for r in rows] == [new.id, old.id]

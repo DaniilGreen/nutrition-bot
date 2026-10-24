@@ -1,6 +1,7 @@
 """Клавиатуры: reply-меню + inline для порций, действий, отмены, правки продукта, профиля."""
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 from zoneinfo import ZoneInfo
 
@@ -26,6 +27,13 @@ ONBOARD_PREFIX = "onb"
 PHOTO_PREFIX = "ph"  # карточка фото блюда: ph:fat:<id> / ph:dr:<id> / ph:ok (FR-34)
 SCAN_PREFIX = "scan"  # карточка бланка InBody: scan:save / scan:confirm / scan:apply (FR-36)
 WIZ_CANCEL = "wiz_cancel"  # «✖️ Отмена» в любом визарде (профиль/вариант) — сброс FSM
+FREQ_PREFIX = "fq"  # «⚡ Частое»: fq:p:<product_id>:<граммы> / fq:s:<хэш имени набора> (FR-40)
+# FR-40: потолки раздельные — наборы не вытесняют продукты. Аппка показывает ВСЕ наборы и топ-10
+# частого; бот берёт тот же топ-10 и только закреплённое из него, не глубже.
+FREQ_SETS_MAX = 3
+FREQ_PRODUCTS_MAX = 8
+FREQ_TOP = 10  # тот же топ, что у чипов аппки (`/api/frequent?limit=10`)
+FREQ_NAME_MAX = 24  # режем ИМЯ, хвост «· 180 г» / «· 420 ккал» остаётся целым (320 px)
 
 # Тексты кнопок постоянного меню (они же приходят как обычные сообщения).
 BTN_TODAY = "📊 Сегодня"
@@ -36,9 +44,13 @@ BTN_GOAL = "🎯 Цель"
 BTN_PROFILE = "⚙️ Профиль"
 BTN_UNDO = "↩️ Отменить"
 BTN_BUG = "🐛 Баг"
+BTN_FREQUENT = "⚡ Частое"
 
+# FR-40: «Частое» — в третьем ряду, перед «Отменить»: первые два ряда не сдвигаются, привычные
+# кнопки остаются под пальцем, а ряд записи (частое · отменить · баг) собирается рядом.
 MENU_BUTTONS = (
-    BTN_TODAY, BTN_WEEK, BTN_HISTORY, BTN_WEIGHT, BTN_GOAL, BTN_PROFILE, BTN_UNDO, BTN_BUG,
+    BTN_TODAY, BTN_WEEK, BTN_HISTORY, BTN_WEIGHT, BTN_GOAL, BTN_PROFILE,
+    BTN_FREQUENT, BTN_UNDO, BTN_BUG,
 )
 
 
@@ -46,7 +58,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     for text in MENU_BUTTONS:
         builder.button(text=text)
-    builder.adjust(3, 3, 2)
+    builder.adjust(3, 3, 3)
     return builder.as_markup(resize_keyboard=True, is_persistent=True)
 
 
@@ -148,6 +160,70 @@ def label_grams_keyboard(
         builder.button(text=f"Вся пачка · {g} г", callback_data=f"{LABEL_G_PREFIX}:{g}")
         shown.add(g)
     builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def set_key(name: str) -> str:
+    """Короткий id набора для callback (FR-40). Имя целиком в 64 байта не влезает (кириллица —
+    два байта на букву), а id приёма меняется с каждым повтором. 10 hex-знаков: коллизия среди
+    своих десятка наборов невероятна, а и случись — сверка идёт по наборам самого человека."""
+    return hashlib.blake2s(name.encode(), digest_size=5).hexdigest()
+
+
+def _freq_labels(names: Sequence[str]) -> list[str]:
+    """Имена под кнопки «⚡ Частое»: ≤ FREQ_NAME_MAX, с «…».
+
+    Два длинных имени с общим началом после обрезки совпали бы («куриное филе гриль на у…»
+    дважды). Такой паре отдаём то, чем они отличаются (`_distinct`): первое слово + хвост.
+    """
+    out = [_short(n, FREQ_NAME_MAX) for n in names]
+    for label in {x for x in out if out.count(x) > 1}:
+        idx = [i for i, x in enumerate(out) if x == label]
+        group = [names[i] for i in idx]
+        if len({g.casefold() for g in group}) == 1:
+            continue  # имена и правда одинаковые — различать нечем
+        for i, tail in zip(idx, _distinct(group), strict=True):
+            out[i] = _short(f"{names[i].split()[0]} … {tail}", FREQ_NAME_MAX)
+    return out
+
+
+def frequent_keyboard(
+    sets: Sequence[Meal], frequent: Sequence[tuple[int | None, str, float, int]]
+) -> InlineKeyboardMarkup | None:
+    """FR-40: наборы первыми (≤ FREQ_SETS_MAX), дальше частые продукты (≤ FREQ_PRODUCTS_MAX).
+
+    По одной кнопке в ряд: на 320 px две в ряд резали бы как раз число. Продукт без product_id
+    не показываем: записать его можно только моделью, а это уже не «один тап». Граммы — в
+    callback и после округления: записано будет ровно то, что на кнопке, и «0 г» не бывает.
+    None — показывать нечего; пустую клавиатуру не шлём.
+    """
+    seen: set[str] = set()
+    named: list[tuple[str, float]] = []
+    for m in sets:  # свежие первыми (Assistant.sets) — из двух «Курица»/«курица» берём свежий
+        name = m.template_name or ""
+        if name and name.casefold() not in seen and len(named) < FREQ_SETS_MAX:
+            seen.add(name.casefold())
+            named.append((name, m.totals.kcal))
+    products = [
+        (pid, name, g) for pid, name, g in
+        ((pid, name, round(grams, 1)) for pid, name, grams, _ in frequent)
+        if pid and 0 < g <= 5000
+    ][:FREQ_PRODUCTS_MAX]
+    if not named and not products:
+        return None
+    builder = InlineKeyboardBuilder()
+    for (name, kcal), label in zip(named, _freq_labels([n for n, _ in named]), strict=True):
+        builder.button(
+            text=f"📌 {label} · {round(kcal)} ккал",
+            callback_data=f"{FREQ_PREFIX}:s:{set_key(name)}",
+        )
+    for (pid, _, grams), label in zip(
+        products, _freq_labels([n for _, n, _ in products]), strict=True
+    ):
+        builder.button(
+            text=f"{label} · {grams:g} г", callback_data=f"{FREQ_PREFIX}:p:{pid}:{grams:g}"
+        )
     builder.adjust(1)
     return builder.as_markup()
 

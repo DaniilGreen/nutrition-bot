@@ -546,10 +546,23 @@ class SqlMealRepo:
             )
             .join(MealORM, MealORM.id == MealItemORM.meal_id)
             .where(MealORM.user_id == user_id, MealORM.eaten_at >= since)
-            # coalesce: записи без продукта (LLM не запиннил) группируются
-            # по имени — другого ключа у них нет.
-            .group_by(MealItemORM.product_id, func.coalesce(MealItemORM.product_id, -1))
-            .order_by(func.count().desc())
+            # Записи без продукта (LLM не запиннил) группируются по имени без
+            # регистра — другого ключа у них нет. Раньше тут был coalesce по
+            # product_id: все NULL склеивались в ОДНУ строку с чужой медианой.
+            .group_by(
+                MealItemORM.product_id,
+                case(
+                    (MealItemORM.product_id.is_(None), func.lower(MealItemORM.name_snapshot))
+                ),
+            )
+            # Ничья по частоте — свежее съеденное выше, дальше по имени: порядок
+            # обязан быть детерминированным, иначе бот и аппка (FR-40) при равных
+            # счётчиках показывали бы разный топ.
+            .order_by(
+                func.count().desc(),
+                func.max(MealORM.eaten_at).desc(),
+                func.max(MealItemORM.name_snapshot),
+            )
             .limit(limit)
         )
         return [

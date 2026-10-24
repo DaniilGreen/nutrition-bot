@@ -324,16 +324,18 @@ class InMemoryMealRepo:
         from datetime import timedelta
 
         since = datetime.now(UTC) - timedelta(days=days)
-        # Ключ тот же, что в SQL: product_id, а для беспродуктовых — имя.
+        # Ключ тот же, что в SQL: product_id, а для беспродуктовых — имя без регистра.
         buckets: dict[object, list[float]] = defaultdict(list)
         names: dict[object, str] = {}
+        last: dict[object, datetime] = {}
         for m in self._meals:
             if m.user_id != user_id or m.eaten_at < since:
                 continue
             for it in m.items:
-                key = it.product_id if it.product_id is not None else it.name_snapshot
+                key = it.product_id if it.product_id is not None else it.name_snapshot.lower()
                 buckets[key].append(it.grams)
-                names[key] = it.name_snapshot
+                names[key] = max(names.get(key, it.name_snapshot), it.name_snapshot)
+                last[key] = max(last.get(key, m.eaten_at), m.eaten_at)
         rows = []
         for key, grams in buckets.items():
             grams.sort()
@@ -341,9 +343,10 @@ class InMemoryMealRepo:
                 (grams[len(grams) // 2 - 1] + grams[len(grams) // 2]) / 2
             )
             pid = key if isinstance(key, int) else None
-            rows.append((pid, names[key], float(median), len(grams)))
-        rows.sort(key=lambda r: (-r[3], r[1]))
-        return rows[:limit]
+            rows.append((pid, names[key], float(median), len(grams), last[key]))
+        # Как в SQL: частота, при ничьей — свежее съеденное, дальше имя.
+        rows.sort(key=lambda r: (-r[3], -r[4].timestamp(), r[1]))
+        return [r[:4] for r in rows[:limit]]
 
     async def hourly_kcal(
         self, user_id: int, *, days: int, tz: str, day_start: int = 0
