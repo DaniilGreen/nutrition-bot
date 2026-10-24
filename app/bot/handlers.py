@@ -19,7 +19,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date, datetime
 from html import escape
-from typing import Literal, TypeVar
+from typing import TYPE_CHECKING, Literal, TypeVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot, F, Router
@@ -64,6 +64,7 @@ from app.application.results import (
     WeightLogged,
     WeightTrend,
 )
+from app.bot import coach_chat
 from app.bot.dashboard_image import render_weight_chart  # единственный уцелевший PNG — линия веса
 from app.bot.formatters import (  # текстовые подсказки внутри диалога (не экраны)
     SCAN_REFUSAL,
@@ -139,6 +140,9 @@ from app.domain.portion_answer import parse as parse_portion
 from app.domain.timeframe import tz_from_longitude, tz_from_utc_offset
 from app.domain.value_objects import Density
 from app.infrastructure.openai_compat import out_of_credits
+
+if TYPE_CHECKING:
+    from app.container import Container
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -443,6 +447,44 @@ async def cmd_products(
         await _rich(message, screens.products(products, query))  # пустой экран сам объяснит
         return
     await _rich(message, screens.products(products, query), products_fix_keyboard(products))
+
+
+@router.message(Command("ask"))
+async def cmd_ask(
+    message: Message, command: CommandObject, bot: Bot, app_user: User, session: AsyncSession,
+    container: Container | None = None,
+) -> None:
+    """FR-45: вопрос ассистенту напрямую — без разбора фразы, тем же `Coach`, что у вкладки AI.
+    Висящий вопрос порции или веса не снимаем: /ask — отступление, а не новая запись."""
+    coach = container.coach_for(session) if container is not None else None
+    await coach_chat.ask(message, app_user, coach, command.args or "",
+                         on_no_credits=_no_credits_alert(bot, container))
+
+
+def _no_credits_alert(bot: Bot, container: object | None) -> Callable[[], Awaitable[None]]:
+    async def alert() -> None:
+        await _alert_owner_no_credits(bot, container)
+    return alert
+
+
+async def _to_coach(
+    message: Message, text: str, app_user: User, session: AsyncSession, bot: Bot,
+    container: Container | None,
+) -> bool:
+    """FR-45: отдать текст ассистенту (D-MA-27). False — ключа нет: текст идёт прежним путём,
+    разбор и «не понял»."""
+    coach = container.coach_for(session) if container is not None else None
+    if coach is None:
+        return False
+    await coach_chat.ask(message, app_user, coach, text,
+                         on_no_credits=_no_credits_alert(bot, container))
+    return True
+
+
+def _asked(result: Result) -> bool:
+    """Разбор счёл фразу unknown, и она похожа на вопрос. Еда сюда не доходит: флаг ставится
+    только на intent=unknown (в т.ч. отказ модели разбора — правило то же)."""
+    return isinstance(result, Unknown) and result.question
 
 
 @router.message(Command("profile"))
@@ -862,6 +904,7 @@ async def on_voice(
     assistant: Assistant,
     session: AsyncSession,
     state: FSMContext,
+    container: Container | None = None,
 ) -> None:
     # Не затираем незавершённый черновик голосом; вопрос «✍️ Своё» голос снимает (FR-43).
     if await _busy_with_flow(message, state, supersedes=MealStates.awaiting_item_grams.state):
@@ -885,8 +928,15 @@ async def on_voice(
 
     await message.answer(f"🎤 Распознал: «{escape(transcript, quote=False)}»")
     await _send_typing(message)
+    # FR-45 (б, в): явный вопрос — ассистенту до разбора, иначе разбор запишет фантомный приём.
+    if coach_chat.direct(app_user.id, transcript) and await _to_coach(
+        message, transcript, app_user, session, bot, container
+    ):
+        return
     result = await assistant.process(app_user, transcript, input_type="voice")
     await session.commit()
+    if _asked(result) and await _to_coach(message, transcript, app_user, session, bot, container):
+        return
     await _reply_message(message, result, state, app_user, assistant, raw=transcript)
     await _maybe_weight_chart(message, app_user, assistant, result)
 
@@ -1194,6 +1244,7 @@ async def on_text(
     assistant: Assistant,
     session: AsyncSession,
     state: FSMContext,
+    container: Container | None = None,
 ) -> None:
     await _clear_intro_keyboard(message, bot, state)  # #7: гасим висящее интро-меню онбординга
     if await _answer_fix_question(message, app_user, assistant, session, state):
@@ -1205,8 +1256,17 @@ async def on_text(
     if meal_id is not None:  # FR-44: ответ на карточку приёма — правка ЭТОГО приёма
         await _reply_fix(message, app_user, assistant, session, state, meal_id)
         return
-    result = await assistant.process(app_user, message.text or "", input_type="text")
+    text = message.text or ""
+    # FR-45 (б, в): «можно ли есть банан на ночь?» — ассистенту ДО разбора: разбор честно видит
+    # в ней еду и пишет фантомный приём. Промпт разбора не трогаем (D-MA-27).
+    if coach_chat.direct(app_user.id, text) and await _to_coach(
+        message, text, app_user, session, bot, container
+    ):
+        return
+    result = await assistant.process(app_user, text, input_type="text")
     await session.commit()  # фиксируем запись ДО ответа — «✅ записал» не врёт
+    if _asked(result) and await _to_coach(message, text, app_user, session, bot, container):
+        return  # FR-45 (г): вопрос, а не еда — ответит ассистент
     await _reply_message(message, result, state, app_user, assistant, raw=message.text or "")
     await _maybe_weight_chart(message, app_user, assistant, result)
 

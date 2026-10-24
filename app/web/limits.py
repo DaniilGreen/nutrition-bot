@@ -15,9 +15,14 @@ ponytail: обе структуры — словари в памяти проц�
 from __future__ import annotations
 
 import time
-from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
+
+# Окно частоты опущено в application: им пользуется и бот (FR-45, D-MA-27). Имя здесь —
+# чтобы `from app.web.limits import RateLimiter` и веб-поведение остались прежними.
+from app.application.rate_limit import RateLimiter
+
+__all__ = ["IdempotencyStore", "RateLimiter"]
 
 IDEMPOTENCY_TTL = 5 * 60  # столько живёт запомненный ответ (§7.5)
 # Сколько ключ считается «в работе». Больше самого долгого платного вызова
@@ -82,25 +87,6 @@ class IdempotencyStore:
             del self._seen[k]
         for k in [k for k, at in self._busy.items() if now - at > IN_FLIGHT_TTL]:
             del self._busy[k]
-
-
-class RateLimiter:
-    """Скользящее окно на пользователя. Не токен-бакет: окно понятнее объясняется
-    человеку («не больше N за минуту») и не копит кредит на всплеск."""
-
-    def __init__(self) -> None:
-        self._hits: dict[tuple[int, str], deque[float]] = {}
-
-    def allow(self, user_id: int, bucket: str, *, limit: int, window: float) -> bool:
-        now = time.monotonic()
-        key = (user_id, bucket)
-        hits = self._hits.setdefault(key, deque())
-        while hits and now - hits[0] > window:
-            hits.popleft()
-        if len(hits) >= limit:
-            return False
-        hits.append(now)
-        return True
 
 
 def demo() -> None:

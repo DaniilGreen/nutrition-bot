@@ -90,6 +90,7 @@ from app.domain.plate import split as plate_split
 from app.domain.plate import valid_grams as plate_valid
 from app.domain.plausibility import clamp_density, is_alcoholic
 from app.domain.portion_answer import parse as parse_portion
+from app.domain.question import looks_like_question
 from app.domain.reconcile import Reconciliation, reconcile
 from app.domain.spend import month_limit_reached
 from app.domain.value_objects import Density, Macros, sum_macros
@@ -234,7 +235,10 @@ class Assistant:
         if parsed.intent is Intent.CORRECTION:
             return await self._handle_correction(user, parsed)
 
-        return Unknown(reason="не распознал приём пищи или вес")
+        # FR-45: вопрос — только из unknown. Еда, вес, статистика, правка, рецепт ушли выше и
+        # сюда не доходят: запись еды ассистент не проглотит никогда (D-MA-27).
+        question = parsed.intent is Intent.UNKNOWN and looks_like_question(text)
+        return Unknown(reason="не распознал приём пищи или вес", question=question)
 
     async def transcribe(self, audio: bytes, *, filename: str = "voice.ogg") -> str | None:
         """Голос → текст (M3). None, если STT не сконфигурирован (нет OpenAI-ключа)."""

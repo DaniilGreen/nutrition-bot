@@ -25,7 +25,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.assistant import Assistant
 from app.application.body_scans import BodyScanService, ScanCheck, from_reading
-from app.application.coach import LimitReached, clean_history
+from app.application.coach import (
+    DISCLAIMER,
+    LIMIT_MESSAGE,
+    QUESTION_MAX_CHARS,
+    RATE_LIMIT,
+    RATE_WINDOW_S,
+    LimitReached,
+    clean_history,
+)
 from app.application.dto import SetPick, Unit
 from app.application.entities import Meal, Recipe, RecipeItem, StatedUse, User
 from app.application.meal_service import RecipeRejected
@@ -1505,11 +1513,11 @@ async def coach(
     question = str(body.get("question") or "").strip()
     if not question:
         raise bad_request("empty_question", "Пустой вопрос.")
-    if len(question) > 500:
+    if len(question) > QUESTION_MAX_CHARS:
         raise bad_request("question_too_long", "Слишком длинный вопрос.")
 
     # Месячный лимит не спасает от залипшего клиента: он выжжет бюджет за минуты.
-    _throttle(request, user, "coach", limit=6, window=60)
+    _throttle(request, user, "coach", limit=RATE_LIMIT, window=RATE_WINDOW_S)
     container: Container = request.app.state.container
     service = container.coach_for(session)
     if service is None:
@@ -1519,7 +1527,7 @@ async def coach(
     except LimitReached as exc:
         raise ApiError(
             429, "coach_limit",
-            "Бюджет ассистента на этот месяц исчерпан. Он вернётся первого числа.",
+            LIMIT_MESSAGE,
         ) from exc
     return {
         "text": answer.text,
@@ -1532,7 +1540,7 @@ async def coach(
         ],
         # §7.2: дисклеймер константой с сервера, а не текстом во фронте —
         # иначе он разъедется между ботом и аппкой.
-        "disclaimer": "Это не медицинский совет. Считает по твоим записям за 30 дней.",
+        "disclaimer": DISCLAIMER,
     }
 
 
@@ -1550,9 +1558,9 @@ async def coach_stream(
     question = str(body.get("question") or "").strip()
     if not question:
         raise bad_request("empty_question", "Пустой вопрос.")
-    if len(question) > 500:
+    if len(question) > QUESTION_MAX_CHARS:
         raise bad_request("question_too_long", "Слишком длинный вопрос.")
-    _throttle(request, user, "coach", limit=6, window=60)
+    _throttle(request, user, "coach", limit=RATE_LIMIT, window=RATE_WINDOW_S)
     history = clean_history(body.get("history"))  # недоверенный ввод (MA-INV-66)
 
     container: Container = request.app.state.container
@@ -1564,7 +1572,7 @@ async def coach_stream(
     except LimitReached as exc:
         raise ApiError(
             429, "coach_limit",
-            "Бюджет ассистента на этот месяц исчерпан. Он вернётся первого числа.",
+            LIMIT_MESSAGE,
         ) from exc
 
     async def events() -> AsyncIterator[str]:

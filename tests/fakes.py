@@ -665,3 +665,46 @@ class InMemorySpendRepo:
 
     async def spent_this_month(self, *, purpose: str | None = None) -> float:
         return sum(c for p, c in self._rows if purpose is None or p == purpose)
+
+
+class StubCoachPort:
+    """CoachPort без модели (FR-45): заготовленный поток и счёт раундов, как у адаптера.
+
+    `rounds` — сколько раз адаптер записал бы расход (по раунду, AI-PRINCIPLES §2): учёт живёт
+    в адаптере, и тест сверяет, что канал (бот) его не повторяет и не перезапрашивает модель.
+    `fail` — исключение посреди потока; `tick` — хук перед каждым куском (часы теста)."""
+
+    def __init__(self, chunks=None, *, rounds: int = 1, fail: BaseException | None = None,
+                 tick=None, text: str = "Больше всего дают молоко 3.2%.") -> None:
+        from app.application.coach import CoachChunk
+
+        self._chunks = chunks if chunks is not None else [
+            CoachChunk(kind="tool", text="top_products"),
+            CoachChunk(kind="delta", text=text),
+        ]
+        self._rounds = rounds
+        self._fail = fail
+        self._tick = tick
+        self.calls: list[dict] = []
+        self.noted = 0
+
+    async def ask(self, question, facts, data=None, history=()):
+        from app.domain.spend import Usage
+
+        self.calls.append({"question": question, "data": data, "history": list(history)})
+        self.noted += self._rounds
+        return "нестримовый ответ", Usage("gpt-5.1", 1000, 200)
+
+    async def stream(self, question, facts, data=None, history=()):
+        from app.application.coach import CoachChunk
+        from app.domain.spend import Usage
+
+        self.calls.append({"question": question, "data": data, "history": list(history)})
+        for i, chunk in enumerate(self._chunks):
+            if self._tick is not None:
+                self._tick()
+            if self._fail is not None and i == len(self._chunks) // 2:
+                raise self._fail
+            yield chunk
+        self.noted += self._rounds
+        yield CoachChunk(kind="end", usage=Usage("gpt-5.1", 1000 * self._rounds, 200))
