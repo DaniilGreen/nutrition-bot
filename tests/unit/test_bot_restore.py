@@ -539,10 +539,11 @@ async def test_живой_снимок_не_про_этот_приём_или_и
     w = await _world()
     src = await w.meals.add(_wrap(w.user.id))
     await _do(handlers.on_item_del, f"item_del:{src.id}:{src.items[1].id}", w)
-    assert handlers._live_restore(w.user, src.id + 1, "c") is None  # снимок про другой приём
-    assert handlers._live_restore(w.user, src.id, "c") is not None
+    assert handlers._live_restore(w.user, src.id + 1, "c", src) is None  # про другой приём
+    assert handlers._live_restore(w.user, src.id, "c", src) is not None
+    assert handlers._live_restore(w.user, src.id, "c", None) is None  # приём с тех пор удалили
     clock[0] += handlers.UNDO_TTL_S + 1
-    assert handlers._live_restore(w.user, src.id, "c") is None
+    assert handlers._live_restore(w.user, src.id, "c", src) is None
 
 
 async def test_сохранили_набор_после_корзины_вернуть_нельзя(edits):

@@ -14,6 +14,7 @@ class MealStates(StatesGroup):
     awaiting_photo = State()         # карточка фото блюда ждёт «Записать» или вес (FR-34)
     awaiting_scan = State()          # карточка бланка InBody ждёт «Сохранить» (FR-36)
     awaiting_dish_name = State()     # имя блюда своей сборки (FR-39)
+    awaiting_item_grams = State()    # «✍️ Своё» под «✏️ Вес»: граммы позиции числом (FR-43)
 
 
 class ProfileStates(StatesGroup):

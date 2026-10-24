@@ -745,7 +745,7 @@
     var changed = !sh.fixed && Number(sh.pick) !== Math.round(sh.base);
     var own = sh.own
       ? '<label class="composer" style="margin:0">' +
-        '<input id="sgrams" type="number" inputmode="numeric" min="1" max="5000" ' +
+        '<input id="sgrams" type="number" inputmode="numeric" min="1" max="2000" ' +
         'value="' + (sh.pick || '') + '" aria-label="Граммы" ' +
         'style="flex-grow:1;background:none;border:0;color:var(--text);font:inherit;' +
         'outline:none;min-width:0"><span class="mic">г</span></label>'
@@ -788,7 +788,7 @@
     if (state.sending || sh.busy) return;
     var base = '/api/meals/' + sh.meal + '/items/' + sh.item;
     var g = Number(sh.pick);
-    if (what === 'save' && !(g > 0 && g <= 5000)) return toast('Вес вне разумных пределов.', true);
+    if (what === 'save' && !(g > 0 && g <= 2000)) return toast('Вес — от 1 до 2000 г за позицию.', true);
     var key = 'entry:' + what + ':' + sh.item + ':' + g;
     var req;
     if (what === 'save') {

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import math
 import re
 import secrets
 import time
@@ -18,7 +19,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date, datetime
 from html import escape
-from typing import Literal
+from typing import Literal, TypeVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot, F, Router
@@ -85,6 +86,7 @@ from app.bot.keyboards import (
     FREQ_PREFIX,
     FREQ_TOP,
     GOAL_TARGET_PREFIX,
+    ITEM_WEIGHT_PREFIX,
     LABEL_G_PREFIX,
     ONBOARD_PREFIX,
     PHOTO_PREFIX,
@@ -97,6 +99,9 @@ from app.bot.keyboards import (
     frequent_keyboard,
     goal_target_keyboard,
     goal_type_keyboard,
+    half_up,
+    item_pick_keyboard,
+    item_weight_keyboard,
     label_grams_keyboard,
     location_request_keyboard,
     main_menu_keyboard,
@@ -113,6 +118,7 @@ from app.bot.keyboards import (
     sex_keyboard,
     undo_picker_keyboard,
     variant_keyboard,
+    weighable,
 )
 from app.bot.states import MealStates, ProfileStates
 from app.bot.ui import gather, screens
@@ -120,6 +126,7 @@ from app.domain.goals import Goal, goal_from_macros, goal_from_profile, rebalanc
 from app.domain.label_portion import label_grams
 from app.domain.plate import Component
 from app.domain.plate import split as plate_split
+from app.domain.plausibility import MAX_PORTION_G, MIN_PORTION_G
 from app.domain.portion_answer import parse as parse_portion
 from app.domain.timeframe import tz_from_longitude, tz_from_utc_offset
 from app.domain.value_objects import Density
@@ -127,6 +134,7 @@ from app.infrastructure.openai_compat import out_of_credits
 
 router = Router()
 logger = logging.getLogger(__name__)
+_T = TypeVar("_T")
 
 
 # --- надёжность: единый перехват ошибок ---------------------------------------
@@ -687,6 +695,47 @@ async def on_rename_input(
     await message.answer(f"✅ Теперь «{escape(product.display_name, quote=False)}».")
 
 
+@router.message(MealStates.awaiting_item_grams, F.text)
+async def on_item_grams_input(
+    message: Message, bot: Bot, app_user: User, assistant: Assistant, session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    """FR-43: ответ на «✍️ Своё». Не вес («гречка 200», «банан») — НЕ съедаем: вопрос снимаем,
+    текст идёт обычной записью (AC-128). Голое число < 10 — уточняем кнопками (AC-129). «x2»/«½»
+    — множитель текущего веса, «~180»/«180 мл» — граммы (AC-132). Число вне 1…2000 г —
+    переспрашиваем: молча зажать 3000 до 2000 значило бы записать не то (AC-124)."""
+    data = await state.get_data()
+    parsed = parse_grams_answer(message.text or "")
+    times = parse_times_answer(message.text or "")
+    if times is not None:  # «x2», «½» — ответ на вопрос, а не новая запись (AC-132)
+        item = await _typed_item(app_user, assistant, data)
+        if item is None:
+            await _drop_weight_question(bot, message.chat.id, state)
+            await message.answer(_WEIGHT_GONE)
+            return
+        parsed = float(half_up(half_up(item.grams) * times)), True  # как пресеты
+    if parsed is None:
+        await _drop_weight_question(bot, message.chat.id, state)
+        await on_text(message, bot, app_user, assistant, session, state)
+        return
+    grams, unit = parsed
+    if not unit and grams < _SMALL_MAX:
+        await _ask_small(message, app_user, assistant, state, data, grams)
+        return
+    if not MIN_PORTION_G <= grams <= MAX_PORTION_G:
+        await message.answer(_GRAMS_BOUNDS)
+        return
+    await state.clear()
+    meal_id, item_id = int(data.get("iw_meal", 0)), int(data.get("iw_item", 0))
+    adjusted = await _adjust_weight(app_user, assistant, meal_id, item_id, grams)
+    if adjusted is None:
+        await _say_prompt(bot, message.chat.id, data.get("iw_prompt"), _dropped(data))
+        await message.answer(_WEIGHT_GONE)
+        return
+    await session.commit()  # фиксируем ДО ответа — «Поправил» не врёт
+    await _finish_typed(message, data, app_user, assistant, *adjusted)
+
+
 @router.message(MealStates.awaiting_portion, F.text)
 async def on_portion_text(
     message: Message,
@@ -802,7 +851,8 @@ async def on_voice(
     session: AsyncSession,
     state: FSMContext,
 ) -> None:
-    if await _busy_with_flow(message, state):  # не затираем незавершённый черновик голосом
+    # Не затираем незавершённый черновик голосом; вопрос «✍️ Своё» голос снимает (FR-43).
+    if await _busy_with_flow(message, state, supersedes=MealStates.awaiting_item_grams.state):
         return
     await state.clear()
     if message.voice is None:
@@ -844,7 +894,7 @@ async def on_photo(
     if await _busy_with_flow(
         message, state,
         supersedes=(MealStates.awaiting_label_grams.state, MealStates.awaiting_photo.state,
-                    MealStates.awaiting_scan.state),
+                    MealStates.awaiting_scan.state, MealStates.awaiting_item_grams.state),
     ):
         return
     await state.clear()
@@ -1150,6 +1200,7 @@ async def on_text(
         MealStates.awaiting_photo,
         MealStates.awaiting_scan,
         MealStates.awaiting_dish_name,
+        MealStates.awaiting_item_grams,
         MealStates.awaiting_bug,
         ProfileStates.body,
     )
@@ -1275,20 +1326,21 @@ def _claim_tap(user_id: int, data: str) -> str | None:
 
 async def _write_once(
     callback: CallbackQuery, session: AsyncSession, user_id: int,
-    write: Callable[[], Awaitable[MealLogged | None]],
-) -> MealLogged | None | Literal[False]:
-    """Тап, который сразу пишет: страж двойного тапа → запись → фиксация (FR-40, FR-42).
+    write: Callable[[], Awaitable[_T | None]],
+    *, busy: str = "Уже записываю…",
+    done: str = "Уже записал. Если это ещё одна порция — тапни через пару секунд.",
+) -> _T | None | Literal[False]:
+    """Тап, который сразу пишет: страж двойного тапа → запись → фиксация (FR-40, FR-42, FR-43).
 
     False — это второй тап, всплывашка уже ушла; None — писать нечего (кнопка устарела), окно
     снято. Окно двойного тапа — от момента записи; сбой (в т.ч. фиксации) окно не держит.
+    busy/done — ответы второму тапу: правке веса «ещё одна порция» не к месту. Пишет не только
+    запись: вопрос «✍️ Своё» под тем же стражем, чтобы двойной тап не слал два вопроса.
     """
     key = (user_id, callback.data or "")
     seen = _claim_tap(*key)
     if seen is not None:
-        await callback.answer(
-            "Уже записываю…" if seen == "busy"
-            else "Уже записал. Если это ещё одна порция — тапни через пару секунд."
-        )
+        await callback.answer(busy if seen == "busy" else done)
         return False
     try:
         result = await write()
@@ -1407,26 +1459,33 @@ def _remember(user: User, snapshot: Meal, after: Meal | None, what: str) -> str:
     return token
 
 
-def _live_restore(user: User, meal_id: int, where: str) -> InlineKeyboardButton | None:
-    """«⏪ Вернуть» из ТЕКУЩЕГО снимка человека — если он про этот приём, не истёк и не съеден.
+def _live_restore(
+    user: User, meal_id: int, where: str, now: Meal | None
+) -> InlineKeyboardButton | None:
+    """«⏪ Вернуть» из ТЕКУЩЕГО снимка человека — если он про этот приём, не истёк, не съеден и
+    приём (`now` — какой он сейчас, None — удалён) с тех пор не правили.
 
     Не с клавиатуры сообщения: при двойном тапе по 🗑 второй тап несёт клавиатуру, какой она была
     ДО первого (без ⏪), и его перерисовка «Уже убрано.» может лечь последней — кнопка первого
-    пропала бы с экрана, хотя снимок жив."""
+    пропала бы с экрана, хотя снимок жив. Отпечаток — та же сверка, что у самого возврата: после
+    «✏️ Вес» кнопка вернулась бы на карточку и только отказала (FR-43)."""
     undo = _trash.get(user.id or 0)
     if (undo is None or undo.done or undo.snapshot.id != meal_id
-            or time.monotonic() - undo.at > UNDO_TTL_S):
+            or time.monotonic() - undo.at > UNDO_TTL_S or _fingerprint(now) != undo.after):
         return None
     return restore_button(undo.token, where, undo.what)
 
 
-def _day_restore(user: User, day: date) -> InlineKeyboardButton | None:
+def _day_restore(user: User, day: date, meals: list[Meal]) -> InlineKeyboardButton | None:
     """«⏪ Вернуть» на экране «День» — только живая и только на своём дне: снимок текущий, не
-    истёк, не съеден, и удалили его с ЭТОГО дня. Со старой клавиатуры не копируем: листание
-    утащило бы на чужой день кнопку-зомби, которая перерисует не тот день (FR-41, FR-42)."""
+    истёк, не съеден, удалили его с ЭТОГО дня, и приём с тех пор не правили (отпечаток по
+    `meals` дня). Со старой клавиатуры не копируем: листание утащило бы на чужой день
+    кнопку-зомби, которая перерисует не тот день (FR-41, FR-42, FR-43)."""
     undo = _trash.get(user.id or 0)
     if (undo is None or undo.done or undo.day != day
             or time.monotonic() - undo.at > UNDO_TTL_S):
+        return None
+    if _fingerprint(next((m for m in meals if m.id == undo.snapshot.id), None)) != undo.after:
         return None
     return restore_button(undo.token, f"d{day:%Y%m%d}", undo.what)
 
@@ -1516,7 +1575,7 @@ async def _redraw_card(message: Message, user: User, assistant: Assistant, meal_
     logged = MealLogged(meal=meal, remaining=(await assistant.today(user)).remaining)
     await _rich_edit(
         message, screens.meal_card(ctx, logged, edited=True),
-        meal_actions_keyboard(meal, _live_restore(user, meal_id, "c")),
+        meal_actions_keyboard(meal, _live_restore(user, meal_id, "c", meal)),
     )
 
 
@@ -1553,7 +1612,7 @@ async def on_meal_undo(
         if in_picker:
             await _redraw_picker(
                 callback.message, app_user, assistant,
-                _picker_status(callback.message), _live_restore(app_user, meal_id, "p"),
+                _picker_status(callback.message), _live_restore(app_user, meal_id, "p", None),
             )
         return
     # Снимок — то, что вернул delete: состояние ДО удаления, дальше его никто не правит.
@@ -1630,7 +1689,8 @@ async def on_undo_item(
         await callback.answer("Уже убрано.")
         await _redraw_picker(
             callback.message, app_user, assistant,
-            _picker_status(callback.message), _live_restore(app_user, meal_id, "p"),
+            _picker_status(callback.message),
+            _live_restore(app_user, meal_id, "p", await assistant.get_meal(app_user, meal_id)),
         )
         return
     _, item, token = removed
@@ -1703,6 +1763,428 @@ async def on_restore(
             callback.message, screens.meal_card(ctx, result, restored=True),
             meal_actions_keyboard(meal), fallback_text=f"⏪ Вернул: {what} · {kcal} ккал",
         )
+
+
+# --- «✏️ Вес» на карточке приёма (FR-43, D-MA-25) ------------------------------
+
+_WEIGHT_GONE = "Этой позиции уже нет — вес не поправил."
+_GRAMS_BOUNDS = (
+    f"Вес — от {MIN_PORTION_G:g} до {MAX_PORTION_G:g} г за позицию. Пришли другое число."
+)
+_SMALL_MAX = 10  # голое число меньше — скорее «порции», чем граммы (AC-129)
+_GRAMS_RE = re.compile(
+    r"\s*[~≈]?\s*(\d{1,2}[ \u00a0\u202f]\d{3}|\d{1,5})(?:[.,](\d{1,3}))?\s*"
+    r"(кг|kg|граммов|грамма|грамм|гр|г|g|мл|ml|литра|литр|л|l)?\.?\s*",
+    re.IGNORECASE,
+)
+_THOUSAND = ("кг", "kg", "литра", "литр", "л", "l")  # мл/л — как граммы: объём ≈ масса (INV-7)
+_TIMES_RE = re.compile(
+    r"\s*(?:[xх×*]\s*(\d{1,2}(?:[.,]\d{1,2})?|½)|(\d{1,2}(?:[.,]\d{1,2})?)\s*[xх×]|(½))\s*",
+    re.IGNORECASE,
+)
+
+
+def parse_grams_answer(text: str) -> tuple[float, bool] | None:
+    """Ответ на «Сколько граммов?»: (граммы, единица названа). Одно число с необязательной
+    г/кг/мл/л, «1 000 г», «~180». «150 г гречки», «банан» — None: это уже запись, а не ответ."""
+    m = _GRAMS_RE.fullmatch(text or "")
+    if m is None:
+        return None
+    whole, frac, unit = m.groups()
+    grams = float(re.sub(r"\D", "", whole) + (f".{frac}" if frac else ""))
+    if (unit or "").lower() in _THOUSAND:
+        grams *= 1000
+    return round(grams, 2), unit is not None
+
+
+def parse_times_answer(text: str) -> float | None:
+    """Множитель текущего веса: «x2», «×2», «х2» (кириллица), «*2», «2x», «½», «x 1,5»."""
+    m = _TIMES_RE.fullmatch(text or "")
+    if m is None:
+        return None
+    raw = next(g for g in m.groups() if g)
+    k = 0.5 if raw == "½" else float(raw.replace(",", "."))
+    return k if k > 0 else None
+
+
+def _split_base(op: str) -> tuple[float, float] | None:
+    """«300@150» → (граммы, вес-основа кнопки). Граммы — в 1…2000 г, всё конечное; иначе None."""
+    grams_s, at, base_s = op.partition("@")
+    try:
+        grams, base = float(grams_s), float(base_s)
+    except ValueError:
+        return None
+    ok = at and math.isfinite(grams) and math.isfinite(base) and base > 0
+    return (grams, base) if ok and MIN_PORTION_G <= grams <= MAX_PORTION_G else None
+
+
+def _moved(now: MealItem, base: float) -> bool:
+    """Вес позиции уже не тот, от которого посчитана кнопка (поправили в аппке, словами)."""
+    return abs(now.grams - base) >= 0.05
+
+
+def _g(grams: float) -> str:
+    return f"{round(grams, 1):g}"
+
+
+async def _adjust_weight(
+    user: User, assistant: Assistant, meal_id: int, item_id: int, grams: float
+) -> tuple[MealLogged, str] | None:
+    """Тот же `adjust_item`, что у шторки аппки (PATCH /api/meals/…/items/…): снапшот КБЖУ
+    масштабируется пропорционально (INV-3), модели нет. None — позиции нет или у неё нет веса.
+    Второе — след правки, как тост аппки: «гречка: было 150 г, стало 75 г»."""
+    changed = await assistant.adjust_item(user, meal_id, item_id, grams)
+    meal = await assistant.get_meal(user, meal_id) if changed else None
+    if changed is None or meal is None:
+        return None
+    item, old = changed
+    logged = MealLogged(meal=meal, remaining=(await assistant.today(user)).remaining)
+    return logged, f"✏️ {item.name_snapshot}: было {_g(old)} г, стало {_g(item.grams)} г"
+
+
+async def _weight_card(
+    user: User, assistant: Assistant, logged: MealLogged
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Карточка после правки веса: «✏️ Поправил» (MA-INV-70) и обычные кнопки — без «⏪ Вернуть»:
+    отпечаток приёма теперь другой, и снимок всё равно отказал бы (FR-41)."""
+    ctx = await gather(assistant, user)
+    return screens.meal_card(ctx, logged, edited=True), meal_actions_keyboard(logged.meal)
+
+
+async def _rich_edit_at(
+    bot: Bot, chat_id: int, message_id: object, html: str, markup: InlineKeyboardMarkup
+) -> bool:
+    """`_rich_edit` по id: ответ на «✍️ Своё» — новое сообщение, а править надо карточку выше."""
+    if not isinstance(message_id, int):
+        return False
+    try:
+        await bot.edit_message_text(
+            chat_id=chat_id, message_id=message_id, reply_markup=markup,
+            rich_message=InputRichMessage(html=html, skip_entity_detection=True),
+        )
+    except TelegramBadRequest as exc:
+        if "not modified" in str(exc).lower():
+            return True
+        logger.warning("правка карточки не удалась: %s", exc)
+        return False
+    return True
+
+
+async def _say_prompt(bot: Bot, chat_id: int, prompt_id: object, text: str) -> bool:
+    """Переписать вопрос «✍️ Своё» текстом без кнопок. False — не вышло (нет id, >48 ч)."""
+    if not isinstance(prompt_id, int):
+        return False
+    try:
+        await bot.edit_message_text(text=text, chat_id=chat_id, message_id=prompt_id)
+    except TelegramBadRequest:
+        return False
+    return True
+
+
+def _dropped(data: dict) -> str:
+    return f"✍️ Вес «{escape(str(data.get('iw_name', '')), quote=False)}» — вопрос снят."
+
+
+async def _drop_weight_question(bot: Bot | None, chat_id: int, state: FSMContext) -> None:
+    """Снять висящий «✍️ Своё» (новый текст, голос, фото, любой тап `iw:`): состояние — сбросить,
+    вопрос — в «вопрос снят». Иначе он остался бы сиротой с живой «✖️ Отмена» (AC-128, AC-130)."""
+    if await state.get_state() != MealStates.awaiting_item_grams.state:
+        return
+    data = await state.get_data()
+    await state.clear()
+    if bot is not None:
+        await _say_prompt(bot, chat_id, data.get("iw_prompt"), _dropped(data))
+
+
+async def _finish_typed(
+    message: Message, data: dict, user: User, assistant: Assistant, logged: MealLogged, trace: str
+) -> None:
+    """Правка из «✍️ Своё» записана: карточка выше — на месте (MA-INV-70; не вышло — новая
+    «✏️ Поправил»), вопрос — след правки без кнопок (не вышло — следом отдельным сообщением)."""
+    bot = message.bot
+    assert bot is not None
+    html, markup = await _weight_card(user, assistant, logged)
+    if not await _rich_edit_at(bot, message.chat.id, data.get("iw_card"), html, markup):
+        await _rich(message, html, markup)
+    trace = escape(trace, quote=False)
+    if not await _say_prompt(bot, message.chat.id, data.get("iw_prompt"), trace):
+        await message.answer(trace)
+
+
+def _cancel_row(meal_id: int, item_id: int) -> list[InlineKeyboardButton]:
+    """Своя отмена вопроса — не общая `wiz_cancel`: та сбросила бы вопрос ДРУГОЙ карточки."""
+    return [InlineKeyboardButton(
+        text="✖️ Отмена", callback_data=f"{ITEM_WEIGHT_PREFIX}:{meal_id}:{item_id}:x"
+    )]
+
+
+def _ru(x: float) -> str:
+    return f"{round(x, 2):g}".replace(".", ",")  # множитель «×0,96» — до сотых
+
+
+async def _typed_item(user: User, assistant: Assistant, data: dict) -> MealItem | None:
+    """Позиция висящего вопроса «✍️ Своё», какой она есть сейчас; None — её уже нет."""
+    meal = await assistant.get_meal(user, int(data.get("iw_meal", 0)))
+    item_id = int(data.get("iw_item", 0))
+    return next((i for i in weighable(meal) if i.id == item_id), None) if meal else None
+
+
+async def _ask_small(
+    message: Message, user: User, assistant: Assistant, state: FSMContext, data: dict,
+    value: float,
+) -> None:
+    """Голое число < 10 граммами не пишем (AC-129): меньше 1 («0,2») — скорее кг, `0,2 кг · 200 г`;
+    1…2 — `2 г` / `×2 · 300 г` (множитель как у пресетов); больше — только `5 г` и просьба о
+    единице. Уточнение заменяет прежний вопрос; состояние ждёт дальше — можно и написать вес."""
+    item = await _typed_item(user, assistant, data)
+    if item is None:
+        await _drop_weight_question(message.bot, message.chat.id, state)
+        await message.answer(_WEIGHT_GONE)
+        return
+    meal_id, item_id = int(data.get("iw_meal", 0)), int(data.get("iw_item", 0))
+    head, base, at = f"{ITEM_WEIGHT_PREFIX}:{meal_id}:{item_id}", half_up(item.grams), item.grams
+    rows: list[list[InlineKeyboardButton]] = []
+    says: list[str] = []
+
+    def offer(text: str, grams: float, say: str) -> None:
+        data_ = f"{head}:={_g(grams)}@{at:g}"  # @основа — как у пресетов (вес мог поменяться)
+        rows.append([InlineKeyboardButton(text=text, callback_data=data_)])
+        says.append(say)
+
+    kg = round(value * 1000, 1)
+    if value < 1 and MIN_PORTION_G <= kg <= MAX_PORTION_G:
+        offer(f"{_ru(value)} кг · {_g(kg)} г", kg, f"{_ru(value)} кг ({_g(kg)} г)")
+    elif MIN_PORTION_G <= value:
+        offer(f"{_ru(value)} г", value, f"{_ru(value)} г")
+    times = half_up(base * value) if value <= 2 else 0
+    if MIN_PORTION_G <= times <= MAX_PORTION_G and times != base:
+        offer(f"×{_ru(value)} · {times} г", times, f"×{_ru(value)} порции")
+    if not rows:
+        await message.answer(_GRAMS_BOUNDS)
+        return
+    said = escape((message.text or "").strip(), quote=False)
+    text = f"«{said}» — это {' или '.join(says)}? Сейчас {_g(item.grams)} г."
+    if value > 2:
+        text = (f"«{said}» — это {says[0]}? Если нет — пришли вес с единицей: «500 г» "
+                "или «0,5 кг».")
+    bot = message.bot
+    assert bot is not None
+    await _say_prompt(bot, message.chat.id, data.get("iw_prompt"), _dropped(data))
+    rows.append(_cancel_row(meal_id, item_id))
+    asked = await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await state.update_data(iw_prompt=asked.message_id)
+
+
+async def _swap_keyboard(message: Message, markup: InlineKeyboardMarkup) -> None:
+    """Навигация «✏️ Вес» меняет только кнопки: текст карточки не трогаем, чат не прыгает."""
+    with suppress(TelegramBadRequest):  # двойной тап — «not modified»
+        await message.edit_reply_markup(reply_markup=markup)
+
+
+async def _weight_question_tap(
+    callback: CallbackQuery, app_user: User, assistant: Assistant, session: AsyncSession,
+    state: FSMContext, meal_id: int, item_id: int, op: str,
+) -> None:
+    """Кнопки под вопросом «✍️ Своё»: `x` — отменить ЭТОТ вопрос, `=<г>` — уточнение голого числа.
+    Действуют, только если это и есть висящий вопрос: чужой (другой карточки) не трогаем."""
+    message = callback.message
+    assert isinstance(message, Message) and message.bot is not None and app_user.id is not None
+    data = await state.get_data()
+    mine = (
+        await state.get_state() == MealStates.awaiting_item_grams.state
+        and data.get("iw_prompt") == message.message_id
+        and (data.get("iw_meal"), data.get("iw_item")) == (meal_id, item_id)
+    )
+    if not mine:
+        await callback.answer("Этот вопрос уже снят.")
+        with suppress(TelegramBadRequest):
+            await message.edit_reply_markup(reply_markup=None)
+        return
+    if op == "x":
+        await state.clear()
+        await _say_prompt(message.bot, message.chat.id, message.message_id, _dropped(data))
+        await callback.answer("Ок, отменил")
+        return
+    split = _split_base(op[1:])
+    if split is None:
+        await callback.answer("Кнопка устарела.")
+        return
+    (grams, base), trace, moved = split, "", None
+
+    async def write() -> MealLogged | None:
+        nonlocal trace, moved
+        now = await _typed_item(app_user, assistant, data)
+        if now is not None and _moved(now, base):
+            moved = now  # «×2 · 300 г» считали от 150 — от нового веса это уже не ×2
+            return None
+        adjusted = await _adjust_weight(app_user, assistant, meal_id, item_id, grams)
+        if adjusted is None:
+            return None
+        await state.clear()
+        logged, trace = adjusted
+        return logged
+
+    result = await _write_once(
+        callback, session, app_user.id, write, busy="Уже правлю…", done="Уже поправил."
+    )
+    if result is False:
+        return
+    if moved is not None:  # вопрос остаётся: число можно прислать заново
+        await callback.answer("Вес уже поменялся — выбери заново.")
+        await _say_prompt(
+            message.bot, message.chat.id, message.message_id,
+            f"✍️ Вес «{escape(moved.name_snapshot, quote=False)}» уже поменялся — сейчас "
+            f"{_g(moved.grams)} г. Пришли число заново.",
+        )
+        return
+    if result is None:
+        await _drop_weight_question(message.bot, message.chat.id, state)
+        await callback.answer(_WEIGHT_GONE)
+        return
+    await callback.answer(trace[:200])
+    await _finish_typed(message, data, app_user, assistant, result, trace)
+
+
+@router.callback_query(F.data.startswith(f"{ITEM_WEIGHT_PREFIX}:"))
+async def on_item_weight(
+    callback: CallbackQuery, app_user: User, assistant: Assistant, session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    """FR-43: «✏️ Вес» → позиция (если их с весом несколько) → ½ · ×1,5 · ×2 · ✍️ Своё.
+
+    iw:<meal> открыть · iw:<meal>:back к карточке · iw:<meal>:<item> пресеты ·
+    iw:<meal>:<item>:<г>@<вес> пресет · iw:<meal>:<item>:own спросить число ·
+    iw:<meal>:<item>:=<г>@<вес> уточнение голого числа · iw:<meal>:<item>:x отменить вопрос.
+    """
+    parts = (callback.data or "").split(":")
+    try:
+        meal_id = int(parts[1])
+        item_id = int(parts[2]) if len(parts) > 2 and parts[2] != "back" else None
+    except (IndexError, ValueError):  # int(), а не isdigit(): тот пропустил бы «²»
+        meal_id = item_id = None
+    tail = parts[2:]
+    op = tail[1] if len(tail) == 2 else None
+    if (meal_id is None or len(tail) > 2 or (tail[:1] == ["back"] and len(tail) > 1)
+            or not isinstance(callback.message, Message)):
+        await callback.answer("Кнопка устарела.")
+        return
+    assert app_user.id is not None
+    card, bot = callback.message, callback.message.bot
+    if item_id is not None and op is not None and (op == "x" or op.startswith("=")):
+        await _weight_question_tap(
+            callback, app_user, assistant, session, state, meal_id, item_id, op
+        )
+        return
+    if op != "own":  # «✍️ Своё» снимает прежний вопрос сам — уже под стражем двойного тапа
+        await _drop_weight_question(bot, card.chat.id, state)
+    meal = await assistant.get_meal(app_user, meal_id)
+    if meal is None:
+        await callback.answer("Запись уже удалена.")
+        return
+    if tail == ["back"]:
+        await _swap_keyboard(
+            card, meal_actions_keyboard(meal, _live_restore(app_user, meal_id, "c", meal))
+        )
+        await callback.answer()
+        return
+    items = weighable(meal)
+    if item_id is None and len(items) > 1:
+        await _swap_keyboard(card, item_pick_keyboard(meal))
+        await callback.answer()
+        return
+    if item_id is None:
+        item = items[0] if items else None
+    else:
+        item = next((i for i in items if i.id == item_id), None)
+    if item is None or item.id is None:
+        await callback.answer(_WEIGHT_GONE)
+        await _redraw_card(card, app_user, assistant, meal_id)
+        return
+    item_id, name = item.id, item.name_snapshot
+    if op is None:
+        await _swap_keyboard(card, item_weight_keyboard(meal, item))
+        await callback.answer(f"✏️ {name[:60]} · сейчас {_g(item.grams)} г")
+        return
+    if op == "own":
+        await _ask_grams(callback, app_user, session, state, meal, item)
+        return
+    split = _split_base(op)
+    if split is None:
+        await callback.answer("Кнопка устарела.")
+        return
+    (grams, base), trace, moved = split, "", None
+
+    async def write() -> MealLogged | None:
+        nonlocal trace, moved
+        # Сверка — уже под стражем: второй тап слышит «Уже поправил.», а не «вес поменялся».
+        fresh = await assistant.get_meal(app_user, meal_id)
+        now = next((i for i in weighable(fresh) if i.id == item_id), None) if fresh else None
+        if now is None:
+            return None
+        if _moved(now, base):
+            moved = fresh, now  # вес поменяли (в аппке, словами): «×2» от 150 — не «½» от 600
+            return None
+        adjusted = await _adjust_weight(app_user, assistant, meal_id, item_id, grams)
+        if adjusted is None:
+            return None
+        logged, trace = adjusted
+        return logged
+
+    result = await _write_once(
+        callback, session, app_user.id, write, busy="Уже правлю…", done="Уже поправил."
+    )
+    if result is False:  # второй тап — карточку перерисовывает первый
+        return
+    if moved is not None:
+        await callback.answer("Вес уже поменялся — выбери заново.")
+        await _swap_keyboard(card, item_weight_keyboard(*moved))
+        return
+    if result is None:
+        await callback.answer(_WEIGHT_GONE)
+        await _redraw_card(card, app_user, assistant, meal_id)
+        return
+    await callback.answer(trace[:200])
+    html, markup = await _weight_card(app_user, assistant, result)
+    await _rich_edit(
+        card, html, markup,
+        fallback_text=f"{escape(trace)} · приём теперь {round(result.meal.totals.kcal)} ккал",
+    )
+
+
+async def _ask_grams(
+    callback: CallbackQuery, app_user: User, session: AsyncSession, state: FSMContext,
+    meal: Meal, item: MealItem,
+) -> None:
+    """«✍️ Своё»: карточке — обычные кнопки, вопрос — отдельным сообщением со своей отменой.
+    Под стражем двойного тапа: второй тап не шлёт второй вопрос (AC-130)."""
+    card = callback.message
+    assert isinstance(card, Message) and app_user.id is not None
+    assert meal.id is not None and item.id is not None
+    meal_id, item_id = meal.id, item.id
+
+    async def ask() -> Message | None:
+        await _drop_weight_question(card.bot, card.chat.id, state)  # вопрос другой карточки
+        await state.set_state(MealStates.awaiting_item_grams)
+        await _swap_keyboard(
+            card, meal_actions_keyboard(meal, _live_restore(app_user, meal_id, "c", meal))
+        )
+        prompt = await card.answer(
+            f"✍️ Сколько граммов: {escape(item.name_snapshot, quote=False)}? Сейчас "
+            f"{_g(item.grams)} г. Пришли число — «180», «180 г» или «0,2 кг».",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[_cancel_row(meal_id, item_id)]),
+        )
+        await state.update_data(
+            iw_meal=meal_id, iw_item=item_id, iw_card=card.message_id,
+            iw_prompt=prompt.message_id, iw_name=item.name_snapshot,
+        )
+        return prompt
+
+    asked = await _write_once(
+        callback, session, app_user.id, ask,
+        busy="Уже спрашиваю…", done="Уже спросил — жду число.",
+    )
+    if asked is not False:
+        await callback.answer()
 
 
 @router.callback_query(F.data.startswith("prod_fix:"))
@@ -1862,7 +2344,7 @@ async def _redraw_day(
     await _rich_edit(
         message, screens.day(dv, rem, repeat, note),
         day_nav_keyboard(
-            days_ago, dv.meals, dv.timezone, _day_restore(user, dv.day), repeat, dv.day
+            days_ago, dv.meals, dv.timezone, _day_restore(user, dv.day, dv.meals), repeat, dv.day
         ),
     )
 
@@ -2092,6 +2574,8 @@ async def _busy_with_flow(
         return False
     allowed = (supersedes,) if isinstance(supersedes, str) else (supersedes or ())
     if current in allowed:
+        if current == MealStates.awaiting_item_grams.state:  # вопрос «✍️ Своё» — «вопрос снят»
+            await _drop_weight_question(message.bot, message.chat.id, state)
         await state.clear()
         return False
     await message.answer(

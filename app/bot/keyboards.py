@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Sequence
 from datetime import date
 from zoneinfo import ZoneInfo
@@ -9,7 +10,8 @@ from zoneinfo import ZoneInfo
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
-from app.application.entities import Meal, Product
+from app.application.entities import Meal, MealItem, Product
+from app.domain.plausibility import MAX_PORTION_G, MIN_PORTION_G
 
 PORTION_CALLBACK_PREFIX = "portion"
 VARIANT_CALLBACK_PREFIX = "variant"
@@ -31,6 +33,7 @@ PHOTO_PREFIX = "ph"  # карточка фото блюда: ph:fat:<id> / ph:dr
 SCAN_PREFIX = "scan"  # карточка бланка InBody: scan:save / scan:confirm / scan:apply (FR-36)
 WIZ_CANCEL = "wiz_cancel"  # «✖️ Отмена» в любом визарде (профиль/вариант) — сброс FSM
 RESTORE_PREFIX = "rst"  # «⏪ Вернуть» после удаления: rst:<токен>:<c|p|d<ГГГГММДД>> (FR-41)
+ITEM_WEIGHT_PREFIX = "iw"  # «✏️ Вес»: iw:<meal>[:<item>[:<граммы>|:own]] · iw:<meal>:back (FR-43)
 FREQ_PREFIX = "fq"  # «⚡ Частое»: fq:p:<product_id>:<граммы> / fq:s:<хэш имени набора> (FR-40)
 # FR-40: потолки раздельные — наборы не вытесняют продукты. Аппка показывает ВСЕ наборы и топ-10
 # частого; бот берёт тот же топ-10 и только закреплённое из него, не глубже.
@@ -288,6 +291,10 @@ def meal_actions_keyboard(
     # Первой — созидательная кнопка: выпил вторую бутылку, съел вторую порцию. Копирует вес и
     # КБЖУ один-в-один, поэтому в ИИ не идёт и повтор не «переоценивается» заново.
     builder.button(text="🔁 Повторить", callback_data=f"{MEAL_REPEAT_PREFIX}:{meal.id}")
+    # FR-43: вес тапом — как чипы шторки аппки. Без позиций с весом кнопки нет вовсе: у «своих
+    # цифр» граммы не выбираются (в аппке у такой записи чипов тоже нет).
+    if weighable(meal):
+        builder.button(text="✏️ Вес", callback_data=f"{ITEM_WEIGHT_PREFIX}:{meal.id}")
     # FR-39.2: несколько взвешенных позиций → набор, чтобы завтра не
     # вводить состав заново. Одна позиция — уже продукт, делать из неё блюдо нечего; позиция
     # без веса не даёт плотности, поэтому кнопку не показываем вовсе, а не ругаемся после тапа.
@@ -304,6 +311,64 @@ def meal_actions_keyboard(
                 )
     builder.button(text="↩️ Отменить всё", callback_data=f"{MEAL_UNDO_PREFIX}:{meal.id}")
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def weighable(meal: Meal) -> list[MealItem]:
+    """Позиции, вес которых можно поправить (FR-43): сохранённые и с граммами. Стейтед без веса
+    масштабировать не от чего — `adjust_item` его и не возьмёт."""
+    return [i for i in meal.items if i.id is not None and i.grams and i.grams > 0]
+
+
+def half_up(x: float) -> int:
+    """Округление как `Math.round` аппки: половина вверх. `round(66.5)` в Python даёт 66."""
+    return math.floor(x + 0.5)
+
+
+def weight_presets(grams: float) -> list[tuple[str, int]]:
+    """FR-43: ½ · ×1,5 · ×2 — те же числа, что у чипов шторки аппки (§6.27): от веса, округлённого
+    до грамма. Совпавшее с текущим и вне 1…2000 г (INV-11.2, use-case всё равно зажмёт) — прочь."""
+    base = half_up(grams)
+    out: list[tuple[str, int]] = []
+    for label, x in (("½", half_up(base / 2)), ("×1,5", half_up(base * 1.5)), ("×2", base * 2)):
+        if MIN_PORTION_G <= x <= MAX_PORTION_G and x != base and all(x != v for _, v in out):
+            out.append((label, x))
+    return out
+
+
+def item_pick_keyboard(meal: Meal) -> InlineKeyboardMarkup:
+    """FR-43: какой позиции править вес — по строке на позицию с весом, «← Назад» к карточке."""
+    builder = InlineKeyboardBuilder()
+    for it in weighable(meal):
+        builder.button(
+            text=f"✏️ {_short(it.name_snapshot, 24)} · {half_up(it.grams)} г",
+            callback_data=f"{ITEM_WEIGHT_PREFIX}:{meal.id}:{it.id}",
+        )
+    builder.button(text="← Назад", callback_data=f"{ITEM_WEIGHT_PREFIX}:{meal.id}:back")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def item_weight_keyboard(meal: Meal, item: MealItem) -> InlineKeyboardMarkup:
+    """FR-43: пресеты веса одной позиции. В callback — граммы, которые запишутся (абсолютные, не
+    множитель): двойной тап пишет то же число, а не половину половины. По две в ряд: три на
+    320 px режут «×1,5 · 1125 г». Назад называет позицию — экран про неё и без всплывашки — и
+    ведёт к выбору позиции, если их с весом несколько, иначе к карточке."""
+    builder = InlineKeyboardBuilder()
+    head = f"{ITEM_WEIGHT_PREFIX}:{meal.id}:{item.id}"
+    presets = weight_presets(item.grams)
+    for label, grams in presets:
+        # @основа: вес поменяли — кнопка отказывает, даже если число совпало с новым пресетом.
+        builder.button(
+            text=f"{label} · {grams} г", callback_data=f"{head}:{grams}@{item.grams:g}"
+        )
+    builder.button(text="✍️ Своё", callback_data=f"{head}:own")
+    back = "" if len(weighable(meal)) > 1 else ":back"
+    builder.button(
+        text=f"← {_short(item.name_snapshot, 24)} · {half_up(item.grams)} г",
+        callback_data=f"{ITEM_WEIGHT_PREFIX}:{meal.id}{back}",
+    )
+    builder.adjust(*([2] * ((len(presets) + 2) // 2)), 1)
     return builder.as_markup()
 
 
