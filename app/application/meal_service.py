@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import difflib
 import re
+from collections import Counter
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 
@@ -591,6 +592,22 @@ class MealService:
             for name in await self._meals.template_names(uid)
         ]
         return sorted((m for m in found if m is not None), key=lambda m: m.eaten_at, reverse=True)
+
+    async def recent_sets(self, user: User, *, days: int) -> list[tuple[Meal, int]]:
+        """FR-40: наборы, которые ели за `days` дней, и сколько раз (повтор и запись по имени
+        считаются — у них то же `template_name`). Несъеденный за окно набор не возвращается:
+        «⚡ Частое» — про то, что ешь сейчас, а не про всё сохранённое."""
+        now = self._clock()
+        recent = await self._meals.list_between(
+            _require_id(user), now - timedelta(days=days), now + timedelta(days=1)
+        )
+        uses = Counter(m.template_name.casefold() for m in recent if m.template_name)
+        out: list[tuple[Meal, int]] = []
+        for m in await self.sets(user):  # свежие первыми: из «Курица»/«курица» остаётся свежий
+            key = (m.template_name or "").casefold()
+            if uses[key]:
+                out.append((m, uses.pop(key)))
+        return out
 
     async def template_match(self, user: User, text: str) -> tuple[str, int] | None:
         """Сообщение ЦЕЛИКОМ — своё блюдо? Возвращает (имя, сколько штук) или None.

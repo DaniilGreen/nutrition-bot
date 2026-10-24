@@ -653,6 +653,10 @@ class Assistant:
         """FR-39.5: свои наборы для «Моё»."""
         return await self._meals.sets(user)
 
+    async def recent_sets(self, user: User, *, days: int = 30) -> list[tuple[Meal, int]]:
+        """FR-40: наборы, съеденные за окно, со счётом раз — для «⚡ Частое»."""
+        return await self._meals.recent_sets(user, days=days)
+
     async def fix_item(
         self, user: User, meal_id: int, item_id: int, text: str
     ) -> MealLogged | None:

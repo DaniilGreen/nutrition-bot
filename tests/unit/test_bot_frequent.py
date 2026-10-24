@@ -24,7 +24,7 @@ from app.application.weight_service import WeightService
 from app.bot import handlers
 from app.bot.keyboards import (
     BTN_FREQUENT,
-    FREQ_PRODUCTS_MAX,
+    FREQ_MAX,
     FREQ_SETS_MAX,
     MENU_BUTTONS,
     frequent_keyboard,
@@ -118,18 +118,19 @@ def test_кнопка_в_меню_третьим_рядом_и_старые_ря
     assert rows[2] == ["⚡ Частое", "↩️ Отменить", "🐛 Баг"]
 
 
-def test_потолки_раздельные_по_одной_в_ряд_и_callback_в_лимите():
-    sets = [_wrap(1, f"набор {i}") for i in range(5)]
-    sets[0].template_name = "очень длинное имя набора " * 3  # кириллица: имя целиком не влезло бы
+def test_потолки_по_одной_в_ряд_и_callback_в_лимите():
+    sets = [(_wrap(1, f"набор {i}"), 7) for i in range(5)]
+    sets[0][0].template_name = "очень длинное имя набора " * 3  # кириллица: целиком не влезет
     rows = [(None, "незакреплённое", 100.0, 9)] + [
         (i, f"продукт {i}", 152.5, 5) for i in range(1, 13)
     ]
     kb = frequent_keyboard(sets, rows)
     buttons = _buttons(kb)
-    assert len(buttons) == FREQ_SETS_MAX + FREQ_PRODUCTS_MAX  # наборы продукты не вытеснили
+    assert len(buttons) == FREQ_MAX
     assert all(len(r) == 1 for r in kb.inline_keyboard)
-    assert [b.text.startswith("📌") for b in buttons] == [True] * 3 + [False] * 8
-    assert buttons[0].callback_data == f"fq:s:{set_key(sets[0].template_name)}"
+    # наборы ели чаще (7 > 5) — они выше, но их не больше FREQ_SETS_MAX
+    assert [b.text.startswith("📌") for b in buttons] == [True] * FREQ_SETS_MAX + [False] * 5
+    assert buttons[0].callback_data == f"fq:s:{set_key(sets[0][0].template_name)}"
     assert buttons[0].text == "📌 очень длинное имя набор… · 357 ккал"  # режется имя, не число
     assert buttons[3].callback_data == "fq:p:1:152.5"  # граммы с кнопки = записанные
     assert buttons[3].text == "продукт 1 · 152.5 г"
@@ -152,8 +153,33 @@ def test_граммы_фильтруются_после_округления():
 
 def test_наборы_склеиваются_без_регистра_свежий_побеждает():
     fresh, old = _wrap(1, "Курица в лаваше", hours_ago=1), _wrap(1, "курица в лаваше")
-    kb = frequent_keyboard([fresh, old], [])
+    kb = frequent_keyboard([(fresh, 2), (old, 2)], [])
     assert [b.callback_data for b in _buttons(kb)] == [f"fq:s:{set_key('Курица в лаваше')}"]
+
+
+def test_набор_не_первым_а_по_числу_раз():
+    """24.10.2026: «Бургер по домашнему» съеден дважды — протеин, который пьют каждый день, выше.
+    Ничья — продукт выше набора."""
+    rows = [(1, "Gold Standard Whey", 30.0, 20), (2, "лаваш", 62.0, 2), (3, "соль", 1.0, 1)]
+    texts = [b.text for b in _buttons(frequent_keyboard([(_wrap(1, "Бургер"), 2)], rows))]
+    assert texts == [
+        "Gold Standard Whey · 30 г", "лаваш · 62 г", "📌 Бургер · 357 ккал", "соль · 1 г"
+    ]
+
+
+def test_редкий_набор_выпадает_за_потолок():
+    rows = [(i, f"продукт {i}", 100.0, 5) for i in range(1, 9)]
+    texts = [b.text for b in _buttons(frequent_keyboard([(_wrap(1, "Бургер"), 2)], rows))]
+    assert len(texts) == FREQ_MAX and not any(t.startswith("📌") for t in texts)
+
+
+async def test_набор_вне_окна_30_дней_не_предлагается():
+    assistant, user, _, meals = await _world()
+    await meals.add(_wrap(user.id, "Бургер", hours_ago=24 * 31))
+    await meals.add(_wrap(user.id, "курица в лаваше", hours_ago=3))
+    await meals.add(_wrap(user.id, "Курица в лаваше", hours_ago=1))
+    got = [(m.template_name, n) for m, n in await assistant.recent_sets(user, days=30)]
+    assert got == [("Курица в лаваше", 2)]  # регистр склеен в счёте, бургер за окном
 
 
 def test_нечего_показать_клавиатуры_нет():
@@ -173,7 +199,7 @@ async def test_пусто_две_короткие_строки_без_клави
     assert "reply_markup" not in msg.answer.await_args.kwargs
 
 
-async def test_экран_набор_первым_имя_продукта_из_каталога():
+async def test_экран_по_числу_раз_имя_продукта_из_каталога():
     assistant, user, products, meals = await _world()
     p = await _tvorog(products)
     for _ in range(3):
@@ -185,8 +211,8 @@ async def test_экран_набор_первым_имя_продукта_из_�
     head = msg.answer.await_args.args[0]
     kb = msg.answer.await_args.kwargs["reply_markup"]
     assert "📌 — наборы" in head
-    assert [b.text for b in _buttons(kb)] == [
-        f"📌 {SET} · 357 ккал", "творог 5% Савушкин · 180 г"
+    assert [b.text for b in _buttons(kb)] == [  # творог трижды, набор раз — творог выше
+        "творог 5% Савушкин · 180 г", f"📌 {SET} · 357 ккал"
     ]
 
 

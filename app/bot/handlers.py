@@ -569,7 +569,7 @@ async def btn_frequent(
 ) -> None:
     """FR-40: наборы и частое кнопками. Данные — те же, что у чипов аппки (`sets`, `frequent`)."""
     await state.clear()
-    sets = await assistant.sets(app_user)
+    sets = await assistant.recent_sets(app_user, days=30)
     # Тот же топ, что у аппки: бот не показывает продукт, которого нет в её чипах. Имя — из
     # каталога (так его запишет log_quick и покажет карточка), а не из снапшотов; продукт,
     # которого в каталоге уже нет (слили/удалили), кнопкой не показываем.
@@ -582,7 +582,8 @@ async def btn_frequent(
     if markup is None:
         await message.answer(_FREQ_EMPTY)
         return
-    has_sets = any(m.template_name for m in sets)  # строка про 📌 — только когда наборы есть
+    # строка про 📌 — только когда набор реально попал в кнопки
+    has_sets = any(b.text.startswith("📌") for row in markup.inline_keyboard for b in row)
     await message.answer(_FREQ_HEAD + (_FREQ_HEAD_SETS if has_sets else ""), reply_markup=markup)
 
 

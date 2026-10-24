@@ -48,7 +48,7 @@ FREQ_PREFIX = "fq"  # «⚡ Частое»: fq:p:<product_id>:<граммы> / f
 # FR-40: потолки раздельные — наборы не вытесняют продукты. Аппка показывает ВСЕ наборы и топ-10
 # частого; бот берёт тот же топ-10 и только закреплённое из него, не глубже.
 FREQ_SETS_MAX = 3
-FREQ_PRODUCTS_MAX = 8
+FREQ_MAX = 8  # кнопок всего: наборы и продукты в одном рейтинге
 FREQ_TOP = 10  # тот же топ, что у чипов аппки (`/api/frequent?limit=10`)
 FREQ_NAME_MAX = 24  # режем ИМЯ, хвост «· 180 г» / «· 420 ккал» остаётся целым (320 px)
 
@@ -283,9 +283,11 @@ def _freq_labels(names: Sequence[str]) -> list[str]:
 
 
 def frequent_keyboard(
-    sets: Sequence[Meal], frequent: Sequence[tuple[int | None, str, float, int]]
+    sets: Sequence[tuple[Meal, int]], frequent: Sequence[tuple[int | None, str, float, int]]
 ) -> InlineKeyboardMarkup | None:
-    """FR-40: наборы первыми (≤ FREQ_SETS_MAX), дальше частые продукты (≤ FREQ_PRODUCTS_MAX).
+    """FR-40: один рейтинг на всех — сколько раз ели за 30 дней; ≤ FREQ_MAX кнопок, наборов ≤
+    FREQ_SETS_MAX. Набор не стоит первым только потому, что он набор: «Частое» — про то, что ешь
+    сейчас (поправка владельца 24.10.2026). При ничьей выше продукт — его порядок уже по свежести.
 
     По одной кнопке в ряд: на 320 px две в ряд резали бы как раз число. Продукт без product_id
     не показываем: записать его можно только моделью, а это уже не «один тап». Граммы — в
@@ -293,31 +295,32 @@ def frequent_keyboard(
     None — показывать нечего; пустую клавиатуру не шлём.
     """
     seen: set[str] = set()
-    named: list[tuple[str, float]] = []
-    for m in sets:  # свежие первыми (Assistant.sets) — из двух «Курица»/«курица» берём свежий
+    entries: list[tuple[int, str, str, str]] = []  # (раз, имя, хвост кнопки, callback)
+    for pid, name, grams, times in frequent:
+        g = round(grams, 1)
+        if pid and 0 < g <= 5000:
+            entries.append((times, name, f"{g:g} г", f"{FREQ_PREFIX}:p:{pid}:{g:g}"))
+    for m, times in sets:  # свежие первыми (Assistant.sets) — из «Курица»/«курица» берём свежий
         name = m.template_name or ""
-        if name and name.casefold() not in seen and len(named) < FREQ_SETS_MAX:
+        if name and name.casefold() not in seen:
             seen.add(name.casefold())
-            named.append((name, m.totals.kcal))
-    products = [
-        (pid, name, g) for pid, name, g in
-        ((pid, name, round(grams, 1)) for pid, name, grams, _ in frequent)
-        if pid and 0 < g <= 5000
-    ][:FREQ_PRODUCTS_MAX]
-    if not named and not products:
+            entries.append((times, "📌 " + name, f"{round(m.totals.kcal)} ккал",
+                            f"{FREQ_PREFIX}:s:{set_key(name)}"))
+    entries.sort(key=lambda e: -e[0])  # устойчиво: при ничьей продукт выше набора
+    picked: list[tuple[int, str, str, str]] = []
+    for e in entries:
+        if e[1].startswith("📌 ") and sum(p[1].startswith("📌 ") for p in picked) == FREQ_SETS_MAX:
+            continue
+        picked.append(e)
+        if len(picked) == FREQ_MAX:
+            break
+    if not picked:
         return None
     builder = InlineKeyboardBuilder()
-    for (name, kcal), label in zip(named, _freq_labels([n for n, _ in named]), strict=True):
-        builder.button(
-            text=f"📌 {label} · {round(kcal)} ккал",
-            callback_data=f"{FREQ_PREFIX}:s:{set_key(name)}",
-        )
-    for (pid, _, grams), label in zip(
-        products, _freq_labels([n for _, n, _ in products]), strict=True
-    ):
-        builder.button(
-            text=f"{label} · {grams:g} г", callback_data=f"{FREQ_PREFIX}:p:{pid}:{grams:g}"
-        )
+    names = [n.removeprefix("📌 ") for _, n, _, _ in picked]
+    for (_, name, tail, data), label in zip(picked, _freq_labels(names), strict=True):
+        pin = "📌 " if name.startswith("📌 ") else ""
+        builder.button(text=f"{pin}{label} · {tail}", callback_data=data)
     builder.adjust(1)
     return builder.as_markup()
 
