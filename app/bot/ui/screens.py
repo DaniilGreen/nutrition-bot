@@ -18,7 +18,7 @@ from collections.abc import Sequence
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from app.application.entities import MealItem, Product
+from app.application.entities import Meal, MealItem, Product
 from app.application.results import DayView, ItemAdjusted, ItemRemoved, LabelRead, MealLogged
 from app.bot.ui import blocks, kit
 from app.bot.ui.context import DayContext, day_status
@@ -74,12 +74,15 @@ def _meal_day_label(eaten_at: datetime, tz_name: str, today: date) -> str:
     return f" на {word}, {ds}" if word else f" на {ds}"
 
 
-def meal_card(d: DayContext, r: MealLogged, *, edited: bool = False) -> str:
+def meal_card(
+    d: DayContext, r: MealLogged, *, edited: bool = False, restored: bool = False
+) -> str:
     """Карточка сразу после записи — самый горячий момент: человек ещё у тарелки, уточнить 5 сек.
 
     Показываем ЧТО записали (метки ≈/📋), вклад приёма, прогресс ЕГО дня всеми барами и одну
     подсказку. При «вчера/завтра» бары и заголовок — про ТОТ день (r.remaining), а добор молчит:
-    он про сегодняшний конец дня, к прошлому/будущему дню неприменим.
+    он про сегодняшний конец дня, к прошлому/будущему дню неприменим. restored — после «⏪ Вернуть»
+    (FR-41): заголовок называет то, что человек нажал.
     """
     m, g = r.meal, d.goal
     today = d.days[-1][0] if d.days else m.eaten_at.astimezone(ZoneInfo(d.today.timezone)).date()
@@ -99,7 +102,7 @@ def meal_card(d: DayContext, r: MealLogged, *, edited: bool = False) -> str:
     )
     return (
         # MA-INV-70: правленая карточка не должна читаться как новая запись.
-        f"<h3>{'✏️ Поправил' if edited else '✅ Записал'}{day_label} · "
+        f"<h3>{'⏪ Вернул' if restored else '✏️ Поправил' if edited else '✅ Записал'}{day_label} · "
         f"{tg_time(m.eaten_at, d.today.timezone)}</h3>"
         + f"<ul>{''.join(lis)}</ul>"
         + total
@@ -298,6 +301,16 @@ def day(dv: DayView, rem: Remaining) -> str:
         for it in m.items
     )
     return f"<h3>🗒 {title}</h3><ul>{lines}</ul><hr/>" + _bars(rem.consumed, rem.goal)
+
+
+def meal_deleted(meal: Meal, tz_name: str) -> str:
+    """«↩️ Отменить всё» под карточкой (FR-41): карточка не исчезает, а говорит, что отменено, —
+    под ней «⏪ Вернуть». Раньше её удаляли, и вернуть было не из чего."""
+    names = ", ".join(e(i.name_snapshot) for i in meal.items)
+    return (
+        f"<h3>🗑 Отменил приём · {tg_time(meal.eaten_at, tz_name)}</h3>"
+        f"<p>{names} — <b>{n(meal.totals.kcal)}</b> ккал.</p>"
+    )
 
 
 def item_removed(r: ItemRemoved) -> str:

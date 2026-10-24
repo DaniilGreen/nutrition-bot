@@ -8,10 +8,13 @@ UX: постоянное reply-меню, командное меню, «печа
 
 from __future__ import annotations
 
+import copy
 import logging
 import re
+import secrets
 import time
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import datetime
 from html import escape
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -24,6 +27,7 @@ from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
     ErrorEvent,
+    InlineKeyboardButton,
     InlineKeyboardMarkup,
     InputRichMessage,
     Message,
@@ -36,7 +40,7 @@ from app.application.assistant import Assistant
 from app.application.body_scans import BodyScanService, from_reading
 from app.application.coach import LimitReached
 from app.application.dto import Unit
-from app.application.entities import User
+from app.application.entities import Meal, MealItem, User
 from app.application.ports import UserRepo
 from app.application.results import (
     BodyScanRead,
@@ -81,6 +85,7 @@ from app.bot.keyboards import (
     ONBOARD_PREFIX,
     PHOTO_PREFIX,
     PROD_RENAME_PREFIX,
+    RESTORE_PREFIX,
     SCAN_PREFIX,
     WIZ_CANCEL,
     activity_keyboard,
@@ -97,6 +102,7 @@ from app.bot.keyboards import (
     portion_keyboard,
     prod_edit_keyboard,
     products_fix_keyboard,
+    restore_button,
     scan_apply_keyboard,
     scan_keyboard,
     set_key,
@@ -1324,74 +1330,318 @@ async def on_frequent_tap(
     await _send_meal_card(callback.message, result, app_user, assistant)
 
 
+# --- «⏪ Вернуть» после удаления (FR-41, D-MA-23) -----------------------------
+
+UNDO_TTL_S = 600  # то же окно, что у снимка аппки (MA-INV-69): одно число в обоих каналах
+_PICKER_HEAD = "Что отменить? (по позициям)"
+_GONE = "gone"
+_ALREADY = "Уже вернул."
+_EDITED = "Приём уже поправили — вернуть нельзя."
+
+
+@dataclass
+class _Undo:
+    """Снимок удалённого: что вернуть и каким приём остался ПОСЛЕ удаления (отпечаток)."""
+
+    token: str
+    at: float
+    snapshot: Meal
+    after: object  # _fingerprint приёма сразу после удаления
+    done: str | None = None  # не None — снимок израсходован, это ответ на следующие тапы
+
+
+# Человек → снимок. ОДИН на человека: новое удаление вытесняет прежнее — снимок заменяет приём
+# целиком, и два снимка одного приёма спорили бы, чья правда (D-MA-23). Общий с API словарь
+# невозможен: бот и API — разные процессы.
+# ponytail: память процесса бота — рестарт теряет «Вернуть» (удалено осознанно); потолок —
+# мягкое удаление колонкой, общее для обоих каналов.
+_trash: dict[int, _Undo] = {}
+
+
+def _fingerprint(meal: Meal | None) -> object:
+    """Каким приём остался: id, граммы и ккал позиций; удалён — _GONE. Правка словами, удаление
+    или «Вернуть» в аппке его меняют — и тогда снимок вернул бы не то (D-MA-23)."""
+    if meal is None:
+        return _GONE
+    return tuple(sorted((i.id or 0, i.grams, round(i.macros.kcal, 1)) for i in meal.items))
+
+
+def _remember(user: User, snapshot: Meal, after: Meal | None) -> str:
+    """В корзину — только ПОСЛЕ фиксации удаления: откаченное удаление не вытесняет прежний снимок
+    и не показывает «Вернуть» того, что на деле не удалено."""
+    assert user.id is not None
+    token = secrets.token_urlsafe(6)  # 8 знаков: callback «rst:<токен>:d20261024» далеко от 64 байт
+    _trash[user.id] = _Undo(token, time.monotonic(), snapshot, _fingerprint(after))
+    return token
+
+
+def _claim(user_id: int, token: str) -> _Undo | str:
+    """Снимок — или текст отказа. Проверка и отметка без await между ними: параллельный второй
+    тап слышит «Уже вернул.», пока первый ещё возвращает."""
+    undo = _trash.get(user_id)
+    if undo is None:
+        return "Вернуть уже нельзя."
+    if undo.token != token:
+        return "Вернуть можно только последнее удалённое."
+    if undo.done:
+        return undo.done
+    if time.monotonic() - undo.at > UNDO_TTL_S:
+        return f"Вернуть уже нельзя — прошло больше {UNDO_TTL_S // 60} минут."
+    undo.done = _ALREADY
+    return undo
+
+
+def _names(meal: Meal) -> str:
+    return ", ".join(i.name_snapshot for i in meal.items)
+
+
+def _current_restore(message: Message) -> InlineKeyboardButton | None:
+    """«⏪ Вернуть», что уже висит на сообщении: перерисовка экрана не должна его терять."""
+    kb = message.reply_markup
+    if not isinstance(kb, InlineKeyboardMarkup):
+        return None
+    return next(
+        (b for row in kb.inline_keyboard for b in row
+         if (b.callback_data or "").startswith(f"{RESTORE_PREFIX}:")),
+        None,
+    )
+
+
+def _picker_status(message: Message) -> str:
+    """Строка «🗑 Отменил: …» над пикером — пережить перерисовку вместе со своей кнопкой."""
+    text = message.text or ""
+    return escape(text.split("\n\n", 1)[0]) if "\n\n" in text else ""
+
+
+async def _remove_item(
+    user: User, assistant: Assistant, session: AsyncSession, meal_id: int, item_id: int
+) -> tuple[MealLogged | None, MealItem, str] | None:
+    """Убрать позицию: снимок ДО удаления (копия — удаление правит тот же объект приёма, урок аппки
+    21.10.2026), фиксация, и только потом снимок в корзину. None — позиции уже нет (двойной тап,
+    убрали в аппке): корзину не трогаем, иначе обрезанный приём вытеснил бы снимок первого тапа."""
+    meal = await assistant.get_meal(user, meal_id)
+    if meal is None or not any(i.id == item_id for i in meal.items):
+        return None
+    snapshot = copy.deepcopy(meal)
+    item = next(i for i in snapshot.items if i.id == item_id)
+    result = await assistant.remove_item(user, meal_id, item_id)
+    await session.commit()
+    return result, item, _remember(user, snapshot, result.meal if result else None)
+
+
+async def _redraw_picker(
+    message: Message, user: User, assistant: Assistant, status: str = "",
+    restore: InlineKeyboardButton | None = None,
+) -> None:
+    """Пикер «Отменить» на месте: строка о том, что сделано, над списком сегодняшнего (баг #12)."""
+    history = await assistant.today_meals(user)
+    head = f"{status}\n\n" if status else ""
+    if history.meals:
+        await _safe_edit(
+            message, head + _PICKER_HEAD,
+            undo_picker_keyboard(history.meals, history.timezone, restore),
+        )
+    else:
+        await _safe_edit(
+            message, head + "🗒 Больше нечего отменять — старое в 🗒 История.",
+            InlineKeyboardMarkup(inline_keyboard=[[restore]]) if restore else None,
+        )
+
+
+async def _redraw_card(message: Message, user: User, assistant: Assistant, meal_id: int) -> None:
+    """Устаревшая карточка лечится: показываем приём, каким он есть сейчас, с её «⏪ Вернуть»."""
+    meal = await assistant.get_meal(user, meal_id)
+    if meal is None:
+        return
+    ctx = await gather(assistant, user)
+    logged = MealLogged(meal=meal, remaining=(await assistant.today(user)).remaining)
+    await _rich_edit(
+        message, screens.meal_card(ctx, logged, edited=True),
+        meal_actions_keyboard(meal, _current_restore(message)),
+    )
+
+
+async def _drop_restore_button(message: Message) -> None:
+    """Отказ «Вернуть» снимает только саму кнопку: навигация дня и кнопки карточки живы."""
+    kb = message.reply_markup
+    if not isinstance(kb, InlineKeyboardMarkup):
+        return
+    rows = [
+        [b for b in row if not (b.callback_data or "").startswith(f"{RESTORE_PREFIX}:")]
+        for row in kb.inline_keyboard
+    ]
+    rows = [r for r in rows if r]
+    with suppress(TelegramBadRequest):
+        await message.edit_reply_markup(
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+        )
+
+
 @router.callback_query(F.data.startswith("meal_undo:"))
-async def on_meal_undo(callback: CallbackQuery, app_user: User, assistant: Assistant) -> None:
+async def on_meal_undo(
+    callback: CallbackQuery, app_user: User, assistant: Assistant, session: AsyncSession
+) -> None:
     if not isinstance(callback.message, Message):
         await callback.answer()
         return
     meal_id = int((callback.data or "meal_undo:0").split(":", 1)[1])
+    in_picker = _PICKER_HEAD in (callback.message.text or "")
     result = await assistant.delete_meal(app_user, meal_id)
     if result.meal is None:
+        # Карточку не трогаем: на ней может висеть «⏪ Вернуть» первого тапа (FR-41). Пикер
+        # перерисовываем из живых данных — со своей строкой и кнопкой.
         await callback.answer("Уже удалено.")
-        with suppress(TelegramBadRequest):
-            await callback.message.delete()
-        return
-    kcal = round(result.meal.totals.kcal)
-    if (callback.message.text or "").startswith("Что отменить"):  # пикер /undo → перерисовать
-        history = await assistant.today_meals(app_user)
-        if history.meals:
-            await _safe_edit(
-                callback.message,
-                "Что отменить? (по позициям)",
-                undo_picker_keyboard(history.meals, history.timezone),
+        if in_picker:
+            await _redraw_picker(
+                callback.message, app_user, assistant,
+                _picker_status(callback.message), _current_restore(callback.message),
             )
-        else:
-            await _safe_edit(callback.message, "🗒 Больше нечего отменять — старое в 🗒 История.")
-    else:  # контекстная отмена под rich-карточкой: править нельзя — просто убираем её
-        with suppress(TelegramBadRequest):
-            await callback.message.delete()
+        return
+    # Снимок — то, что вернул delete: состояние ДО удаления, дальше его никто не правит.
+    snapshot = copy.deepcopy(result.meal)
+    await session.commit()
+    token = _remember(app_user, snapshot, None)
+    what, kcal = _names(snapshot), round(snapshot.totals.kcal)
+    if in_picker:
+        await _redraw_picker(
+            callback.message, app_user, assistant, f"🗑 Отменил: {escape(what)} · {kcal} ккал",
+            restore_button(token, "p", what),
+        )
+    else:  # под карточкой: она говорит, что отменено, и держит «⏪ Вернуть» (раньше удалялась)
+        await _rich_edit(
+            callback.message, screens.meal_deleted(snapshot, app_user.timezone),
+            InlineKeyboardMarkup(inline_keyboard=[[restore_button(token, "c", what)]]),
+            fallback_text=f"🗑 Отменил приём: {escape(what)} · {kcal} ккал",
+        )
     await callback.answer(f"🗑 Отменил приём ({kcal} ккал)")
 
 
 @router.callback_query(F.data.startswith("item_del:"))
-async def on_item_del(callback: CallbackQuery, app_user: User, assistant: Assistant) -> None:
+async def on_item_del(
+    callback: CallbackQuery, app_user: User, assistant: Assistant, session: AsyncSession
+) -> None:
     if not isinstance(callback.message, Message):
         await callback.answer()
         return
     parts = (callback.data or "item_del:0:0").split(":")
     meal_id, item_id = int(parts[1]), int(parts[2])
-    result = await assistant.remove_item(app_user, meal_id, item_id)
+    removed = await _remove_item(app_user, assistant, session, meal_id, item_id)
+    if removed is None:
+        await callback.answer("Уже убрано.")
+        await _redraw_card(callback.message, app_user, assistant, meal_id)
+        return
+    result, item, token = removed
+    back = restore_button(token, "c", item.name_snapshot)
     if result is None:
-        await _rich_edit(callback.message, "<h3>🗑 Запись отменена</h3><p>Позиций не осталось.</p>")
+        await _rich_edit(
+            callback.message, "<h3>🗑 Запись отменена</h3><p>Позиций не осталось.</p>",
+            InlineKeyboardMarkup(inline_keyboard=[[back]]),
+        )
     else:
-        # Правим карточку НА МЕСТЕ: повторный тап по кнопке (remove_item вернёт тот же приём без
-        # изменений) даст «not modified», а не вторую карточку.
+        # Правим карточку НА МЕСТЕ: повторный тап по кнопке не даст вторую карточку.
         ctx = await gather(assistant, app_user)
         await _rich_edit(
             callback.message, screens.meal_card(ctx, result, edited=True),
-            meal_actions_keyboard(result.meal),
-            fallback_text=f"🗑 Убрал позицию · приём теперь {round(result.meal.totals.kcal)} ккал",
+            meal_actions_keyboard(result.meal, back),
+            fallback_text=(
+                f"🗑 Убрал: {escape(item.name_snapshot)} · "
+                f"приём теперь {round(result.meal.totals.kcal)} ккал"
+            ),
         )
     await callback.answer("🗑 Убрал позицию")
 
 
 @router.callback_query(F.data.startswith("undo_item:"))
-async def on_undo_item(callback: CallbackQuery, app_user: User, assistant: Assistant) -> None:
+async def on_undo_item(
+    callback: CallbackQuery, app_user: User, assistant: Assistant, session: AsyncSession
+) -> None:
     if not isinstance(callback.message, Message):
         await callback.answer()
         return
     parts = (callback.data or "undo_item:0:0").split(":")
     meal_id, item_id = int(parts[1]), int(parts[2])
-    await assistant.remove_item(app_user, meal_id, item_id)  # удаляем одну позицию
+    removed = await _remove_item(app_user, assistant, session, meal_id, item_id)
+    if removed is None:
+        await callback.answer("Уже убрано.")
+        await _redraw_picker(
+            callback.message, app_user, assistant,
+            _picker_status(callback.message), _current_restore(callback.message),
+        )
+        return
+    _, item, token = removed
     await callback.answer("🗑 Убрано")
-    history = await assistant.history(app_user, limit=5)  # перерисовываем меню без неё
-    if history.meals:
-        markup = undo_picker_keyboard(history.meals, history.timezone)
-        with suppress(Exception):  # игнор «message is not modified»
-            await callback.message.edit_text("Что отменить? (по позициям)", reply_markup=markup)
+    await _redraw_picker(
+        callback.message, app_user, assistant,
+        f"🗑 Убрал: {escape(item.name_snapshot)} · {round(item.macros.kcal)} ккал",
+        restore_button(token, "p", item.name_snapshot),
+    )
+
+
+async def _days_ago(user: User, assistant: Assistant, where: str) -> int | None:
+    """«d20261024» → сколько дней назад этот день СЕЙЧАС: после полуночи «вчера» — уже 1, а не 0.
+    Сегодня — по той же границе дня, что у экрана «День» (`day_view`)."""
+    try:
+        day = datetime.strptime(where[1:], "%Y%m%d").date()
+    except ValueError:
+        return None
+    today = (await assistant.day_view(user, 0)).day
+    return max(0, (today - day).days)
+
+
+@router.callback_query(F.data.startswith(f"{RESTORE_PREFIX}:"))
+async def on_restore(
+    callback: CallbackQuery, app_user: User, assistant: Assistant, session: AsyncSession
+) -> None:
+    """FR-41: «⏪ Вернуть» — тот же `restore_meal`, что у аппки; сообщение правится на месте."""
+    parts = (callback.data or "").split(":")
+    if not isinstance(callback.message, Message) or len(parts) != 3:
+        await callback.answer("Вернуть уже нельзя.")
+        return
+    assert app_user.id is not None
+    _, token, where = parts
+    undo = _claim(app_user.id, token)
+    if isinstance(undo, str):
+        await callback.answer(undo)
+        if undo != _ALREADY:  # второй тап: сообщение перерисует тот, что вернул
+            await _drop_restore_button(callback.message)
+        return
+    try:
+        snap = undo.snapshot
+        now = await assistant.get_meal(app_user, snap.id) if snap.id is not None else None
+        # Приём с тех пор правили (словами, в аппке) или удалили/вернули в аппке — снимок
+        # молча откатил бы правку или задвоил приём. Отказ, а не «вернул».
+        stale = _fingerprint(now) != undo.after
+        result = None if stale else await assistant.restore_meal(app_user, snap)
+        if result is not None:
+            await session.commit()  # фиксируем ДО показа — «Вернул» не врёт
+    except Exception:
+        undo.done = None  # снимок не съеден — можно тапнуть ещё
+        raise
+    if result is None:
+        undo.done = _EDITED if stale else "Вернуть уже нельзя."
+        await callback.answer(undo.done)
+        await _drop_restore_button(callback.message)
+        return
+    await callback.answer("⏪ Вернул")
+    meal = result.meal
+    what, kcal = escape(_names(meal)), round(meal.totals.kcal)
+    days_ago = await _days_ago(app_user, assistant, where) if where[:1] == "d" else None
+    if where == "p":
+        await _redraw_picker(
+            callback.message, app_user, assistant, f"⏪ Вернул: {what} · {kcal} ккал"
+        )
+    elif days_ago is not None:
+        rem, dv = await assistant.day_card(app_user, days_ago)
+        await _rich_edit(
+            callback.message, screens.day(dv, rem),
+            day_nav_keyboard(days_ago, dv.meals, dv.timezone),
+        )
     else:
-        with suppress(Exception):
-            await callback.message.edit_text("🗒 Больше нечего отменять.")
+        ctx = await gather(assistant, app_user)
+        await _rich_edit(
+            callback.message, screens.meal_card(ctx, result, restored=True),
+            meal_actions_keyboard(meal), fallback_text=f"⏪ Вернул: {what} · {kcal} ккал",
+        )
 
 
 @router.callback_query(F.data.startswith("prod_fix:"))
@@ -1538,7 +1788,9 @@ async def on_day_nav(callback: CallbackQuery, app_user: User, assistant: Assista
 
 
 @router.callback_query(F.data.startswith(f"{DAY_DEL_PREFIX}:"))
-async def on_day_del(callback: CallbackQuery, app_user: User, assistant: Assistant) -> None:
+async def on_day_del(
+    callback: CallbackQuery, app_user: User, assistant: Assistant, session: AsyncSession
+) -> None:
     """Удалить ОДНУ позицию прямо с экрана «День»/«История» и перерисовать ТОТ ЖЕ день на месте.
 
     Позиция, а не запись целиком: сдвоенную запись (картофель+фарш) чистим по продукту. Если
@@ -1549,12 +1801,19 @@ async def on_day_del(callback: CallbackQuery, app_user: User, assistant: Assista
         return
     _, days_ago_s, meal_id_s, item_id_s = (callback.data or "day_del:0:0:0").split(":")
     days_ago = max(0, int(days_ago_s))
-    await assistant.remove_item(app_user, int(meal_id_s), int(item_id_s))
+    removed = await _remove_item(app_user, assistant, session, int(meal_id_s), int(item_id_s))
     rem, dv = await assistant.day_card(app_user, days_ago)  # состояние дня ПОСЛЕ удаления
+    if removed is None:
+        # Уже убрано (двойной тап, в аппке) — экран лечим живыми данными, «⏪ Вернуть» оставляем.
+        restore = _current_restore(callback.message)
+    else:  # дата, а не «дней назад»: после полуночи «Вернуть» перерисует ТОТ день
+        _, item, token = removed
+        restore = restore_button(token, f"d{dv.day:%Y%m%d}", item.name_snapshot)
     await _rich_edit(
-        callback.message, screens.day(dv, rem), day_nav_keyboard(days_ago, dv.meals, dv.timezone)
+        callback.message, screens.day(dv, rem),
+        day_nav_keyboard(days_ago, dv.meals, dv.timezone, restore),
     )
-    await callback.answer("🗑 Убрал позицию")
+    await callback.answer("🗑 Убрал позицию" if removed else "Уже убрано.")
 
 
 @router.callback_query(F.data.startswith(f"{GOAL_TARGET_PREFIX}:"))
@@ -1634,7 +1893,7 @@ async def _show_undo_picker(message: Message, app_user: User, assistant: Assista
         await message.answer("Нечего отменять.")
         return
     await message.answer(
-        "Что отменить? (по позициям)",
+        _PICKER_HEAD,
         reply_markup=undo_picker_keyboard(history.meals, history.timezone),
     )
 
@@ -1746,7 +2005,7 @@ async def _rich_edit(
         logger.warning("правка карточки не удалась: %s", exc)
         if fallback_text:
             # MA-INV-70: вторая карточка «✅ Записал …» внизу чата выглядела записью заново.
-            await message.answer(fallback_text)
+            await message.answer(fallback_text, reply_markup=markup)  # «⏪ Вернуть» не теряется
             return
         await _rich(message, html, markup)
 

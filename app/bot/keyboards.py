@@ -5,7 +5,7 @@ import hashlib
 from collections.abc import Sequence
 from zoneinfo import ZoneInfo
 
-from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 from app.application.entities import Meal, Product
@@ -27,6 +27,7 @@ ONBOARD_PREFIX = "onb"
 PHOTO_PREFIX = "ph"  # карточка фото блюда: ph:fat:<id> / ph:dr:<id> / ph:ok (FR-34)
 SCAN_PREFIX = "scan"  # карточка бланка InBody: scan:save / scan:confirm / scan:apply (FR-36)
 WIZ_CANCEL = "wiz_cancel"  # «✖️ Отмена» в любом визарде (профиль/вариант) — сброс FSM
+RESTORE_PREFIX = "rst"  # «⏪ Вернуть» после удаления: rst:<токен>:<c|p|d<дней назад>> (FR-41)
 FREQ_PREFIX = "fq"  # «⚡ Частое»: fq:p:<product_id>:<граммы> / fq:s:<хэш имени набора> (FR-40)
 # FR-40: потолки раздельные — наборы не вытесняют продукты. Аппка показывает ВСЕ наборы и топ-10
 # частого; бот берёт тот же топ-10 и только закреплённое из него, не глубже.
@@ -111,8 +112,17 @@ def prod_edit_keyboard(product_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def restore_button(token: str, where: str, what: str) -> InlineKeyboardButton:
+    """FR-41: «⏪ Вернуть: <что>» — что именно вернётся, видно до тапа (тост с именем уже исчез).
+    where — куда перерисовать после возврата: c карточка, p пикер, d<дней назад> день."""
+    return InlineKeyboardButton(
+        text=f"⏪ Вернуть: {_short(what, 24)}", callback_data=f"{RESTORE_PREFIX}:{token}:{where}"
+    )
+
+
 def day_nav_keyboard(
-    days_ago: int, meals: Sequence[Meal] = (), tz_name: str = "UTC"
+    days_ago: int, meals: Sequence[Meal] = (), tz_name: str = "UTC",
+    restore: InlineKeyboardButton | None = None,
 ) -> InlineKeyboardMarkup:
     """Навигация по дням (← пред всегда, → след если не сегодня) + удаление приёмов этого дня.
 
@@ -121,6 +131,8 @@ def day_nav_keyboard(
     после удаления перерисовать ТОТ ЖЕ день.
     """
     builder = InlineKeyboardBuilder()
+    if restore is not None:  # FR-41: только что удалённое — первым рядом, над навигацией
+        builder.add(restore)
     builder.button(text="← пред. день", callback_data=f"{DAY_NAV_PREFIX}:{days_ago + 1}")
     if days_ago > 0:
         builder.button(text="след. день →", callback_data=f"{DAY_NAV_PREFIX}:{days_ago - 1}")
@@ -136,7 +148,7 @@ def day_nav_keyboard(
             callback_data=f"{DAY_DEL_PREFIX}:{days_ago}:{meal.id}:{it.id}",
         )
     nav = 2 if days_ago > 0 else 1  # ряд навигации, дальше каждое удаление на своей строке
-    builder.adjust(nav, *([1] * len(items)))
+    builder.adjust(*([1] if restore else []), nav, *([1] * len(items)))
     return builder.as_markup()
 
 
@@ -228,12 +240,17 @@ def frequent_keyboard(
     return builder.as_markup()
 
 
-def meal_actions_keyboard(meal: Meal) -> InlineKeyboardMarkup:
+def meal_actions_keyboard(
+    meal: Meal, restore: InlineKeyboardButton | None = None
+) -> InlineKeyboardMarkup:
     """Под свежей записью: удалить отдельную позицию (если их >1) и отменить всё.
 
-    Это контекстная отмена «без вопроса» — кнопки знают конкретную запись.
+    Это контекстная отмена «без вопроса» — кнопки знают конкретную запись. restore — «⏪ Вернуть»
+    только что убранной позиции (FR-41), первой: сразу после удаления нужна именно она.
     """
     builder = InlineKeyboardBuilder()
+    if restore is not None:
+        builder.add(restore)
     # Первой — созидательная кнопка: выпил вторую бутылку, съел вторую порцию. Копирует вес и
     # КБЖУ один-в-один, поэтому в ИИ не идёт и повтор не «переоценивается» заново.
     builder.button(text="🔁 Повторить", callback_data=f"{MEAL_REPEAT_PREFIX}:{meal.id}")
@@ -256,13 +273,18 @@ def meal_actions_keyboard(meal: Meal) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def undo_picker_keyboard(meals: Sequence[Meal], tz_name: str) -> InlineKeyboardMarkup:
+def undo_picker_keyboard(
+    meals: Sequence[Meal], tz_name: str, restore: InlineKeyboardButton | None = None
+) -> InlineKeyboardMarkup:
     """Меню «Отменить» (FR-12/D-13): для каждого приёма — «весь приём» + позиции (если их >1).
 
     Единый смысл с контекстной отменой под свежей записью: можно снять и приём целиком, и позицию.
+    restore — «⏪ Вернуть» только что отменённого (FR-41), первой строкой.
     """
     tz = ZoneInfo(tz_name)
     builder = InlineKeyboardBuilder()
+    if restore is not None:
+        builder.add(restore)
     for meal in meals:
         when = meal.eaten_at.astimezone(tz).strftime("%H:%M")
         names = _short(", ".join(i.name_snapshot for i in meal.items), 24)

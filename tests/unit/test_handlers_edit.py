@@ -53,7 +53,9 @@ async def test_item_del_edits_in_place_not_resend(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(handlers, "_send_meal_card", card)
 
     item_id = meal.meal.items[0].id
-    await handlers.on_item_del(_callback(f"item_del:{meal.meal.id}:{item_id}"), user, assistant)
+    await handlers.on_item_del(
+        _callback(f"item_del:{meal.meal.id}:{item_id}"), user, assistant, AsyncMock()
+    )
 
     edit.assert_awaited_once()  # правим НА МЕСТЕ
     send.assert_not_awaited()  # не шлём новую карточку (иначе прыжок + дубль при двойном тапе)
@@ -78,7 +80,9 @@ async def test_day_del_removes_one_item_and_edits_in_place(monkeypatch: pytest.M
     monkeypatch.setattr(handlers, "_rich_edit", edit)
 
     item_id = meal.meal.items[0].id
-    await handlers.on_day_del(_callback(f"day_del:0:{meal.meal.id}:{item_id}"), user, assistant)
+    await handlers.on_day_del(
+        _callback(f"day_del:0:{meal.meal.id}:{item_id}"), user, assistant, AsyncMock()
+    )
 
     edit.assert_awaited_once()  # тот же день перерисован на месте
     today = await assistant.today(user)
