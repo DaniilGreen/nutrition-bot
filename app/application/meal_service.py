@@ -35,6 +35,8 @@ from app.domain.naming import (
     _names_compatible,
     _norm,
     _qualifiers,
+    _same_word,
+    _tokens,
 )
 from app.domain.nutrition import macros_for_grams, reconcile_density, split_macros_from_kcal
 from app.domain.plausibility import (
@@ -59,7 +61,6 @@ _JUNK_KEYS = frozenset(
 )
 _MIN_KEY_LEN = 3
 _CORRECTION_LOOKBACK = 10  # сколько недавних записей просматриваем для «удали X»
-_CORRECTION_NAME_THRESHOLD = 0.8  # порог нечёткого совпадения имени при удалении
 # FR-39.2: «2 курицы в лаваше», «курица в лаваше 2 шт». Только 1–2 цифры: «… 150 г» — вес, не штуки.
 _COUNT_RE = re.compile(r"(?:^|(?<=\s))(\d{1,2})\s*(?:шт\.?)?(?=\s|$)")
 _MAX_TIMES = 10  # больше — скорее опечатка, чем десять порций за раз
@@ -444,13 +445,13 @@ class MealService:
         """Коррекция «удали X»: снять самую свежую позицию, чьё имя совпало с name."""
         user_id = _require_id(user)
         recent = await self._meals.list_recent(user_id, _CORRECTION_LOOKBACK)  # newest-first
-        for meal in recent:
-            for item in meal.items:
-                if _name_matches(name, item.name_snapshot):
-                    assert meal.id is not None and item.id is not None
-                    await self._meals.remove_item(user_id, meal.id, item.id)
-                    return item
-        return None
+        found = _freshest_named(recent, name)
+        if found is None:
+            return None
+        meal, item = found
+        assert meal.id is not None and item.id is not None
+        await self._meals.remove_item(user_id, meal.id, item.id)
+        return item
 
     async def adjust_item_by_name(
         self, user: User, name: str, new_grams: float
@@ -462,25 +463,25 @@ class MealService:
         user_id = _require_id(user)
         new_grams = round(clamp_grams(new_grams), 1)
         recent = await self._meals.list_recent(user_id, _CORRECTION_LOOKBACK)
-        for meal in recent:
-            for item in meal.items:
-                if _name_matches(name, item.name_snapshot) and item.grams and item.grams > 0:
-                    assert meal.id is not None and item.id is not None
-                    old_grams = item.grams
-                    new_macros = _scaled(item, new_grams)
-                    await self._meals.update_item(
-                        user_id, meal.id, item.id, grams=new_grams, macros=new_macros
-                    )
-                    updated = MealItem(
-                        name_snapshot=item.name_snapshot,
-                        grams=new_grams,
-                        macros=new_macros,
-                        product_id=item.product_id,
-                        is_estimate=item.is_estimate,
-                        id=item.id,
-                    )
-                    return (updated, old_grams)
-        return None
+        found = _freshest_named(recent, name, weighed=True)
+        if found is None:
+            return None
+        meal, item = found
+        assert meal.id is not None and item.id is not None
+        old_grams = item.grams
+        new_macros = _scaled(item, new_grams)
+        await self._meals.update_item(
+            user_id, meal.id, item.id, grams=new_grams, macros=new_macros
+        )
+        updated = MealItem(
+            name_snapshot=item.name_snapshot,
+            grams=new_grams,
+            macros=new_macros,
+            product_id=item.product_id,
+            is_estimate=item.is_estimate,
+            id=item.id,
+        )
+        return (updated, old_grams)
 
     async def resolves_to_existing(self, parsed_item: ParsedItem) -> bool:
         """Возьмёт ли запись эту позицию из каталога — та же логика, что `_resolve_product`,
@@ -981,17 +982,66 @@ def _looks_zero_calorie(name: str) -> bool:
     return ("кофе" in n or "чай" in n) and ("чёрн" in n or "черн" in n or "без" in n)
 
 
-def _name_matches(query: str, candidate: str) -> bool:
-    """Совпадение имени для «удали X»: подстрока или нечёткое сходство.
+def items_named(items: list[MealItem], name: str) -> list[MealItem]:
+    """Позиции, чьё имя совпало с названным (FR-44: «удали гречку» ответом — в одном приёме).
+    Строгого совпадения нет — опечатка («гречику»), но только если она указывает на одно имя."""
+    hits = [i for i in items if _name_matches(name, i.name_snapshot)]
+    if hits:
+        return hits
+    typo = [i for i in items if _typo_matches(name, i.name_snapshot)]
+    return typo if len({_norm(i.name_snapshot) for i in typo}) == 1 else []
 
-    ponytail: substring+difflib по имени; если мажет (ирис/рис) — матчить по canonical_key.
+
+def _freshest_named(
+    recent: list[Meal], name: str, *, weighed: bool = False
+) -> tuple[Meal, MealItem] | None:
+    """FR-14.1/14.2: самая свежая позиция с этим именем среди недавних приёмов (newest-first).
+    weighed — только с весом (стейтед без граммов масштабировать не от чего)."""
+    pairs = [(m, i) for m in recent for i in m.items if not weighed or (i.grams and i.grams > 0)]
+    hit = next(((m, i) for m, i in pairs if _name_matches(name, i.name_snapshot)), None)
+    if hit is not None:
+        return hit
+    typo = [(m, i) for m, i in pairs if _typo_matches(name, i.name_snapshot)]
+    return typo[0] if len({_norm(i.name_snapshot) for _, i in typo}) == 1 else None
+
+
+def _name_matches(query: str, candidate: str) -> bool:
+    """Совпадение имени для «удали X» / «гречки было 150»: целыми словами со словоформами (ё=е,
+    `_coverage`) — все слова короткого имени нашлись в длинном. Подстрокой «рис» ⊂ «рисовая
+    лапша» и «ирис» склеивалась разная еда, и правка ответом попадала не в ту позицию (FR-44).
     """
-    q, c = _norm(query), _norm(candidate)
-    if not q:
+    if not _norm(query):
         return False
-    if q in c or c in q:
-        return True
-    return difflib.SequenceMatcher(None, q, c).ratio() >= _CORRECTION_NAME_THRESHOLD
+    return _coverage(query, candidate) == 1.0 or _coverage(candidate, query) == 1.0
+
+
+_TYPO_RATIO = 0.8  # «гречика» ≈ «гречка» (0,92); «рис» ≈ «ирис» (0,86) отсекает длина ≥ 4
+_TYPO_MIN_LEN = 4  # короткое слово опечатку не опознать: три буквы — уже другое слово
+_ENDINGS = "аеёиоуыэюяйь"  # гласная/й/ь на конце — падеж, а не опечатка
+
+
+def _stem(word: str) -> str:
+    return word[:-1] if word[-1:] in _ENDINGS else word  # одна буква: «куриная» ≠ «курицу»
+
+
+def _typo_matches(query: str, candidate: str) -> bool:
+    """Второй проход после строгого (FR-14.1): опечатка ЦЕЛОГО слова — каждое слово короткого
+    имени нашло в длинном словоформу (`_same_word`) или слово с отличием в букву-две (difflib
+    ≥ 0,8, оба ≥ 4 букв). Не подстрока: «рис» не попадает ни в «рисовую лапшу», ни в «ирис»."""
+    def close(a: str, b: str) -> bool:
+        if _same_word(a, b):
+            return True
+        if min(len(a), len(b)) < _TYPO_MIN_LEN:
+            return False
+        # Без окончания: «гречику» — опечатка И падеж, по целому слову 0,77, по основе 0,91.
+        return any(difflib.SequenceMatcher(None, x, y).ratio() >= _TYPO_RATIO
+                   for x, y in ((a, b), (_stem(a), _stem(b))))
+
+    def covered(xs: tuple[str, ...], ys: tuple[str, ...]) -> bool:
+        return bool(xs) and all(any(close(x, y) for y in ys) for x in xs)
+
+    q, c = _tokens(query), _tokens(candidate)
+    return covered(q, c) or covered(c, q)
 
 
 def order_options_by_history(options: list[str], recent_names: list[str]) -> list[str]:

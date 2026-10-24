@@ -174,6 +174,28 @@ class CorrectionFailed:
 
 
 @dataclass
+class MealCorrected:
+    """FR-44: правка ответом на карточку — что стало с ЭТИМ приёмом. `old` — какими позиции были
+    (заменённая, до правки веса, убранные), `new` — какими стали (у удаления пусто). meal None —
+    позиций не осталось, приём удалён."""
+
+    kind: str  # fix | adjust | delete
+    meal: Meal | None
+    remaining: Remaining
+    old: list[MealItem]
+    new: list[MealItem]
+
+
+@dataclass
+class ItemPickNeeded:
+    """FR-44: фраза-замена на приём из нескольких позиций, и какую менять — не понять. Разбор
+    отдаём наружу: после тапа заменим им же, второй раз в модель не ходим."""
+
+    meal: Meal
+    draft: ParsedMessage
+
+
+@dataclass
 class Unknown:
     reason: str = ""
     # Готовый текст человеку — показывается как есть. Без него бот угадывал смысл по словам
@@ -198,5 +220,7 @@ Result = (
     | ItemRemoved
     | ItemAdjusted
     | CorrectionFailed
+    | MealCorrected
+    | ItemPickNeeded
     | Unknown
 )

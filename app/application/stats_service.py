@@ -37,6 +37,13 @@ class StatsService:
     async def current_goal(self, user: User) -> Goal:
         return await self._users.get_goal(_require_id(user)) or self._default_goal
 
+    def days_ago(self, user: User, moment: datetime) -> int:
+        """Сколько дней назад (по дню человека) был момент: карточке прошлого приёма нужен его
+        день, а не сегодняшний (FR-44)."""
+        start = day_start(user.ui_prefs)
+        today = local_date(self._clock(), user.timezone, start)
+        return (today - local_date(moment, user.timezone, start)).days
+
     async def daily(self, user: User, days_ago: int = 0) -> DailyStats:
         """Статистика дня. days_ago=0 — сегодня; >0 — прошлые дни, <0 — будущие (предзапись).
 

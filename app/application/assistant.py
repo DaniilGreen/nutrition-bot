@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
+import re
 import weakref
 from datetime import date, datetime
 from statistics import median
@@ -33,7 +35,7 @@ from app.application.entities import (
     User,
     WeightLog,
 )
-from app.application.meal_service import MealService, RecipeRejected
+from app.application.meal_service import MealService, RecipeRejected, items_named
 from app.application.ports import (
     BugRepo,
     NluPort,
@@ -52,8 +54,10 @@ from app.application.results import (
     DishSaved,
     History,
     ItemAdjusted,
+    ItemPickNeeded,
     ItemRemoved,
     LabelRead,
+    MealCorrected,
     MealDeleted,
     MealLogged,
     MonthReport,
@@ -171,6 +175,20 @@ class Assistant:
                     stats = await self._stats.daily(user, days_ago=-day_offset)
                     return MealLogged(meal=repeated, remaining=stats.remaining)
 
+        parsed = await self._parse(text)
+        parsed.photo = photo
+        parsed.weight_guessed = weight_guessed
+        if photo:
+            _names_from_phrase(parsed, text)
+            # Карточка фото уже была подтверждением: второй круг «с кожей?», «с маслом?»
+            # переспрашивал то, что человек только что отметил, а ответ «с маслом» при
+            # отдельной позиции масла считал его дважды (фото 17.09.2026).
+            for item in parsed.items:
+                item.clarify_options = None
+        return await self._route(user, parsed, text, input_type=input_type, day_offset=day_offset)
+
+    async def _parse(self, text: str) -> ParsedMessage:
+        """Разбор фразы для записи — один на запись и на ответ карточке (FR-44)."""
         known_keys = await self._products.all_keys()
         # Self-consistency (D-15/INV-12): k сэмплов оценки → медиана + калиброванная уверенность.
         # Заменяет фейковый ретрай при temperature=0 (был почти no-op). Адаптер сам решает k:
@@ -181,17 +199,13 @@ class Assistant:
             # пиннится навсегда (INV-2), значит нужна медиана (INV-12). Редкий случай: лишний
             # один вызов дешевле плотности наугад.
             samples = await self._nlu.parse_samples(text, known_keys=known_keys, force=True)
-        parsed = _consolidate(samples)
-        parsed.photo = photo
-        parsed.weight_guessed = weight_guessed
-        if photo:
-            _names_from_phrase(parsed, text)
-            # Карточка фото уже была подтверждением: второй круг «с кожей?», «с маслом?»
-            # переспрашивал то, что человек только что отметил, а ответ «с маслом» при
-            # отдельной позиции масла считал его дважды (фото 17.09.2026).
-            for item in parsed.items:
-                item.clarify_options = None
+        return _consolidate(samples)
 
+    async def _route(
+        self, user: User, parsed: ParsedMessage, text: str, *, input_type: str = "text",
+        day_offset: int = 0,
+    ) -> Result:
+        """Разобранное — по намерению: приём, вес, вопрос, заготовка, коррекция."""
         if parsed.intent is Intent.MEAL and parsed.items:
             return await self._handle_meal(
                 user, parsed, raw_input=text, input_type=input_type, day_offset=day_offset
@@ -644,13 +658,193 @@ class Assistant:
         parsed = _consolidate(await self._nlu.parse_samples(text, known_keys=known_keys))
         if parsed.intent is not Intent.MEAL or not parsed.items:
             return None
+        fixed = await self.fix_meal_item(user, meal_id, item_id, parsed, text)
+        if fixed is None or fixed.meal is None:
+            return None
+        # Аппке — остаток сегодняшнего дня, как было: её «осталось» всегда про сегодня.
+        return MealLogged(meal=fixed.meal, remaining=(await self._stats.daily(user)).remaining)
+
+    async def fix_meal_item(
+        self, user: User, meal_id: int, item_id: int, parsed: ParsedMessage, text: str
+    ) -> MealCorrected | None:
+        """Замена позиции уже разобранным (§6.27, FR-44): тот же `fix_item` для аппки и бота.
+        Остаток — дня приёма. None — позиции или приёма уже нет."""
+        before = await self._meals.get(user, meal_id)
+        old = next((i for i in before.items if i.id == item_id), None) if before else None
+        if before is None or old is None:
+            return None
+        old, ids = copy.copy(old), {i.id for i in before.items}  # репозиторий правит те же объекты
         for it in parsed.items:
             it.clarify_options = None  # человек сам сказал, что это, — не переспрашиваем
         meal = await self._meals.fix_item(user, meal_id, item_id, parsed, raw_input=text)
         if meal is None:
             return None
-        stats = await self._stats.daily(user)
-        return MealLogged(meal=meal, remaining=stats.remaining)
+        new = [i for i in meal.items if i.id not in ids]
+        return MealCorrected("fix", meal, await self._day_left(user, meal.eaten_at), [old], new)
+
+    async def adjust_meal_item(
+        self, user: User, meal_id: int, item_id: int, grams: float
+    ) -> MealCorrected | None:
+        """Вес позиции (FR-44): тот же `adjust_item`, что у «✏️ Вес» и шторки аппки (INV-3)."""
+        meal = await self._meals.get(user, meal_id)
+        old = next((i for i in meal.items if i.id == item_id), None) if meal else None
+        if meal is None or old is None:
+            return None
+        old = copy.copy(old)  # репозиторий правит тот же объект — прежний вес теряется
+        res = await self._meals.adjust_item(user, meal_id, item_id, grams)
+        after = await self._meals.get(user, meal_id) if res else None
+        if res is None or after is None:
+            return None
+        return MealCorrected(
+            "adjust", after, await self._day_left(user, after.eaten_at), [old], [res[0]]
+        )
+
+    async def _day_left(self, user: User, eaten_at: datetime) -> Remaining:
+        """Остаток ДНЯ приёма: карточка вчерашнего приёма показывает бары вчера (как при записи)."""
+        days = self._stats.days_ago(user, eaten_at)
+        return (await self._stats.daily(user, days_ago=days)).remaining
+
+    async def correct_meal(self, user: User, meal_id: int, text: str) -> Result:
+        """FR-44: ответ (reply) на карточку приёма в боте правит ЭТОТ приём. Разбор — тот же, что
+        у записи; дальше тем же use-case, что у аппки: замена (`fix_item`), вес (`adjust_item`),
+        удаление (`remove_item`). Отдаёт:
+        MealCorrected — поправлено; ItemPickNeeded — какую позицию заменить, спросить человека;
+        CorrectionFailed — приёма нет (`meal_gone`), позиции нет (`not_found`), несколько позиций
+        не разложить (`one_at_a_time`), не понял (`unsupported`); MealLogged / уточнение — это
+        была новая еда, записана в день карточки; прочее (вопрос, заготовка) — как у текста."""
+        meal = await self._meals.get(user, meal_id)
+        if meal is None:
+            return CorrectionFailed(target="", reason="meal_gone")
+        parsed = await self._parse(text)
+        if parsed.intent is Intent.MEAL and parsed.items:
+            if _ADDS.match(text):  # «ещё яблоко» — новая еда, а не правка (D-MA-26)
+                offset = -self._stats.days_ago(user, meal.eaten_at)  # в день карточки
+                return await self._handle_meal(
+                    user, parsed, raw_input=text, input_type="text", day_offset=offset
+                )
+            return await self._replace_in(user, meal, parsed, text, None)
+        if parsed.intent is Intent.WEIGHT and not BODY_WEIGHT_RE.search(text):
+            # «200» под карточкой — не вес тела: без «кг»/«вес» замер не пишем (FR-44).
+            return CorrectionFailed(target="", reason="unsupported")
+        if parsed.intent is not Intent.CORRECTION:
+            return await self._route(user, parsed, text)
+        op = parsed.correction_op or "delete"
+        if op == "delete":
+            return await self._delete_in(user, meal, parsed)
+        if op == "adjust":
+            return await self._adjust_in(user, meal, parsed)
+        if op == "replace":
+            return await self._replace_op(user, meal, parsed, text)
+        return CorrectionFailed(target="", reason="unsupported")
+
+    async def _replace_op(
+        self, user: User, meal: Meal, parsed: ParsedMessage, text: str
+    ) -> Result:
+        """«замени X на Y»: X — первая позиция разбора, совпавшая с позицией приёма (модель
+        пишет X, потом Y), остальное — Y: «рис на рисовую лапшу», «курицу на куриную грудку».
+        Y разбираем заново как еду — путём записи, с сэмплами плотности (INV-12): одну оценку
+        correction-промпта (а там вправе быть нули) не пиним никогда (INV-2, INV-11.3)."""
+        x = next((it for it in parsed.items if items_named(meal.items, it.name)), None)
+        news = [it for it in parsed.items if it is not x and it.name.strip()]
+        if not news:
+            return CorrectionFailed(target="", reason="unsupported")
+        phrase = ", ".join(f"{it.name} {it.grams:g} г" if it.grams else it.name for it in news)
+        draft = await self._parse(phrase)
+        if draft.intent is not Intent.MEAL or not draft.items:
+            return CorrectionFailed(target="", reason="unsupported")
+        target = items_named(meal.items, x.name)[0] if x is not None else None
+        return await self._replace_in(user, meal, draft, text, target)
+
+    async def _replace_in(
+        self, user: User, meal: Meal, parsed: ParsedMessage, text: str, target: MealItem | None
+    ) -> Result:
+        """Какую позицию заменить: названа — её; в приёме одна — её; имя единственной разобранной
+        совпало («курица 200 г») — её; иначе спросить (ItemPickNeeded). Несколько разобранных на
+        приём из нескольких — каждой своя позиция по имени, иначе отказ: заменить одну позицию
+        обеими значило бы задвоить еду."""
+        assert meal.id is not None
+        if target is None and len(parsed.items) > 1 and len(meal.items) > 1:
+            return await self._replace_each(user, meal, parsed, text)
+        if target is None and len(meal.items) == 1:
+            target = meal.items[0]
+        if target is None and len(parsed.items) == 1:
+            hits = items_named(meal.items, parsed.items[0].name)
+            target = hits[0] if len(hits) == 1 else None
+        if target is None or target.id is None:
+            return ItemPickNeeded(meal=meal, draft=parsed)
+        fixed = await self.fix_meal_item(user, meal.id, target.id, parsed, text)
+        return fixed or CorrectionFailed(target="", reason="meal_gone")
+
+    async def _replace_each(
+        self, user: User, meal: Meal, parsed: ParsedMessage, text: str
+    ) -> Result:
+        """«гречка 150 и курица 100» на карточку «гречка · курица» — каждую на своём месте."""
+        assert meal.id is not None
+        pairs: list[tuple[ParsedItem, int]] = []
+        for it in parsed.items:
+            used = {i for _, i in pairs}
+            hit = next((m for m in items_named(meal.items, it.name) if m.id not in used), None)
+            if hit is None or hit.id is None:
+                return CorrectionFailed(target="", reason="one_at_a_time")
+            pairs.append((it, hit.id))
+        olds: list[MealItem] = []
+        news: list[MealItem] = []
+        last: MealCorrected | None = None
+        for it, item_id in pairs:
+            one = ParsedMessage(intent=Intent.MEAL, items=[it], confidence=parsed.confidence)
+            res = await self.fix_meal_item(user, meal.id, item_id, one, text)
+            if res is not None:
+                last, olds, news = res, olds + res.old, news + res.new
+        if last is None:
+            return CorrectionFailed(target="", reason="meal_gone")
+        return MealCorrected("fix", last.meal, last.remaining, olds, news)
+
+    async def _delete_in(self, user: User, meal: Meal, parsed: ParsedMessage) -> Result:
+        """«удали гречку» ответом: совпавшие позиции ЭТОГО приёма, по одной на названное имя."""
+        assert meal.id is not None
+        names = [it.name for it in parsed.items if it.name.strip()]
+        targets: list[MealItem] = []
+        for name in names:
+            hit = next((i for i in items_named(meal.items, name) if i not in targets), None)
+            if hit is not None and hit.id is not None:
+                targets.append(hit)
+        if not targets:
+            return CorrectionFailed(target=", ".join(names), reason="not_found")
+        eaten_at = meal.eaten_at  # удалим все позиции — приёма не станет, а день его нужен
+        after: Meal | None = meal
+        for it in targets:
+            assert it.id is not None
+            after = await self._meals.remove_item(user, meal.id, it.id)
+        return MealCorrected("delete", after, await self._day_left(user, eaten_at), targets, [])
+
+    async def _adjust_in(self, user: User, meal: Meal, parsed: ParsedMessage) -> Result:
+        """«гречки было 150» ответом: позиция ЭТОГО приёма по имени. Имя названо и не совпало
+        («курицы было 200» на гречку) — «нет такой», единственную позицию молча не правим; без
+        имени («не 200, а 150») — единственная позиция с весом."""
+        assert meal.id is not None
+        weighable = [i for i in meal.items if i.id is not None and i.grams and i.grams > 0]
+        olds: list[MealItem] = []
+        news: list[MealItem] = []
+        last: MealCorrected | None = None
+        for it in parsed.items:
+            if it.grams is None:
+                continue
+            if it.name.strip():
+                hits = items_named(weighable, it.name)
+            else:
+                hits = weighable if len(weighable) == 1 else []
+            hit = next((h for h in hits if all(o.id != h.id for o in olds)), None)
+            if hit is None or hit.id is None:
+                continue
+            res = await self.adjust_meal_item(user, meal.id, hit.id, it.grams)
+            if res is not None:
+                last = res
+                olds += res.old
+                news += res.new
+        if last is None:
+            names = ", ".join(it.name for it in parsed.items if it.name.strip())
+            return CorrectionFailed(target=names, reason="not_found")
+        return MealCorrected("adjust", last.meal, last.remaining, olds, news)
 
     async def restore_meal(self, user: User, snapshot: Meal) -> MealLogged | None:
         """«Вернуть» (MA-INV-69). Приём ещё есть (убрали позицию) — сперва убираем его нынешний
@@ -931,6 +1125,14 @@ class Assistant:
         item, old_grams = adjusted[-1]
         stats = await self._stats.daily(user)
         return ItemAdjusted(item=item, old_grams=old_grams, remaining=stats.remaining)
+
+
+# FR-44: фраза-еда в ответе на карточку — правка, кроме явной добавки В НАЧАЛЕ («ещё яблоко»; не
+# «йогурт без добавок»). ponytail: слова, а не модель (она карточку не видит); промах — правка
+# станет записью, и бот скажет об этом строкой (D-MA-26).
+_ADDS = re.compile(r"\s*(?:\+|(?:ещё|еще|добавь\w*|плюс)\b)", re.IGNORECASE)  # только в начале
+# Вес тела ответом на карточку — только со словом: «200» под гречкой — не 200 кг (FR-44).
+BODY_WEIGHT_RE = re.compile(r"кг|kg|\bвес", re.IGNORECASE)
 
 
 def _names_from_phrase(parsed: ParsedMessage, text: str) -> None:

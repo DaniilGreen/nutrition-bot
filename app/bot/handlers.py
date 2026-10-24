@@ -39,22 +39,27 @@ from aiogram.types import (
 from openai import RateLimitError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.assistant import Assistant
+from app.application.assistant import BODY_WEIGHT_RE, Assistant
 from app.application.body_scans import BodyScanService, from_reading
 from app.application.coach import LimitReached
 from app.application.dto import Unit
 from app.application.entities import Meal, MealItem, User
+from app.application.meal_service import items_named
 from app.application.ports import UserRepo
 from app.application.results import (
     BodyScanRead,
     ClarificationNeeded,
+    CorrectionFailed,
     DailyStats,
     ItemAdjusted,
+    ItemPickNeeded,
     ItemRemoved,
     LabelRead,
+    MealCorrected,
     MealLogged,
     PlateRead,
     Result,
+    Unknown,
     VariantClarificationNeeded,
     WeightLogged,
     WeightTrend,
@@ -83,6 +88,7 @@ from app.bot.keyboards import (
     DAY_REP_PREFIX,
     DAY_REPEAT_MODE,
     DISH_SAVE_PREFIX,
+    FIX_PICK_PREFIX,
     FREQ_PREFIX,
     FREQ_TOP,
     GOAL_TARGET_PREFIX,
@@ -95,7 +101,9 @@ from app.bot.keyboards import (
     SCAN_PREFIX,
     WIZ_CANCEL,
     activity_keyboard,
+    card_meal_id,
     day_nav_keyboard,
+    fix_pick_keyboard,
     frequent_keyboard,
     goal_target_keyboard,
     goal_type_keyboard,
@@ -704,6 +712,10 @@ async def on_item_grams_input(
     текст идёт обычной записью (AC-128). Голое число < 10 — уточняем кнопками (AC-129). «x2»/«½»
     — множитель текущего веса, «~180»/«180 мл» — граммы (AC-132). Число вне 1…2000 г —
     переспрашиваем: молча зажать 3000 до 2000 значило бы записать не то (AC-124)."""
+    if _replied_meal(message) is not None:  # FR-44: ответ на карточку — правка, а не число
+        await _drop_weight_question(bot, message.chat.id, state)
+        await on_text(message, bot, app_user, assistant, session, state)
+        return
     data = await state.get_data()
     parsed = parse_grams_answer(message.text or "")
     times = parse_times_answer(message.text or "")
@@ -854,6 +866,7 @@ async def on_voice(
     # Не затираем незавершённый черновик голосом; вопрос «✍️ Своё» голос снимает (FR-43).
     if await _busy_with_flow(message, state, supersedes=MealStates.awaiting_item_grams.state):
         return
+    await _drop_fix_question(bot, message.chat.id, state)  # «что заменить» голос снимает (FR-44)
     await state.clear()
     if message.voice is None:
         return
@@ -897,6 +910,7 @@ async def on_photo(
                     MealStates.awaiting_scan.state, MealStates.awaiting_item_grams.state),
     ):
         return
+    await _drop_fix_question(bot, message.chat.id, state)  # «что заменить» фото снимает (FR-44)
     await state.clear()
     if not message.photo:
         return
@@ -1182,8 +1196,15 @@ async def on_text(
     state: FSMContext,
 ) -> None:
     await _clear_intro_keyboard(message, bot, state)  # #7: гасим висящее интро-меню онбординга
+    if await _answer_fix_question(message, app_user, assistant, session, state):
+        return  # «гречка» в ответ на «что заменить» — выбор позиции, без модели (FR-44)
+    await _drop_fix_question(bot, message.chat.id, state)
     await state.clear()
     await _send_typing(message)
+    meal_id = _replied_meal(message)
+    if meal_id is not None:  # FR-44: ответ на карточку приёма — правка ЭТОГО приёма
+        await _reply_fix(message, app_user, assistant, session, state, meal_id)
+        return
     result = await assistant.process(app_user, message.text or "", input_type="text")
     await session.commit()  # фиксируем запись ДО ответа — «✅ записал» не врёт
     await _reply_message(message, result, state, app_user, assistant, raw=message.text or "")
@@ -1852,7 +1873,7 @@ async def _weight_card(
 
 
 async def _rich_edit_at(
-    bot: Bot, chat_id: int, message_id: object, html: str, markup: InlineKeyboardMarkup
+    bot: Bot, chat_id: int, message_id: object, html: str, markup: InlineKeyboardMarkup | None
 ) -> bool:
     """`_rich_edit` по id: ответ на «✍️ Своё» — новое сообщение, а править надо карточку выше."""
     if not isinstance(message_id, int):
@@ -1870,12 +1891,17 @@ async def _rich_edit_at(
     return True
 
 
-async def _say_prompt(bot: Bot, chat_id: int, prompt_id: object, text: str) -> bool:
-    """Переписать вопрос «✍️ Своё» текстом без кнопок. False — не вышло (нет id, >48 ч)."""
+async def _say_prompt(
+    bot: Bot, chat_id: int, prompt_id: object, text: str,
+    markup: InlineKeyboardMarkup | None = None,
+) -> bool:
+    """Переписать вопрос «✍️ Своё» текстом без кнопок (markup — с этими). False — не вышло (нет
+    id, >48 ч)."""
     if not isinstance(prompt_id, int):
         return False
     try:
-        await bot.edit_message_text(text=text, chat_id=chat_id, message_id=prompt_id)
+        extra = {"reply_markup": markup} if markup is not None else {}
+        await bot.edit_message_text(text=text, chat_id=chat_id, message_id=prompt_id, **extra)
     except TelegramBadRequest:
         return False
     return True
@@ -2185,6 +2211,312 @@ async def _ask_grams(
     )
     if asked is not False:
         await callback.answer()
+
+
+# --- «Поправить словами» ответом на карточку (FR-44, D-MA-26) ------------------------
+
+_FIX_HINT = "Ответь на карточку: «это был булгур», «гречки было 150» или «удали гречку»."
+_FIX_STALE = "Запись уже поменялась — ответь на карточку заново."
+_NEW_MEAL = "➕ Это новая еда, а не правка — записал отдельно."
+_NO_WEIGHT = "В этой записи нет позиции с весом — граммы не поправить."
+_AMOUNT_RE = re.compile(r"\d|\b(?:г|гр|грамм\w*|кг|мл|л|шт)\b", re.IGNORECASE)
+
+
+def _replied_meal(message: Message) -> int | None:
+    """Id приёма карточки, на которую ответили: из callback_data её кнопок (D-MA-26). Хранить
+    message_id → meal_id не нужно — связь уже лежит в самом сообщении и переживает рестарт.
+    Чей приём — сверяет `get_meal` по пользователю, чужой id в кнопке ничего не даёт."""
+    reply = message.reply_to_message
+    return card_meal_id(reply.reply_markup) if reply is not None else None
+
+
+def _fix_trace(r: MealCorrected) -> str:
+    """След правки (без HTML): «✏️ Поправил: гречка → булгур 150 г · приём теперь 420 ккал»."""
+    def named(i: MealItem) -> str:
+        return f"{i.name_snapshot} {_g(i.grams)} г" if i.grams else i.name_snapshot
+
+    if r.kind == "adjust":
+        head = "; ".join(
+            f"✏️ {o.name_snapshot}: было {_g(o.grams)} г, стало {_g(n.grams)} г"
+            for o, n in zip(r.old, r.new, strict=False)
+        )
+    elif r.kind == "delete":
+        head = "🗑 Убрал: " + ", ".join(i.name_snapshot for i in r.old)
+    elif len(r.old) == len(r.new) > 1:  # каждая позиция на своём месте
+        head = "✏️ Поправил: " + "; ".join(
+            f"{o.name_snapshot} → {named(n)}" for o, n in zip(r.old, r.new, strict=True)
+        )
+    else:
+        head = f"✏️ Поправил: {r.old[0].name_snapshot} → {', '.join(named(i) for i in r.new)}"
+    tail = f"приём теперь {round(r.meal.totals.kcal)} ккал" if r.meal else "запись отменена"
+    return f"{head} · {tail}"
+
+
+def _fix_refusal(r: CorrectionFailed | Unknown) -> str:
+    if isinstance(r, CorrectionFailed) and r.reason == "meal_gone":
+        return "Этой записи уже нет — поправлять нечего."
+    if isinstance(r, CorrectionFailed) and r.reason == "one_at_a_time":
+        return "Поправь по одной позиции за раз."
+    if isinstance(r, CorrectionFailed) and r.reason == "not_found" and r.target:
+        return f"В этой записи нет «{escape(r.target, quote=False)}». {_FIX_HINT}"
+    return f"Не понял, что поправить. {_FIX_HINT}"
+
+
+async def _show_fix(
+    message: Message, user: User, assistant: Assistant, card_id: object, prompt_id: object,
+    result: MealCorrected, snapshot: Meal | None = None,
+) -> None:
+    """Карточка, на которую ответили, — на месте «✏️ Поправил» (MA-INV-70), следом строка-след:
+    правка старого сообщения беззвучна. Вопрос «что заменить» (prompt_id) сам становится следом.
+    Карточку не приняли (>48 ч) — кнопки карточки едут со следом; нового «✅ Записал» нет.
+    snapshot — приём до замены/удаления: «⏪ Вернуть», как у 🗑 (FR-41); у веса его нет (FR-43)."""
+    bot = message.bot
+    assert bot is not None
+    restore = None
+    if snapshot is not None and result.kind in ("fix", "delete"):  # фиксация уже была
+        what = ", ".join(i.name_snapshot for i in result.old)
+        restore = restore_button(_remember(user, snapshot, result.meal, what), "c", what)
+    if result.meal is None:
+        html = "<h3>🗑 Запись отменена</h3><p>Позиций не осталось.</p>"
+        markup = InlineKeyboardMarkup(inline_keyboard=[[restore]] if restore else [])
+    else:
+        ctx = await gather(assistant, user)
+        logged = MealLogged(meal=result.meal, remaining=result.remaining)
+        html = screens.meal_card(ctx, logged, edited=True)
+        markup = meal_actions_keyboard(result.meal, restore)
+    keep = None if await _rich_edit_at(bot, message.chat.id, card_id, html, markup) else markup
+    trace = escape(_fix_trace(result), quote=False)
+    if not await _say_prompt(bot, message.chat.id, prompt_id, trace, keep):
+        await message.answer(trace, reply_markup=keep)
+
+
+def _weight_target(item: MealItem, weight: dict) -> float:
+    """Граммы из ответа-числа: «200»/«0,2 кг» — как есть, «x2»/«½» — от текущего веса, как
+    пресеты «✏️ Вес» (половина вверх, FR-43)."""
+    if weight.get("times"):
+        return float(half_up(half_up(item.grams) * weight["times"]))
+    return float(weight["grams"])
+
+
+async def _reply_weight(
+    message: Message, user: User, assistant: Assistant, session: AsyncSession,
+    state: FSMContext, meal_id: int, weight: dict,
+) -> None:
+    """«200», «150 г», «x2» ответом на карточку — вес позиции без модели: тот же разбор числа, что
+    у «✍️ Своё» (FR-43), и тот же `adjust_item`. Позиций с весом несколько — кнопки позиций."""
+    reply = message.reply_to_message
+    assert reply is not None
+    meal = await assistant.get_meal(user, meal_id)
+    if meal is None:
+        await message.answer("Этой записи уже нет — поправлять нечего.")
+        return
+    items = weighable(meal)
+    if not items:
+        await message.answer(_NO_WEIGHT)
+        return
+    if weight.get("grams") is not None and not weight["unit"] and weight["grams"] < _SMALL_MAX:
+        said = escape((message.text or "").strip(), quote=False)
+        await message.answer(  # «2» — скорее «две порции», чем 2 г (AC-129)
+            f"«{said}» — это граммы или порции? Пришли с единицей: «{said} г» или «x{said}»."
+        )
+        return
+    if len(items) > 1:
+        label = escape((message.text or "").strip(), quote=False)
+        asked = await message.answer(
+            f"✏️ Чей вес «{label}»? Выбери позицию.", reply_markup=fix_pick_keyboard(meal, items)
+        )
+        await state.update_data(
+            rf_meal=meal_id, rf_card=reply.message_id, rf_prompt=asked.message_id,
+            rf_weight=weight,
+        )
+        return
+    grams = _weight_target(items[0], weight)
+    if not MIN_PORTION_G <= grams <= MAX_PORTION_G:
+        await message.answer(_GRAMS_BOUNDS)
+        return
+    assert items[0].id is not None
+    result = await assistant.adjust_meal_item(user, meal_id, items[0].id, grams)
+    if result is None:
+        await message.answer(_WEIGHT_GONE)
+        return
+    await session.commit()  # фиксируем ДО ответа — «Поправил» не врёт
+    await _show_fix(message, user, assistant, reply.message_id, None, result)
+
+
+async def _reply_fix(
+    message: Message, user: User, assistant: Assistant, session: AsyncSession,
+    state: FSMContext, meal_id: int,
+) -> None:
+    """FR-44: ответ на карточку → `correct_meal` (один разбор, тот же use-case, что у аппки)."""
+    text = message.text or ""
+    reply = message.reply_to_message
+    assert reply is not None
+    grams, times = parse_grams_answer(text), parse_times_answer(text)
+    # Голое число — вес позиции, модель не нужна. «72,5 кг», «вес 72» — вес тела, не 72 500 г.
+    if (grams is not None or times is not None) and not BODY_WEIGHT_RE.search(text):
+        weight = {"grams": grams[0], "unit": grams[1]} if grams else {"times": times}
+        await _reply_weight(message, user, assistant, session, state, meal_id, weight)
+        return
+    before = await assistant.get_meal(user, meal_id)
+    snapshot = copy.deepcopy(before) if before is not None else None  # для «⏪ Вернуть»
+    result = await assistant.correct_meal(user, meal_id, text)
+    await session.commit()  # фиксируем ДО ответа — «Поправил» не врёт
+    if isinstance(result, MealCorrected):
+        await _show_fix(message, user, assistant, reply.message_id, None, result, snapshot)
+    elif isinstance(result, ItemPickNeeded):
+        what = ", ".join(i.name for i in result.draft.items if i.name.strip()) or text
+        asked = await message.answer(
+            f"✏️ Что заменить на «{escape(what, quote=False)}»?",
+            reply_markup=fix_pick_keyboard(result.meal, result.meal.items),
+        )
+        await state.update_data(
+            rf_meal=result.meal.id, rf_card=reply.message_id, rf_prompt=asked.message_id,
+            rf_draft=result.draft, rf_text=text,
+        )
+    elif isinstance(result, CorrectionFailed) or (isinstance(result, Unknown) and not result.say):
+        await message.answer(_fix_refusal(result))
+    else:  # новая еда («ещё яблоко») — обычной записью, со строкой; вопрос, заготовка — как текст
+        if isinstance(result, MealLogged | ClarificationNeeded | VariantClarificationNeeded):
+            await message.answer(_NEW_MEAL)
+        await _reply_message(message, result, state, user, assistant, raw=text)
+        await _maybe_weight_chart(message, user, assistant, result)
+
+
+async def _forget_fix(state: FSMContext) -> None:
+    data = await state.get_data()
+    await state.set_data({k: v for k, v in data.items() if not k.startswith("rf_")})
+
+
+async def _drop_fix_question(bot: Bot | None, chat_id: int, state: FSMContext) -> None:
+    """Новый текст, голос, фото снимают висящий «что заменить» — не сирота с живыми кнопками."""
+    prompt = (await state.get_data()).get("rf_prompt")
+    if prompt is None:
+        return
+    await _forget_fix(state)
+    if bot is not None:
+        await _say_prompt(bot, chat_id, prompt, "✏️ Вопрос снят.")
+
+
+async def _pick_write(
+    user: User, assistant: Assistant, data: dict, item_id: int
+) -> tuple[MealCorrected, Meal | None] | str:
+    """Выбранная позиция висящего вопроса: замена разбором из ответа (модель второй раз не
+    зовём) или вес из ответа-числа. Текст — отказ; позиции/приёма нет — `_FIX_STALE`."""
+    meal_id = int(data.get("rf_meal") or 0)
+    before = await assistant.get_meal(user, meal_id)
+    weight = data.get("rf_weight")
+    if weight:
+        item = next((i for i in weighable(before) if i.id == item_id), None) if before else None
+        if item is None:
+            return _FIX_STALE
+        grams = _weight_target(item, weight)
+        if not MIN_PORTION_G <= grams <= MAX_PORTION_G:
+            return _GRAMS_BOUNDS
+        res = await assistant.adjust_meal_item(user, meal_id, item_id, grams)
+        return (res, None) if res else _FIX_STALE
+    snapshot = copy.deepcopy(before) if before else None
+    # Копия разбора: упавшая запись не должна оставить его поправленным под старый вес.
+    draft = copy.deepcopy(data.get("rf_draft"))
+    if before is None or draft is None:
+        return _FIX_STALE
+    fixed = await assistant.fix_meal_item(
+        user, meal_id, item_id, draft, str(data.get("rf_text") or "")
+    )
+    return (fixed, snapshot) if fixed else _FIX_STALE
+
+
+async def _answer_fix_question(
+    message: Message, user: User, assistant: Assistant, session: AsyncSession,
+    state: FSMContext,
+) -> bool:
+    """Ответ на висящий «что заменить» — ответом на сам вопрос или голым именем («гречка», без
+    чисел и единиц): позиция по имени (`items_named`), без модели. Иначе или не совпало ровно с
+    одной — False: вопрос снимается, текст идёт обычным путём."""
+    data = await state.get_data()
+    if data.get("rf_prompt") is None:
+        return False
+    reply = message.reply_to_message
+    to_question = reply is not None and reply.message_id == data.get("rf_prompt")
+    # Выбор — ответ на сам вопрос или голое имя. «гречка 200 г» — обычная запись: съесть её
+    # выбором значило бы молча заменить гречку черновиком (ревью FR-44).
+    if not to_question and (reply is not None or _AMOUNT_RE.search(message.text or "")):
+        return False
+    meal = await assistant.get_meal(user, int(data.get("rf_meal") or 0))
+    pool = (weighable(meal) if data.get("rf_weight") else meal.items) if meal else []
+    hits = items_named(pool, message.text or "")
+    if len(hits) != 1 or hits[0].id is None:
+        return False
+    done = await _pick_write(user, assistant, data, hits[0].id)
+    if isinstance(done, str):
+        await message.answer(done)
+        if done == _FIX_STALE:
+            await _drop_fix_question(message.bot, message.chat.id, state)
+        return True
+    await session.commit()
+    await _forget_fix(state)
+    await _show_fix(message, user, assistant, data.get("rf_card"), data.get("rf_prompt"), *done)
+    return True
+
+
+@router.callback_query(F.data.startswith(f"{FIX_PICK_PREFIX}:"))
+async def on_fix_pick(
+    callback: CallbackQuery, app_user: User, assistant: Assistant, session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    """FR-44: позиция для замены — rf:<meal>:<item>; rf:<meal>:x — отмена. Только висящий вопрос."""
+    parts = (callback.data or "").split(":")
+    message = callback.message
+    try:
+        meal_id = int(parts[1])
+    except (IndexError, ValueError):
+        meal_id = None
+    if meal_id is None or len(parts) != 3 or not isinstance(message, Message):
+        await callback.answer("Кнопка устарела.")
+        return
+    assert message.bot is not None and app_user.id is not None
+    data = await state.get_data()
+    if data.get("rf_prompt") != message.message_id or data.get("rf_meal") != meal_id:
+        await callback.answer("Этот вопрос уже снят.")
+        with suppress(TelegramBadRequest):
+            await message.edit_reply_markup(reply_markup=None)
+        return
+    if parts[2] == "x":
+        await _forget_fix(state)
+        await _say_prompt(message.bot, message.chat.id, message.message_id, "✏️ Ок, не правлю.")
+        await callback.answer("Ок, отменил")
+        return
+    try:
+        item_id = int(parts[2])
+    except ValueError:
+        await callback.answer("Кнопка устарела.")
+        return
+    refusal = ""
+
+    async def write() -> tuple[MealCorrected, Meal | None] | None:
+        nonlocal refusal
+        done = await _pick_write(app_user, assistant, data, item_id)
+        if isinstance(done, str):
+            refusal = done
+            return None
+        return done
+
+    result = await _write_once(
+        callback, session, app_user.id, write, busy="Уже правлю…", done="Уже поправил."
+    )
+    if result is False:
+        return
+    # Окно двойного тапа держит сам вопрос (снят — «уже снят»); ключ `rf:<meal>:<item>` не должен
+    # мешать следующему вопросу про ту же позицию.
+    _taps.pop((app_user.id, callback.data or ""), None)
+    if result is None:
+        await callback.answer(refusal[:200])
+        if refusal == _FIX_STALE:
+            await _forget_fix(state)
+            await _say_prompt(message.bot, message.chat.id, message.message_id, f"✏️ {refusal}")
+        return
+    await _forget_fix(state)
+    await callback.answer(_fix_trace(result[0])[:200])
+    await _show_fix(message, app_user, assistant, data.get("rf_card"), message.message_id, *result)
 
 
 @router.callback_query(F.data.startswith("prod_fix:"))

@@ -34,6 +34,7 @@ SCAN_PREFIX = "scan"  # карточка бланка InBody: scan:save / scan:c
 WIZ_CANCEL = "wiz_cancel"  # «✖️ Отмена» в любом визарде (профиль/вариант) — сброс FSM
 RESTORE_PREFIX = "rst"  # «⏪ Вернуть» после удаления: rst:<токен>:<c|p|d<ГГГГММДД>> (FR-41)
 ITEM_WEIGHT_PREFIX = "iw"  # «✏️ Вес»: iw:<meal>[:<item>[:<граммы>|:own]] · iw:<meal>:back (FR-43)
+FIX_PICK_PREFIX = "rf"  # FR-44: что заменить ответом на карточку: rf:<meal>:<item> · rf:<meal>:x
 FREQ_PREFIX = "fq"  # «⚡ Частое»: fq:p:<product_id>:<граммы> / fq:s:<хэш имени набора> (FR-40)
 # FR-40: потолки раздельные — наборы не вытесняют продукты. Аппка показывает ВСЕ наборы и топ-10
 # частого; бот берёт тот же топ-10 и только закреплённое из него, не глубже.
@@ -370,6 +371,45 @@ def item_weight_keyboard(meal: Meal, item: MealItem) -> InlineKeyboardMarkup:
     )
     builder.adjust(*([2] * ((len(presets) + 2) // 2)), 1)
     return builder.as_markup()
+
+
+def fix_pick_keyboard(meal: Meal, items: Sequence[MealItem]) -> InlineKeyboardMarkup:
+    """FR-44: какую позицию заменить фразой из ответа (или чей это вес) — по строке на позицию и
+    `✖️ Отмена`."""
+    builder = InlineKeyboardBuilder()
+    for it in items:
+        if it.id is None:
+            continue
+        size = f"{half_up(it.grams)} г" if it.grams else f"{half_up(it.macros.kcal)} ккал"
+        builder.button(
+            text=f"{_short(it.name_snapshot, 24)} · {size}",
+            callback_data=f"{FIX_PICK_PREFIX}:{meal.id}:{it.id}",
+        )
+    builder.button(text="✖️ Отмена", callback_data=f"{FIX_PICK_PREFIX}:{meal.id}:x")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def card_meal_id(markup: object) -> int | None:
+    """FR-44: id приёма, если это клавиатура карточки приёма: `meal_repeat:<id>` или навигация
+    `✏️ Вес` (`iw:<id>`, `iw:<id>:back`). Пикер, день, вопрос «✍️ Своё» (`iw:<m>:<i>:x`) — не
+    карточка: там id нет, их несколько или это вопрос. Id ровно один — иначе None (D-MA-26)."""
+    if not isinstance(markup, InlineKeyboardMarkup):
+        return None
+    ids: set[str] = set()
+    for row in markup.inline_keyboard:
+        for b in row:
+            head, *rest = (b.callback_data or "").split(":")
+            if (head == MEAL_REPEAT_PREFIX and len(rest) == 1) or (
+                head == ITEM_WEIGHT_PREFIX and rest[1:] in ([], ["back"]) and rest
+            ):
+                ids.add(rest[0])
+    if len(ids) != 1:
+        return None
+    try:  # int(), а не isdigit(): тот пропустил бы «²»
+        return int(ids.pop())
+    except ValueError:
+        return None
 
 
 def undo_picker_keyboard(
