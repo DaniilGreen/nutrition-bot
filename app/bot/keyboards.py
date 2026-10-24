@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Sequence
+from datetime import date
 from zoneinfo import ZoneInfo
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
@@ -15,6 +16,8 @@ VARIANT_CALLBACK_PREFIX = "variant"
 LABEL_G_PREFIX = "label_g"  # пресет веса (порция/пачка) после фото этикетки (FR-27)
 DAY_NAV_PREFIX = "day_nav"  # навигация по дням в просмотре истории (вар. A)
 DAY_DEL_PREFIX = "day_del"  # удалить позицию прямо с экрана «День»/«История» (день:meal:item)
+DAY_REP_PREFIX = "day_rep"  # с прошлого дня в сегодня: day_rep:d<ГГГГММДД>:<meal>[:<item>] (FR-42)
+DAY_REPEAT_MODE = "r"  # day_nav:<дней назад>:r — тот же день в режиме повтора (FR-42)
 GOAL_TARGET_PREFIX = "goal_tgt"  # сменить цель (cut/maintain/bulk) с экрана 🎯 Цель, без визарда
 MEAL_UNDO_PREFIX = "meal_undo"
 UNDO_ITEM_PREFIX = "undo_item"
@@ -27,7 +30,7 @@ ONBOARD_PREFIX = "onb"
 PHOTO_PREFIX = "ph"  # карточка фото блюда: ph:fat:<id> / ph:dr:<id> / ph:ok (FR-34)
 SCAN_PREFIX = "scan"  # карточка бланка InBody: scan:save / scan:confirm / scan:apply (FR-36)
 WIZ_CANCEL = "wiz_cancel"  # «✖️ Отмена» в любом визарде (профиль/вариант) — сброс FSM
-RESTORE_PREFIX = "rst"  # «⏪ Вернуть» после удаления: rst:<токен>:<c|p|d<дней назад>> (FR-41)
+RESTORE_PREFIX = "rst"  # «⏪ Вернуть» после удаления: rst:<токен>:<c|p|d<ГГГГММДД>> (FR-41)
 FREQ_PREFIX = "fq"  # «⚡ Частое»: fq:p:<product_id>:<граммы> / fq:s:<хэш имени набора> (FR-40)
 # FR-40: потолки раздельные — наборы не вытесняют продукты. Аппка показывает ВСЕ наборы и топ-10
 # частого; бот берёт тот же топ-10 и только закреплённое из него, не глубже.
@@ -114,7 +117,8 @@ def prod_edit_keyboard(product_id: int) -> InlineKeyboardMarkup:
 
 def restore_button(token: str, where: str, what: str) -> InlineKeyboardButton:
     """FR-41: «⏪ Вернуть: <что>» — что именно вернётся, видно до тапа (тост с именем уже исчез).
-    where — куда перерисовать после возврата: c карточка, p пикер, d<дней назад> день."""
+    where — куда перерисовать после возврата: c карточка, p пикер, d<ГГГГММДД> день — датой, а не
+    «дней назад»: после полуночи перерисуется тот же день, уже как «вчера»."""
     return InlineKeyboardButton(
         text=f"⏪ Вернуть: {_short(what, 24)}", callback_data=f"{RESTORE_PREFIX}:{token}:{where}"
     )
@@ -122,33 +126,63 @@ def restore_button(token: str, where: str, what: str) -> InlineKeyboardButton:
 
 def day_nav_keyboard(
     days_ago: int, meals: Sequence[Meal] = (), tz_name: str = "UTC",
-    restore: InlineKeyboardButton | None = None,
+    restore: InlineKeyboardButton | None = None, repeat: bool = False, day: date | None = None,
 ) -> InlineKeyboardMarkup:
-    """Навигация по дням (← пред всегда, → след если не сегодня) + удаление приёмов этого дня.
+    """Навигация по дням (← пред всегда, → след если не сегодня) + строки позиций этого дня.
 
-    Кнопка 🗑 на каждый приём — чтобы удалять любой прошлый приём рядом с текстом дня (в сам текст
-    кнопку Telegram не встроить, поэтому клавиатурой под сообщением). days_ago в callback — чтобы
-    после удаления перерисовать ТОТ ЖЕ день.
+    Кнопка на каждую позицию — чтобы править прошлое рядом с текстом дня (в сам текст кнопку
+    Telegram не встроить, поэтому клавиатурой под сообщением). Строки — 🗑 (удалить) или, в режиме
+    повтора прошлого дня, 🔁 (записать в сегодня, FR-42): режим разводит две противоположные кнопки
+    по разным экранам, промах по соседней строке не пишет в чужой день (D-MA-24). Режим — только с
+    датой дня `day`: 🔁 несёт её, а не «дней назад», чтобы после полуночи перерисовать ТОТ день.
+    «⏪ Вернуть» (FR-41) — только в режиме 🗑: она про удаление.
     """
+    repeat = repeat and days_ago > 0 and day is not None  # сегодня повтор задвоил бы
+    mode = f":{DAY_REPEAT_MODE}" if repeat else ""
     builder = InlineKeyboardBuilder()
+    restore = None if repeat else restore
     if restore is not None:  # FR-41: только что удалённое — первым рядом, над навигацией
         builder.add(restore)
-    builder.button(text="← пред. день", callback_data=f"{DAY_NAV_PREFIX}:{days_ago + 1}")
+    builder.button(text="← пред. день", callback_data=f"{DAY_NAV_PREFIX}:{days_ago + 1}{mode}")
     if days_ago > 0:
-        builder.button(text="след. день →", callback_data=f"{DAY_NAV_PREFIX}:{days_ago - 1}")
+        builder.button(text="след. день →", callback_data=f"{DAY_NAV_PREFIX}:{days_ago - 1}{mode}")
     tz = ZoneInfo(tz_name)
-    # 🗑 на КАЖДУЮ позицию (а не на запись): владелец логирует по одному продукту, и даже сдвоенную
-    # запись (картофель+фарш из одного голосового) надо чистить по позиции. Время в подписи —
-    # чтобы различать одинаковые продукты в разное время (молоко 09:11 vs молоко 13:37).
-    items = [(m, it) for m in meals if m.id is not None for it in m.items if it.id is not None]
-    for meal, it in items:
-        when = meal.eaten_at.astimezone(tz).strftime("%H:%M")
+    real = [m for m in meals if m.id is not None]
+    rows: list[int] = []
+    if days_ago > 0 and day is not None and real:  # переключатель — только на прошлом дне
+        flip = "" if repeat else f":{DAY_REPEAT_MODE}"  # «Готово» — назад к 🗑
         builder.button(
-            text=f"🗑 {when} · {_short(it.name_snapshot, 24)}",
-            callback_data=f"{DAY_DEL_PREFIX}:{days_ago}:{meal.id}:{it.id}",
+            text="✅ Готово" if repeat else "🔁 Повторить в сегодня…",
+            callback_data=f"{DAY_NAV_PREFIX}:{days_ago}{flip}",
         )
-    nav = 2 if days_ago > 0 else 1  # ряд навигации, дальше каждое удаление на своей строке
-    builder.adjust(*([1] if restore else []), nav, *([1] * len(items)))
+        rows.append(1)
+    for meal in real:
+        when = meal.eaten_at.astimezone(tz).strftime("%H:%M")
+        items = [it for it in meal.items if it.id is not None]
+        whole = repeat and len(items) > 1
+        if whole:  # приём целиком — как «Повторить приём сегодня» аппки; позиции под ним — «↳»
+            builder.button(
+                text=f"🔁 {when} · весь приём · {round(meal.totals.kcal)} ккал",
+                callback_data=f"{DAY_REP_PREFIX}:d{day:%Y%m%d}:{meal.id}",
+            )
+            rows.append(1)
+        for it in items:
+            if repeat:
+                # Число — то, что запишется: граммы снапшота (без веса — ккал), режется имя.
+                tail = f"{round(it.grams)} г" if it.grams else f"{round(it.macros.kcal)} ккал"
+                head = "↳ 🔁" if whole else f"🔁 {when} ·"
+                text = f"{head} {_short(it.name_snapshot, 24)} · {tail}"
+                data = f"{DAY_REP_PREFIX}:d{day:%Y%m%d}:{meal.id}:{it.id}"
+            else:
+                # 🗑 на КАЖДУЮ позицию (а не на запись): владелец логирует по одному продукту, и
+                # даже сдвоенную запись (картофель+фарш из одного голосового) чистят по позиции.
+                # Время в подписи — различать одинаковые продукты (молоко 09:11 vs молоко 13:37).
+                text = f"🗑 {when} · {_short(it.name_snapshot, 24)}"
+                data = f"{DAY_DEL_PREFIX}:{days_ago}:{meal.id}:{it.id}"
+            builder.button(text=text, callback_data=data)
+            rows.append(1)
+    nav = 2 if days_ago > 0 else 1  # ряд навигации, дальше каждая строка на своём ряду
+    builder.adjust(*([1] if restore else []), nav, *rows)
     return builder.as_markup()
 
 

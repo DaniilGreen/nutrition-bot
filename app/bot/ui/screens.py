@@ -283,7 +283,7 @@ def products(items: list[Product], query: str | None = None) -> str:
 # ---------- экраны произвольного дня и разбора ввода ----------
 
 
-def day(dv: DayView, rem: Remaining) -> str:
+def day(dv: DayView, rem: Remaining, repeat: bool = False, note: str = "") -> str:
     """Один день истории (стрелки ← →). НЕ сегодня-центричный: без якоря и советов — это прошлое.
 
     ПЛОСКИЙ список: строка на КАЖДУЮ позицию с её временем «время · продукт — ккал». Заголовка-
@@ -300,7 +300,14 @@ def day(dv: DayView, rem: Remaining) -> str:
         for m in dv.meals
         for it in m.items
     )
-    return f"<h3>🗒 {title}</h3><ul>{lines}</ul><hr/>" + _bars(rem.consumed, rem.goal)
+    # FR-42: в режиме повтора — куда пишет 🔁, прямо над кнопками (заголовок дня — «вчера», и без
+    # этой строки повтор читался бы как запись во вчера, урок аппки 13.10.2026). После повтора та
+    # же строка говорит, что записано: всплывашка гаснет, а след должен остаться.
+    hint = ""
+    if repeat and dv.days_ago > 0:
+        hint = note or "🔁 Тап по строке — запишу в сегодня тем же весом. Этот день не меняется."
+        hint = f"<p>{e(hint)}</p>"
+    return f"<h3>🗒 {title}</h3><ul>{lines}</ul><hr/>" + _bars(rem.consumed, rem.goal) + hint
 
 
 def meal_deleted(meal: Meal, tz_name: str) -> str:

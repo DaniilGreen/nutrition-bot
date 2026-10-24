@@ -50,9 +50,9 @@ class _NoLlm:
 
 @pytest.fixture(autouse=True)
 def _fresh_taps():
-    handlers._freq_taps.clear()
+    handlers._taps.clear()
     yield
-    handlers._freq_taps.clear()
+    handlers._taps.clear()
 
 
 async def _world():
@@ -272,7 +272,7 @@ async def test_двойной_тап_пишет_один_раз_и_говори�
     await handlers.on_frequent_tap(second, user, assistant, AsyncMock())
     assert len(meals._meals) == 1
     assert "Уже записал" in _sent(second)[0]
-    clock[0] += handlers.FREQ_TAP_WINDOW_S + 1  # позже окна — это вторая порция, она законна
+    clock[0] += handlers.TAP_WINDOW_S + 1  # позже окна — это вторая порция, она законна
     await handlers.on_frequent_tap(_callback(data), user, assistant, AsyncMock())
     assert len(meals._meals) == 2
 

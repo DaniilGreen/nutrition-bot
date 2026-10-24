@@ -259,6 +259,16 @@ class MealService:
         src = await self._meals.get(user_id, meal_id)
         if src is None:
             return None
+        # FR-39.2: имя едет с повтором — шаблон жив, пока блюдо едят, даже если исходный приём
+        # удалили. Но только с повтором САМОГО набора (самого свежего приёма с этим именем): повтор
+        # старой версии («понедельник, 200 г» из истории) иначе стал бы свежим и молча откатил бы
+        # набор на старые граммы (FR-42, AC-117). И только одной порцией: «×2» с именем сделал бы
+        # набором двойную порцию — дальше «⚡ Частое» и повтор словами писали бы вдвое (AC-119).
+        template = src.template_name if times == 1 else None
+        if template:
+            latest = await self._meals.latest_by_template(user_id, template)
+            if latest is None or latest.id != src.id:
+                template = None
         return await self._meals.add(
             Meal(
                 user_id=user_id,
@@ -276,9 +286,7 @@ class MealService:
                     for it in src.items
                 ],
                 source_confidence=src.source_confidence,
-                # FR-39.2: имя едет с повтором — шаблон жив, пока блюдо едят, даже если
-                # исходный приём удалили.
-                template_name=src.template_name,
+                template_name=template,
                 totals=_times(src.totals, times),
                 estimated=src.estimated,
             )

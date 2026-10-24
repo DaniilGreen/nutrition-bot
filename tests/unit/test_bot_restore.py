@@ -510,3 +510,79 @@ async def test_чужой_и_пропавший_снимок(edits):
     handlers._trash.clear()  # рестарт бота
     cb = await _restore(data, w)
     assert _answers(cb)[0] == "Вернуть уже нельзя." and w.meals._meals == []
+
+
+async def test_двойной_тап_по_корзине_со_старой_клавиатурой_кнопку_не_стирает(edits):
+    """AC-115: второй тап несёт клавиатуру ДО первого (без ⏪) и перерисовывает последним —
+    «⏪ Вернуть» берётся из живого снимка, а не со старой клавиатуры."""
+    w = await _world()
+    src = await w.meals.add(_wrap(w.user.id, hours_ago=0))
+    old = [[InlineKeyboardButton(text="🔁", callback_data="x")]]
+    card = InlineKeyboardMarkup(inline_keyboard=old)
+    data = f"item_del:{src.id}:{src.items[1].id}"
+    await _do(handlers.on_item_del, data, w, markup=card)
+    back = _back(edits.rich.await_args.args[2])
+    again = await _do(handlers.on_item_del, data, w, markup=card)  # старая клавиатура, без ⏪
+    assert _answers(again) == ["Уже убрано."]
+    assert _back(edits.rich.await_args.args[2]).callback_data == back.callback_data
+
+    day = f"day_del:0:{src.id}:{src.items[0].id}"
+    await _do(handlers.on_day_del, day, w)
+    back = _back(edits.rich.await_args.args[2])
+    await _do(handlers.on_day_del, day, w, markup=None)
+    assert _back(edits.rich.await_args.args[2]).callback_data == back.callback_data
+
+
+async def test_живой_снимок_не_про_этот_приём_или_истёк_кнопки_нет(edits, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(handlers, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    w = await _world()
+    src = await w.meals.add(_wrap(w.user.id))
+    await _do(handlers.on_item_del, f"item_del:{src.id}:{src.items[1].id}", w)
+    assert handlers._live_restore(w.user, src.id + 1, "c") is None  # снимок про другой приём
+    assert handlers._live_restore(w.user, src.id, "c") is not None
+    clock[0] += handlers.UNDO_TTL_S + 1
+    assert handlers._live_restore(w.user, src.id, "c") is None
+
+
+async def test_сохранили_набор_после_корзины_вернуть_нельзя(edits):
+    """AC-116: 🗑 позиция → «📌 Сохранить набор» на обрезанной карточке → «⏪ Вернуть»: снимок
+    молча стёр бы имя набора — отказ, имя цело."""
+    w = await _world()
+    meal = _wrap(w.user.id, name=None)
+    meal.items.append(MealItem(name_snapshot="огурец", grams=60, macros=Macros(9, 0.5, 0.1, 1.8)))
+    src = await w.meals.add(meal)
+    await _do(handlers.on_item_del, f"item_del:{src.id}:{src.items[2].id}", w)
+    kb = edits.rich.await_args.args[2]
+    assert await w.assistant.remember_dish(w.user, src.id, SET) is not None
+    cb = await _restore(_back(kb).callback_data, w, markup=kb)
+    assert _answers(cb)[0] == "Приём уже поправили — вернуть нельзя."
+    [now] = w.meals._meals
+    assert now.template_name == SET and len(now.items) == 2
+
+
+async def test_параллельный_двойной_тап_по_корзине_уже_убираю_и_токен_первого(edits, monkeypatch):
+    """Второй тап, пока первый ещё убирает, не читает приём до удаления и не кладёт свой снимок
+    поверх: «Уже убираю…», один снимок, кнопка первого рабочая."""
+    w = await _world()
+    src = await w.meals.add(_wrap(w.user.id))
+    before = _shape(src)
+    real = w.assistant.remove_item
+
+    async def slow(*a, **kw):
+        await asyncio.sleep(0.01)  # первый тап отдаёт управление посреди удаления
+        return await real(*a, **kw)
+
+    monkeypatch.setattr(w.assistant, "remove_item", slow)
+    data = f"item_del:{src.id}:{src.items[1].id}"
+    first, second = _callback(data), _callback(data)
+    await asyncio.gather(
+        handlers.on_item_del(first, w.user, w.assistant, AsyncMock()),
+        handlers.on_item_del(second, w.user, w.assistant, AsyncMock()),
+    )
+    assert _answers(second) == ["Уже убираю…"]
+    back = _back(edits.rich.await_args.args[2])
+    assert handlers._trash[w.user.id].token == back.callback_data.split(":")[1]
+    assert handlers._removing == set()  # ключ отпущен
+    await _restore(back.callback_data, w)
+    assert _shape(w.meals._meals[0]) == before

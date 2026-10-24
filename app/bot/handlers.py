@@ -13,10 +13,12 @@ import logging
 import re
 import secrets
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from html import escape
+from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot, F, Router
@@ -77,6 +79,8 @@ from app.bot.keyboards import (
     BTN_WEIGHT,
     DAY_DEL_PREFIX,
     DAY_NAV_PREFIX,
+    DAY_REP_PREFIX,
+    DAY_REPEAT_MODE,
     DISH_SAVE_PREFIX,
     FREQ_PREFIX,
     FREQ_TOP,
@@ -1238,15 +1242,16 @@ async def on_meal_repeat(callback: CallbackQuery, app_user: User, assistant: Ass
     await _send_meal_card(callback.message, result, app_user, assistant)
 
 
-FREQ_TAP_WINDOW_S = 5.0
-FREQ_IN_FLIGHT_S = 60.0  # дольше записи не бывает; упавший без release ключ отпустится сам
+TAP_WINDOW_S = 5.0
+TAP_IN_FLIGHT_S = 60.0  # дольше записи не бывает; упавший без release ключ отпустится сам
 # (user_id, callback) → (момент, записано ли уже). Пока не записано — первый тап ещё в работе.
-_freq_taps: dict[tuple[int, str], tuple[float, bool]] = {}
+# Общий для всех кнопок «тап сразу пишет»: «⚡ Частое» (FR-40) и повтор с прошлого дня (FR-42).
+_taps: dict[tuple[int, str], tuple[float, bool]] = {}
 
 
 def _claim_tap(user_id: int, data: str) -> str | None:
     """FR-40: та же кнопка ещё раз — двойной тап, а не вторая порция. None — тап свежий, ключ
-    занят; "busy" — первый ещё пишет; "done" — записан меньше FREQ_TAP_WINDOW_S назад.
+    занят; "busy" — первый ещё пишет; "done" — записан меньше TAP_WINDOW_S назад.
 
     `IdempotencyStore` аппки тут не годится: там ключ намерения шлёт клиент, а у кнопки Telegram
     его нет — id колбэка свой на каждый тап, и на двойной тоже. Отличает двойной тап от второй
@@ -1257,15 +1262,48 @@ def _claim_tap(user_id: int, data: str) -> str | None:
     """
     now = time.monotonic()
     for key in [
-        k for k, (at, done) in _freq_taps.items()
-        if now - at > (FREQ_TAP_WINDOW_S if done else FREQ_IN_FLIGHT_S)
+        k for k, (at, done) in _taps.items()
+        if now - at > (TAP_WINDOW_S if done else TAP_IN_FLIGHT_S)
     ]:
-        del _freq_taps[key]
-    found = _freq_taps.get((user_id, data))
+        del _taps[key]
+    found = _taps.get((user_id, data))
     if found is not None:
         return "done" if found[1] else "busy"
-    _freq_taps[(user_id, data)] = (now, False)
+    _taps[(user_id, data)] = (now, False)
     return None
+
+
+async def _write_once(
+    callback: CallbackQuery, session: AsyncSession, user_id: int,
+    write: Callable[[], Awaitable[MealLogged | None]],
+) -> MealLogged | None | Literal[False]:
+    """Тап, который сразу пишет: страж двойного тапа → запись → фиксация (FR-40, FR-42).
+
+    False — это второй тап, всплывашка уже ушла; None — писать нечего (кнопка устарела), окно
+    снято. Окно двойного тапа — от момента записи; сбой (в т.ч. фиксации) окно не держит.
+    """
+    key = (user_id, callback.data or "")
+    seen = _claim_tap(*key)
+    if seen is not None:
+        await callback.answer(
+            "Уже записываю…" if seen == "busy"
+            else "Уже записал. Если это ещё одна порция — тапни через пару секунд."
+        )
+        return False
+    try:
+        result = await write()
+        if result is not None:
+            await session.commit()  # фиксируем ДО ответа — «записал» не врёт
+    except Exception:
+        _taps.pop(key, None)  # не записали — «Уже записал» не должен держать повтор
+        with suppress(TelegramBadRequest):  # уже отвечен (⚡ гасит спиннер сразу) — не страшно
+            await callback.answer("Не записал — попробуй ещё раз.")  # без вечного спиннера
+        raise
+    if result is None:
+        _taps.pop(key, None)
+    else:
+        _taps[key] = (time.monotonic(), True)
+    return result
 
 
 async def _log_frequent(user: User, assistant: Assistant, data: str) -> MealLogged | None:
@@ -1306,27 +1344,17 @@ async def on_frequent_tap(
         return
     assert app_user.id is not None
     data = callback.data or ""
-    key = (app_user.id, data)
-    seen = _claim_tap(*key)
-    if seen == "busy":
-        await callback.answer("Уже записываю…")
+
+    async def write() -> MealLogged | None:
+        await callback.answer()  # гасим спиннер сразу
+        return await _log_frequent(app_user, assistant, data)
+
+    result = await _write_once(callback, session, app_user.id, write)
+    if result is False:
         return
-    if seen == "done":
-        await callback.answer("Уже записал. Если это ещё одна порция — тапни через пару секунд.")
-        return
-    await callback.answer()  # гасим спиннер сразу
-    try:
-        result = await _log_frequent(app_user, assistant, data)
-        if result is not None:
-            await session.commit()  # фиксируем ДО карточки — «записал» не врёт
-    except Exception:
-        _freq_taps.pop(key, None)  # не записали — «Уже записал» не должен держать повтор
-        raise
     if result is None:
-        _freq_taps.pop(key, None)
         await callback.message.answer("Этой кнопки уже нет — открой ⚡ Частое заново.")
         return
-    _freq_taps[key] = (time.monotonic(), True)  # окно двойного тапа — от момента записи
     await _send_meal_card(callback.message, result, app_user, assistant)
 
 
@@ -1347,7 +1375,9 @@ class _Undo:
     at: float
     snapshot: Meal
     after: object  # _fingerprint приёма сразу после удаления
+    what: str  # подпись кнопки «⏪ Вернуть: <что>» — чтобы пересобрать её из снимка
     done: str | None = None  # не None — снимок израсходован, это ответ на следующие тапы
+    day: date | None = None  # удалили на экране «День» — какой день он показывал (FR-41)
 
 
 # Человек → снимок. ОДИН на человека: новое удаление вытесняет прежнее — снимок заменяет приём
@@ -1359,20 +1389,46 @@ _trash: dict[int, _Undo] = {}
 
 
 def _fingerprint(meal: Meal | None) -> object:
-    """Каким приём остался: id, граммы и ккал позиций; удалён — _GONE. Правка словами, удаление
-    или «Вернуть» в аппке его меняют — и тогда снимок вернул бы не то (D-MA-23)."""
+    """Каким приём остался: имя набора, id, граммы и ккал позиций; удалён — _GONE. Правка словами,
+    удаление или «Вернуть» в аппке его меняют — и тогда снимок вернул бы не то (D-MA-23). Имя
+    набора — тоже: «📌 Сохранить набор» на обрезанной карточке, и снимок молча стёр бы его."""
     if meal is None:
         return _GONE
-    return tuple(sorted((i.id or 0, i.grams, round(i.macros.kcal, 1)) for i in meal.items))
+    items = tuple(sorted((i.id or 0, i.grams, round(i.macros.kcal, 1)) for i in meal.items))
+    return meal.template_name, items
 
 
-def _remember(user: User, snapshot: Meal, after: Meal | None) -> str:
+def _remember(user: User, snapshot: Meal, after: Meal | None, what: str) -> str:
     """В корзину — только ПОСЛЕ фиксации удаления: откаченное удаление не вытесняет прежний снимок
     и не показывает «Вернуть» того, что на деле не удалено."""
     assert user.id is not None
     token = secrets.token_urlsafe(6)  # 8 знаков: callback «rst:<токен>:d20261024» далеко от 64 байт
-    _trash[user.id] = _Undo(token, time.monotonic(), snapshot, _fingerprint(after))
+    _trash[user.id] = _Undo(token, time.monotonic(), snapshot, _fingerprint(after), what)
     return token
+
+
+def _live_restore(user: User, meal_id: int, where: str) -> InlineKeyboardButton | None:
+    """«⏪ Вернуть» из ТЕКУЩЕГО снимка человека — если он про этот приём, не истёк и не съеден.
+
+    Не с клавиатуры сообщения: при двойном тапе по 🗑 второй тап несёт клавиатуру, какой она была
+    ДО первого (без ⏪), и его перерисовка «Уже убрано.» может лечь последней — кнопка первого
+    пропала бы с экрана, хотя снимок жив."""
+    undo = _trash.get(user.id or 0)
+    if (undo is None or undo.done or undo.snapshot.id != meal_id
+            or time.monotonic() - undo.at > UNDO_TTL_S):
+        return None
+    return restore_button(undo.token, where, undo.what)
+
+
+def _day_restore(user: User, day: date) -> InlineKeyboardButton | None:
+    """«⏪ Вернуть» на экране «День» — только живая и только на своём дне: снимок текущий, не
+    истёк, не съеден, и удалили его с ЭТОГО дня. Со старой клавиатуры не копируем: листание
+    утащило бы на чужой день кнопку-зомби, которая перерисует не тот день (FR-41, FR-42)."""
+    undo = _trash.get(user.id or 0)
+    if (undo is None or undo.done or undo.day != day
+            or time.monotonic() - undo.at > UNDO_TTL_S):
+        return None
+    return restore_button(undo.token, f"d{day:%Y%m%d}", undo.what)
 
 
 def _claim(user_id: int, token: str) -> _Undo | str:
@@ -1395,38 +1451,41 @@ def _names(meal: Meal) -> str:
     return ", ".join(i.name_snapshot for i in meal.items)
 
 
-def _current_restore(message: Message) -> InlineKeyboardButton | None:
-    """«⏪ Вернуть», что уже висит на сообщении: перерисовка экрана не должна его терять."""
-    kb = message.reply_markup
-    if not isinstance(kb, InlineKeyboardMarkup):
-        return None
-    return next(
-        (b for row in kb.inline_keyboard for b in row
-         if (b.callback_data or "").startswith(f"{RESTORE_PREFIX}:")),
-        None,
-    )
-
-
 def _picker_status(message: Message) -> str:
     """Строка «🗑 Отменил: …» над пикером — пережить перерисовку вместе со своей кнопкой."""
     text = message.text or ""
     return escape(text.split("\n\n", 1)[0]) if "\n\n" in text else ""
 
 
+# (user, meal, item), которые сейчас убираются: параллельный второй тап по той же 🗑 иначе успел бы
+# прочитать приём до удаления первым и положить в корзину свой снимок, вытеснив токен первого.
+# ponytail: память процесса, как и корзина — один инстанс бота.
+_removing: set[tuple[int, int, int]] = set()
+
+
 async def _remove_item(
     user: User, assistant: Assistant, session: AsyncSession, meal_id: int, item_id: int
-) -> tuple[MealLogged | None, MealItem, str] | None:
+) -> tuple[MealLogged | None, MealItem, str] | None | Literal["busy"]:
     """Убрать позицию: снимок ДО удаления (копия — удаление правит тот же объект приёма, урок аппки
     21.10.2026), фиксация, и только потом снимок в корзину. None — позиции уже нет (двойной тап,
-    убрали в аппке): корзину не трогаем, иначе обрезанный приём вытеснил бы снимок первого тапа."""
-    meal = await assistant.get_meal(user, meal_id)
-    if meal is None or not any(i.id == item_id for i in meal.items):
-        return None
-    snapshot = copy.deepcopy(meal)
-    item = next(i for i in snapshot.items if i.id == item_id)
-    result = await assistant.remove_item(user, meal_id, item_id)
-    await session.commit()
-    return result, item, _remember(user, snapshot, result.meal if result else None)
+    убрали в аппке): корзину не трогаем, иначе обрезанный приём вытеснил бы снимок первого тапа.
+    "busy" — эту же позицию прямо сейчас убирает первый тап (проверка и отметка без await)."""
+    key = (user.id or 0, meal_id, item_id)
+    if key in _removing:
+        return "busy"
+    _removing.add(key)
+    try:
+        meal = await assistant.get_meal(user, meal_id)
+        if meal is None or not any(i.id == item_id for i in meal.items):
+            return None
+        snapshot = copy.deepcopy(meal)
+        item = next(i for i in snapshot.items if i.id == item_id)
+        result = await assistant.remove_item(user, meal_id, item_id)
+        await session.commit()
+        after = result.meal if result else None
+        return result, item, _remember(user, snapshot, after, item.name_snapshot)
+    finally:
+        _removing.discard(key)
 
 
 async def _redraw_picker(
@@ -1457,7 +1516,7 @@ async def _redraw_card(message: Message, user: User, assistant: Assistant, meal_
     logged = MealLogged(meal=meal, remaining=(await assistant.today(user)).remaining)
     await _rich_edit(
         message, screens.meal_card(ctx, logged, edited=True),
-        meal_actions_keyboard(meal, _current_restore(message)),
+        meal_actions_keyboard(meal, _live_restore(user, meal_id, "c")),
     )
 
 
@@ -1494,14 +1553,14 @@ async def on_meal_undo(
         if in_picker:
             await _redraw_picker(
                 callback.message, app_user, assistant,
-                _picker_status(callback.message), _current_restore(callback.message),
+                _picker_status(callback.message), _live_restore(app_user, meal_id, "p"),
             )
         return
     # Снимок — то, что вернул delete: состояние ДО удаления, дальше его никто не правит.
     snapshot = copy.deepcopy(result.meal)
     await session.commit()
-    token = _remember(app_user, snapshot, None)
     what, kcal = _names(snapshot), round(snapshot.totals.kcal)
+    token = _remember(app_user, snapshot, None, what)
     if in_picker:
         await _redraw_picker(
             callback.message, app_user, assistant, f"🗑 Отменил: {escape(what)} · {kcal} ккал",
@@ -1526,6 +1585,9 @@ async def on_item_del(
     parts = (callback.data or "item_del:0:0").split(":")
     meal_id, item_id = int(parts[1]), int(parts[2])
     removed = await _remove_item(app_user, assistant, session, meal_id, item_id)
+    if removed == "busy":
+        await callback.answer("Уже убираю…")
+        return
     if removed is None:
         await callback.answer("Уже убрано.")
         await _redraw_card(callback.message, app_user, assistant, meal_id)
@@ -1561,11 +1623,14 @@ async def on_undo_item(
     parts = (callback.data or "undo_item:0:0").split(":")
     meal_id, item_id = int(parts[1]), int(parts[2])
     removed = await _remove_item(app_user, assistant, session, meal_id, item_id)
+    if removed == "busy":
+        await callback.answer("Уже убираю…")
+        return
     if removed is None:
         await callback.answer("Уже убрано.")
         await _redraw_picker(
             callback.message, app_user, assistant,
-            _picker_status(callback.message), _current_restore(callback.message),
+            _picker_status(callback.message), _live_restore(app_user, meal_id, "p"),
         )
         return
     _, item, token = removed
@@ -1631,11 +1696,7 @@ async def on_restore(
             callback.message, app_user, assistant, f"⏪ Вернул: {what} · {kcal} ккал"
         )
     elif days_ago is not None:
-        rem, dv = await assistant.day_card(app_user, days_ago)
-        await _rich_edit(
-            callback.message, screens.day(dv, rem),
-            day_nav_keyboard(days_ago, dv.meals, dv.timezone),
-        )
+        await _redraw_day(callback.message, app_user, assistant, days_ago, repeat=False)
     else:
         ctx = await gather(assistant, app_user)
         await _rich_edit(
@@ -1774,17 +1835,88 @@ async def on_profile_goal(
 
 @router.callback_query(F.data.startswith(f"{DAY_NAV_PREFIX}:"))
 async def on_day_nav(callback: CallbackQuery, app_user: User, assistant: Assistant) -> None:
-    """Вар. A: ← / → листание дней в просмотре истории."""
+    """Вар. A: ← / → листание дней в просмотре истории; `:r` — тот же день в режиме повтора (FR-42).
+
+    «дней назад», а не дата: экран сам относительный, перерисовывается целиком с заголовком дня —
+    сдвиг на полуночи виден и безвреден. Дата нужна там, где тап ПИШЕТ (🔁) или возвращает (⏪)."""
     if not isinstance(callback.message, Message):
         await callback.answer()
         return
-    days_ago = max(0, int((callback.data or "day_nav:0").split(":", 1)[1]))
-    rem, dv = await assistant.day_card(app_user, days_ago)
-    # правим карточку НА МЕСТЕ — соседний день не «прыгает» в конец чата (edit rich, Bot API 10.1)
-    await _rich_edit(
-        callback.message, screens.day(dv, rem), day_nav_keyboard(days_ago, dv.meals, dv.timezone)
-    )
+    parts = (callback.data or "day_nav:0").split(":")
+    try:
+        days_ago = max(0, int(parts[1]))
+    except (IndexError, ValueError):
+        days_ago = 0
+    repeat = parts[2:] == [DAY_REPEAT_MODE]
+    await _redraw_day(callback.message, app_user, assistant, days_ago, repeat)
     await callback.answer()
+
+
+async def _redraw_day(
+    message: Message, user: User, assistant: Assistant, days_ago: int, repeat: bool,
+    note: str = "",
+) -> None:
+    """Экран «День» на месте: соседний день не «прыгает» в конец чата (edit rich, Bot API 10.1).
+    «⏪ Вернуть» — только живая и только своего дня, и только в режиме 🗑 (`_day_restore`)."""
+    rem, dv = await assistant.day_card(user, days_ago)
+    await _rich_edit(
+        message, screens.day(dv, rem, repeat, note),
+        day_nav_keyboard(
+            days_ago, dv.meals, dv.timezone, _day_restore(user, dv.day), repeat, dv.day
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith(f"{DAY_REP_PREFIX}:"))
+async def on_day_repeat(
+    callback: CallbackQuery, app_user: User, assistant: Assistant, session: AsyncSession
+) -> None:
+    """FR-42: позиция (или приём целиком) с прошлого дня — в СЕГОДНЯ, тем же use-case, что у
+    «↻ сегодня» аппки (`repeat_item` / `repeat_meal`, снапшот КБЖУ один-в-один, INV-3). Без модели.
+
+    Человек остаётся на листаемом дне и в режиме повтора; строка-подсказка под днём становится
+    следом записи — всплывашка гаснет через секунду (D-MA-24). День в callback — датой: после
+    полуночи перерисуется ТОТ день, а не тот, что теперь «столько-то дней назад»."""
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    assert app_user.id is not None
+    parts = (callback.data or "").split(":")
+    try:
+        meal_id = int(parts[2])
+        item_id = int(parts[3]) if len(parts) == 4 else None
+    except (IndexError, ValueError):
+        meal_id = item_id = None
+    days_ago = await _days_ago(app_user, assistant, parts[1]) if len(parts) > 2 else None
+    if meal_id is None or days_ago is None or not parts[1].startswith("d") or len(parts) > 4:
+        await callback.answer("Кнопка устарела — открой 🗒 История заново.")
+        return
+
+    async def write() -> MealLogged | None:
+        if item_id is None:
+            return await assistant.repeat_meal(app_user, meal_id)
+        return await assistant.repeat_item(app_user, meal_id, item_id)
+
+    result = await _write_once(callback, session, app_user.id, write)
+    if result is False:  # «Уже записал…» — строка под днём уже говорит, что записано
+        return
+    if result is None:  # удалили (тут или в аппке) — лечим экран живыми данными, режим тот же
+        await callback.answer("Этой записи уже нет — ничего не записал.")
+        await _redraw_day(callback.message, app_user, assistant, days_ago, True)
+        return
+    meal, rem = result.meal, result.remaining
+    if item_id is None:
+        what = _names(meal)
+    else:
+        it = meal.items[0]
+        what = it.name_snapshot + (f" · {round(it.grams)} г" if it.grams else "")
+    what = what if len(what) <= 60 else what[:59] + "…"
+    await callback.answer(f"🔁 Записал в сегодня: {what} · {round(meal.totals.kcal)} ккал")
+    await _redraw_day(
+        callback.message, app_user, assistant, days_ago, True,
+        f"🔁 Записал в сегодня: {what} — сегодня {round(rem.consumed.kcal)} "
+        f"из {round(rem.goal.daily_kcal)} ккал",
+    )
 
 
 @router.callback_query(F.data.startswith(f"{DAY_DEL_PREFIX}:"))
@@ -1800,19 +1932,18 @@ async def on_day_del(
         await callback.answer()
         return
     _, days_ago_s, meal_id_s, item_id_s = (callback.data or "day_del:0:0:0").split(":")
-    days_ago = max(0, int(days_ago_s))
-    removed = await _remove_item(app_user, assistant, session, int(meal_id_s), int(item_id_s))
-    rem, dv = await assistant.day_card(app_user, days_ago)  # состояние дня ПОСЛЕ удаления
-    if removed is None:
-        # Уже убрано (двойной тап, в аппке) — экран лечим живыми данными, «⏪ Вернуть» оставляем.
-        restore = _current_restore(callback.message)
-    else:  # дата, а не «дней назад»: после полуночи «Вернуть» перерисует ТОТ день
-        _, item, token = removed
-        restore = restore_button(token, f"d{dv.day:%Y%m%d}", item.name_snapshot)
-    await _rich_edit(
-        callback.message, screens.day(dv, rem),
-        day_nav_keyboard(days_ago, dv.meals, dv.timezone, restore),
-    )
+    days_ago, meal_id = max(0, int(days_ago_s)), int(meal_id_s)
+    removed = await _remove_item(app_user, assistant, session, meal_id, int(item_id_s))
+    if removed == "busy":
+        await callback.answer("Уже убираю…")
+        return
+    if removed is not None:  # снимок помнит день: «⏪ Вернуть» — только на нём (FR-41)
+        day = (await assistant.day_view(app_user, days_ago)).day
+        undo = _trash.get(app_user.id or 0)
+        if undo is not None and undo.token == removed[2]:  # за await его могли вытеснить
+            undo.day = day
+    # Уже убрано (двойной тап, в аппке) — экран лечим живыми данными, «⏪ Вернуть» — из снимка.
+    await _redraw_day(callback.message, app_user, assistant, days_ago, repeat=False)
     await callback.answer("🗑 Убрал позицию" if removed else "Уже убрано.")
 
 
@@ -1884,7 +2015,10 @@ async def _show_weight(message: Message, app_user: User, assistant: Assistant) -
 
 async def _show_history(message: Message, app_user: User, assistant: Assistant) -> None:
     rem, dv = await assistant.day_card(app_user)  # день + стрелки ← →
-    await _rich(message, screens.day(dv, rem), day_nav_keyboard(dv.days_ago, dv.meals, dv.timezone))
+    await _rich(
+        message, screens.day(dv, rem),
+        day_nav_keyboard(dv.days_ago, dv.meals, dv.timezone, day=dv.day),
+    )
 
 
 async def _show_undo_picker(message: Message, app_user: User, assistant: Assistant) -> None:
