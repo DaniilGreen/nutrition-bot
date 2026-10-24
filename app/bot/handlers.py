@@ -834,7 +834,7 @@ async def on_photo(
         await state.set_state(MealStates.awaiting_photo)
         data = {
             "plate": result.reading, "grams": result.grams, "weighed": result.weighed,
-            "fat": None, "dressing": None,
+            "off": [],  # D-MA-20: убранные позиции — до записи, а не правкой после
         }
         await state.update_data(**data)
         sent = await message.answer(
@@ -874,14 +874,12 @@ async def on_photo(
 
 def _photo_text(data: dict) -> str:
     return format_photo_card(
-        data["plate"], data["grams"], weighed=data["weighed"],
-        fat=data.get("fat"), dressing=data.get("dressing"),
+        data["plate"], data["grams"], weighed=data["weighed"], off=data.get("off") or []
     )
 
 
 def _photo_kb(data: dict) -> InlineKeyboardMarkup:
-    plate = data["plate"]
-    return photo_keyboard(plate.ask_fat, data.get("fat"), plate.ask_dressing, data.get("dressing"))
+    return photo_keyboard(data["plate"].components, data.get("off") or [])
 
 
 @router.callback_query(F.data.startswith(f"{SCAN_PREFIX}:"))
@@ -984,31 +982,30 @@ async def on_photo_btn(
     session: AsyncSession,
     state: FSMContext,
 ) -> None:
-    """FR-34: чипы масла/заправки и «Записать» на карточке блюда."""
+    """FR-34: «✖ позиция» (убрать/вернуть) и «Записать» на карточке блюда (D-MA-20)."""
     data = await state.get_data()
     if data.get("plate") is None or not isinstance(callback.message, Message):
         await callback.answer("Карточка устарела — пришли фото заново.")
         return
     parts = (callback.data or "").split(":")
-    if parts[1] in ("fat", "dr") and len(parts) == 3:
-        key = "fat" if parts[1] == "fat" else "dressing"
-        data[key] = parts[2]
-        await state.update_data(**{key: parts[2]})
+    plate = data["plate"]
+    off = list(data.get("off") or [])
+    if parts[1] == "off" and len(parts) == 3:
+        i = int(parts[2])
+        if 0 <= i < len(plate.components):
+            off = [x for x in off if x != i] if i in off else off + [i]
+            data["off"] = off
+            await state.update_data(off=off)
         await callback.answer()
         await _safe_edit(callback.message, _photo_text(data), _photo_kb(data))
         return
-    plate = data["plate"]
-    # Масло на фото не видно — главный недосчёт фото-трекеров (D-MA-11).
-    if (plate.ask_fat and not data.get("fat")) or (
-        plate.ask_dressing and not data.get("dressing")
-    ):
-        await callback.answer("Отметь масло и заправку — на фото их не видно.", show_alert=True)
+    if len(off) >= len(plate.components):
+        await callback.answer("Всё убрано — нечего записывать.", show_alert=True)
         return
     await callback.answer()
+    grams = [None if i in off else g for i, g in enumerate(data["grams"])]
     try:
-        text = assistant.photo_text(
-            plate, data["grams"], fat=data.get("fat"), dressing=data.get("dressing")
-        )
+        text = assistant.photo_text(plate, grams)
     except ValueError:
         await callback.message.answer("Граммы вне границ — пришли вес тарелки числом.")
         return
@@ -1243,7 +1240,9 @@ async def on_item_del(callback: CallbackQuery, app_user: User, assistant: Assist
         # изменений) даст «not modified», а не вторую карточку.
         ctx = await gather(assistant, app_user)
         await _rich_edit(
-            callback.message, screens.meal_card(ctx, result), meal_actions_keyboard(result.meal)
+            callback.message, screens.meal_card(ctx, result, edited=True),
+            meal_actions_keyboard(result.meal),
+            fallback_text=f"🗑 Убрал позицию · приём теперь {round(result.meal.totals.kcal)} ккал",
         )
     await callback.answer("🗑 Убрал позицию")
 
@@ -1600,7 +1599,8 @@ async def _rich(
 
 
 async def _rich_edit(
-    message: Message, html: str, markup: InlineKeyboardMarkup | None = None
+    message: Message, html: str, markup: InlineKeyboardMarkup | None = None,
+    *, fallback_text: str | None = None,
 ) -> None:
     """Править rich-сообщение НА МЕСТЕ (edit_text расширен полем rich_message в Bot API 10.1).
 
@@ -1615,6 +1615,11 @@ async def _rich_edit(
     except TelegramBadRequest as exc:
         if "not modified" in str(exc).lower():
             return  # тот же контент (двойной тап) — не ошибка
+        logger.warning("правка карточки не удалась: %s", exc)
+        if fallback_text:
+            # MA-INV-70: вторая карточка «✅ Записал …» внизу чата выглядела записью заново.
+            await message.answer(fallback_text)
+            return
         await _rich(message, html, markup)
 
 

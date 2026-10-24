@@ -423,7 +423,7 @@ async def commit_photo(
     rows = body.get("components")
     if not isinstance(rows, list):
         raise bad_request("empty_plate", "Нечего записывать.")
-    if len(rows) > MAX_COMPONENTS:
+    if len(rows) > MAX_COMPONENTS + 2:  # + масло и заправка «на готовку» (D-MA-20)
         raise bad_request("bad_grams", "Такой позиции на карточке нет.")
     picked: dict[int, float] = {}
     try:
@@ -441,11 +441,7 @@ async def commit_photo(
         raise bad_request("bad_grams", "Такой позиции на карточке нет.")
     grams = [picked.get(i) for i in range(len(reading.components))]
     try:
-        text = assistant.photo_text(
-            reading, grams,
-            fat=str(body.get("fat") or "") or None,
-            dressing=str(body.get("dressing") or "") or None,
-        )
+        text = assistant.photo_text(reading, grams)
     except ValueError as exc:
         # MA-INV-44: черновик не тронут — человек поправит и нажмёт снова.
         if not any(g is not None for g in grams):
@@ -515,12 +511,9 @@ def _plate_json(result: PlateRead, token: str) -> dict[str, Any]:
         "weighed": result.weighed,
         "total_g": result.total_g,
         "components": [
-            {"i": i, "name": c.name, "grams": g, "fixed": c.fixed}
+            {"i": i, "name": c.name, "grams": g, "fixed": c.fixed, "note": c.note}
             for i, (c, g) in enumerate(zip(r.components, result.grams, strict=True))
         ],
-        "ask_fat": r.ask_fat,
-        "fat_kind": r.fat_kind,
-        "ask_dressing": r.ask_dressing,
         "liquid": r.liquid,
     }
 

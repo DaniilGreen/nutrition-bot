@@ -288,29 +288,17 @@ def _distinct(options: Sequence[str]) -> list[str]:
     return [" ".join(w[common:]) for w in words]
 
 
-PHOTO_FAT = (("none", "Без масла"), ("little", "Немного"), ("spoon", "Ложка"), ("lots", "Много"))
-PHOTO_DRESS = (("none", "Без"), ("sour_cream", "Сметана"), ("mayo", "Майонез"), ("oil", "Масло"))
-
-
-def photo_keyboard(
-    ask_fat: bool, fat: str | None, ask_dressing: bool, dressing: str | None
-) -> InlineKeyboardMarkup:
-    """FR-34: чипы масла и заправки (выбранный — с «✓») и «Записать»/«Отмена»."""
+def photo_keyboard(components: Sequence[object], off: Sequence[int]) -> InlineKeyboardMarkup:
+    """FR-34, D-MA-20: на каждую позицию «✖ убрать» (убранная — «↩ вернуть»), затем
+    «Записать»/«Отмена». Вопросов про масло нет: его оценивает модель, оно — строкой в списке."""
     builder = InlineKeyboardBuilder()
-    rows: list[int] = []
-    if ask_fat:
-        for key, text in PHOTO_FAT:
-            mark = "✓ " if fat == key else ""
-            builder.button(text=f"{mark}{text}", callback_data=f"{PHOTO_PREFIX}:fat:{key}")
-        rows += [2, 2]
-    if ask_dressing:
-        for key, text in PHOTO_DRESS:
-            mark = "✓ " if dressing == key else ""
-            builder.button(text=f"{mark}{text}", callback_data=f"{PHOTO_PREFIX}:dr:{key}")
-        rows += [2, 2]
+    for i, c in enumerate(components):
+        mark = "↩ " if i in off else "✖ "
+        builder.button(text=mark + _short(getattr(c, "name", "")),
+                       callback_data=f"{PHOTO_PREFIX}:off:{i}")
     builder.button(text="✅ Записать", callback_data=f"{PHOTO_PREFIX}:ok")
     builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
-    builder.adjust(*rows, 2)
+    builder.adjust(*([2] * ((len(components) + 1) // 2)), 2)
     return builder.as_markup()
 
 

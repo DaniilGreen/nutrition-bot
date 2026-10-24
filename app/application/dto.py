@@ -83,9 +83,10 @@ class PlateReading:
     dish: str = ""
     components: list = field(default_factory=list)  # list[domain.plate.Component]
     caption_total_g: float | None = None   # вес всей тарелки из подписи (как прочла модель)
-    ask_fat: bool = False
+    # D-MA-20: масло при готовке и невидимую заправку модель оценивает сама, без вопроса.
+    cooking_fat: str = "none"              # none | little | spoon | lots (domain.plate.FAT_GRAMS)
     fat_kind: str = ""
-    ask_dressing: bool = False
+    dressing: str = "none"                 # none | sour_cream | mayo | oil (domain.plate.DRESSINGS)
     liquid: bool = False
     menu: list = field(default_factory=list)  # list[domain.menu.MenuLine], FR-38
 

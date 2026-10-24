@@ -79,7 +79,7 @@ from app.domain.menu import title as menu_title
 from app.domain.menu import totals as menu_totals
 from app.domain.naming import looks_like_key, phrase_names
 from app.domain.nutrition import atwater_suspect
-from app.domain.plate import caption_numbers, clean_name, said
+from app.domain.plate import Component, caption_numbers, clean_name, said
 from app.domain.plate import compose as plate_compose
 from app.domain.plate import extras as plate_extras
 from app.domain.plate import split as plate_split
@@ -288,6 +288,11 @@ class Assistant:
             c.fixed = bool(c.fixed and said(c.grams, numbers))
         grams = plate_split(reading.components, total)
         weighed = total is not None or any(c.fixed for c in reading.components)
+        # D-MA-20: масло при готовке и невидимая заправка — строками карточки, без вопроса.
+        # Поверх веса тарелки, как было с чипами: делёж еды они не трогают; лишнее — «✖».
+        for name, g in plate_extras(reading.cooking_fat, reading.fat_kind, reading.dressing):
+            reading.components.append(Component(name, 0.0, g, True, "на готовку"))
+            grams.append(g)
         return PlateRead(reading=reading, grams=grams, weighed=weighed, total_g=total)
 
     async def _log_menu(
@@ -318,10 +323,7 @@ class Assistant:
         )
 
     @staticmethod
-    def photo_text(
-        reading: PlateReading, grams: list[float | None], *,
-        fat: str | None = None, dressing: str | None = None,
-    ) -> str:
+    def photo_text(reading: PlateReading, grams: list[float | None]) -> str:
         """FR-34: карточка → фраза «имя N г, …». `grams[i]` — граммы i-й
         составляющей, None — человек её убрал. Имена берём из черновика, не от
         клиента (MA-INV-43). ValueError — граммы вне границ (MA-INV-44)."""
@@ -332,11 +334,6 @@ class Assistant:
         ]
         if not parts or not plate_valid([g for _, g in parts]):
             raise ValueError("bad_plate")
-        parts += plate_extras(
-            fat if reading.ask_fat else None,
-            reading.fat_kind,
-            dressing if reading.ask_dressing else None,
-        )
         text = plate_compose(parts)
         if not text:
             raise ValueError("bad_plate")

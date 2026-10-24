@@ -85,10 +85,17 @@ PHOTO_PROMPT = (
     "caption_total_g. Если вес конкретной позиции («курица 150») — поставь его в grams этой "
     "позиции и fixed=true. Чисел, которых нет в подписи, не выдумывай: нет подписи или "
     "веса в ней — caption_total_g=null и fixed=false везде.\n"
-    "5) ask_fat — true, если при готовке могли использовать масло (жареное, тушёное, паста, "
-    "крупы, яичница, овощи на сковороде); false — сырые овощи и фрукты, суп, выпечка, "
-    "варёное на пару. fat_kind — какое масло вероятнее.\n"
-    "6) ask_dressing — true, если это салат, нарезка или каша и заправки не видно.\n"
+    "5) cooking_fat — сколько масла, по-твоему, ушло на готовку всей тарелки. На фото его не "
+    "видно, человека НЕ переспрашиваем — решай сам по способу приготовления и типичному "
+    "рецепту: none — сырое, варёное, на пару, гриль без масла, суп, выпечка, фрукты, "
+    "напитки; little (~5 г) — запечённое, слегка обжаренное, тушёное; spoon (~10 г) — "
+    "жареное на сковороде: яичница, жареное мясо или курица, сэндвич или хот-дог с жареной "
+    "сосиской, жареный рис или лапша; lots (~20 г) — во фритюре или обильно: картофель фри, "
+    "панировка, кляр, темпура, чебурек. fat_kind — какое масло вероятнее.\n"
+    "6) dressing — заправка, которой НЕ видно: oil — салат из свежих овощей без видимой "
+    "заправки; sour_cream — борщ или вареники, где сметаны не видно, но так их едят; mayo — "
+    "редко, только если блюдо без него не бывает; none — во всех остальных случаях и когда "
+    "заправка видна и уже есть в components.\n"
     "7) liquid — true для супа и напитков.\n"
     "8) menu — только для kind='menu': каждая позиция, у которой напечатаны калории. name — "
     "название ровно как напечатано (латиницей — так латиницей). kcal, protein, fat, carb — "
@@ -121,9 +128,9 @@ class PhotoReadingOut(BaseModel):
     dish: str
     components: list[PlateComponentOut]
     caption_total_g: float | None
-    ask_fat: bool
+    cooking_fat: Literal["none", "little", "spoon", "lots"]
     fat_kind: Literal["масло подсолнечное", "масло сливочное", "масло оливковое"]
-    ask_dressing: bool
+    dressing: Literal["none", "sour_cream", "mayo", "oil"]
     liquid: bool
     menu: list[MenuLineOut]
 
@@ -297,9 +304,9 @@ class OpenAiVision:
                 if c.name.strip()
             ],
             caption_total_g=r.caption_total_g,
-            ask_fat=r.ask_fat,
+            cooking_fat=r.cooking_fat,
             fat_kind=r.fat_kind if r.fat_kind in FAT_KINDS else FAT_KINDS[0],
-            ask_dressing=r.ask_dressing,
+            dressing=r.dressing,
             liquid=r.liquid,
             menu=[
                 MenuLine(m.name.strip()[:120], m.kcal, m.protein, m.fat, m.carb,

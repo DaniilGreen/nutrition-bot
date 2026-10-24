@@ -47,14 +47,14 @@ class _State:
 def _plate(**kw) -> PlateReading:
     base = dict(kind="dish", dish="паста с курицей", components=[
         Component("макароны отварные", 0.6, 250), Component("курица жареная", 0.3, 100),
-    ], ask_fat=True, fat_kind="масло сливочное", ask_dressing=False)
+    ], fat_kind="масло сливочное")
     base.update(kw)
     return PlateReading(**base)
 
 
 def _data(**kw) -> dict:
     d = {"plate": _plate(), "grams": [250.0, 100.0], "weighed": False,
-         "fat": None, "dressing": None, "card_id": 5}
+         "off": [], "card_id": 5}
     d.update(kw)
     return d
 
@@ -76,60 +76,78 @@ def _assistant() -> AsyncMock:
     return a
 
 
-def test_карточка_без_веса_просит_взвесить_и_спрашивает_масло():
+def test_карточка_без_веса_просит_взвесить_и_не_спрашивает_масло():
+    """D-MA-20: вопросов про масло и заправку нет — масло, если было, уже строка списка."""
     text = format_photo_card(_plate(), [250, 100], weighed=False)
     assert "вес на глаз" in text and "Всего 350 г" in text
     assert "пришли вес тарелки" in text.lower()
-    assert "Масло при готовке (сливочное): ❔" in text
-    assert "Заправка" not in text
+    assert "Масло при готовке" not in text and "Заправка" not in text
+
+
+def test_убранная_позиция_зачёркнута_и_не_в_итоге():
+    plate = _plate(components=[Component("бургер", 0.7, 250),
+                               Component("картофель фри", 0.3, 120),
+                               Component("масло подсолнечное", 0, 20, True, "на готовку")])
+    text = format_photo_card(plate, [250, 120, 20], weighed=False, off=[1])
+    assert "<s>картофель фри — 120 г</s>" in text and "Всего 270 г" in text
+    assert "масло подсолнечное — 20 г · на готовку" in text
 
 
 def test_карточка_экранирует_имена():
     plate = _plate(dish="<b>x</b>", components=[Component("a<i>", 1, 10)])
-    text = format_photo_card(plate, [10], weighed=True, fat="spoon")
+    text = format_photo_card(plate, [10], weighed=True)
     assert "<i>" not in text and "&lt;b&gt;x" in text
-    assert "ложка, 10 г" in text and "Взвешивал" not in text
+    assert "Взвешивал" not in text
 
 
-def test_клавиатура_отмечает_выбор_и_влезает_в_лимит_callback():
-    kb = photo_keyboard(True, "spoon", True, None)
+def test_клавиатура_убрать_вернуть_и_влезает_в_лимит_callback():
+    kb = photo_keyboard(_plate().components, [1])
     buttons = [b for row in kb.inline_keyboard for b in row]
-    assert any(b.text == "✓ Ложка" for b in buttons)
+    assert [b.text for b in buttons[:2]] == ["✖ макароны отварные", "↩ курица жареная"]
     assert all(len((b.callback_data or "").encode()) <= 64 for b in buttons)
     assert buttons[-2].text == "✅ Записать"
 
 
-async def test_записать_без_ответа_про_масло_не_пишет():
-    state, assistant = _State(_data()), _assistant()
+async def test_всё_убрано_не_пишет():
+    state, assistant = _State(_data(off=[0, 1])), _assistant()
     cb = _callback("ph:ok")
     await handlers.on_photo_btn(cb, object(), assistant, AsyncMock(), state)
     assistant.log_photo.assert_not_awaited()
     method = cb.bot.await_args.args[0]          # AnswerCallbackQuery
-    assert method.show_alert is True and "масло" in method.text.lower()
+    assert method.show_alert is True and "нечего" in method.text.lower()
     assert not state.cleared
 
 
 async def test_записать_отдаёт_фразу_из_черновика(monkeypatch):
     render = AsyncMock()
     monkeypatch.setattr(handlers, "_render_after_continue", render)
-    state, assistant = _State(_data(fat="spoon", weighed=True)), _assistant()
+    state, assistant = _State(_data(weighed=True)), _assistant()
     await handlers.on_photo_btn(_callback("ph:ok"), object(), assistant, AsyncMock(), state)
     args = assistant.log_photo.await_args
-    assert args.args[1] == ("макароны отварные 250 г, курица жареная 100 г, "
-                            "масло сливочное 10 г")
+    assert args.args[1] == "макароны отварные 250 г, курица жареная 100 г"
     assert args.kwargs["weighed"] is True
     assert state.cleared
     render.assert_awaited_once()
 
 
-async def test_чип_масла_правит_карточку_на_месте(monkeypatch):
+async def test_убрать_позицию_до_записи_и_записать_без_неё(monkeypatch):
+    """24.10.2026: картофель фри, которого не ел, убирается в карточке, а не правкой после."""
     edit = AsyncMock()
     monkeypatch.setattr(handlers, "_safe_edit", edit)
-    state = _State(_data())
-    await handlers.on_photo_btn(_callback("ph:fat:lots"), object(), _assistant(),
-                                AsyncMock(), state)
-    assert state.data["fat"] == "lots"
-    assert "много, 20 г" in edit.await_args.args[1]
+    monkeypatch.setattr(handlers, "_render_after_continue", AsyncMock())
+    state, assistant = _State(_data()), _assistant()
+    await handlers.on_photo_btn(_callback("ph:off:1"), object(), assistant, AsyncMock(), state)
+    assert state.data["off"] == [1]
+    assert "<s>курица жареная — 100 г</s>" in edit.await_args.args[1]
+    await handlers.on_photo_btn(_callback("ph:ok"), object(), assistant, AsyncMock(), state)
+    assert assistant.log_photo.await_args.args[1] == "макароны отварные 250 г"
+
+
+async def test_повторный_тап_возвращает_позицию(monkeypatch):
+    monkeypatch.setattr(handlers, "_safe_edit", AsyncMock())
+    state = _State(_data(off=[1]))
+    await handlers.on_photo_btn(_callback("ph:off:1"), object(), _assistant(), AsyncMock(), state)
+    assert state.data["off"] == []
 
 
 async def test_вес_тарелки_пересчитывает_пропорционально():
@@ -170,7 +188,7 @@ async def test_новое_фото_снимает_открытую_карточ�
 
 
 async def test_сбой_разбора_не_теряет_карточку():
-    state, assistant = _State(_data(fat="none")), _assistant()
+    state, assistant = _State(_data()), _assistant()
     assistant.log_photo.side_effect = RuntimeError("openai down")
     with pytest.raises(RuntimeError):
         await handlers.on_photo_btn(_callback("ph:ok"), object(), assistant, AsyncMock(), state)

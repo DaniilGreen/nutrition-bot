@@ -74,7 +74,7 @@ def _meal_day_label(eaten_at: datetime, tz_name: str, today: date) -> str:
     return f" на {word}, {ds}" if word else f" на {ds}"
 
 
-def meal_card(d: DayContext, r: MealLogged) -> str:
+def meal_card(d: DayContext, r: MealLogged, *, edited: bool = False) -> str:
     """Карточка сразу после записи — самый горячий момент: человек ещё у тарелки, уточнить 5 сек.
 
     Показываем ЧТО записали (метки ≈/📋), вклад приёма, прогресс ЕГО дня всеми барами и одну
@@ -98,7 +98,9 @@ def meal_card(d: DayContext, r: MealLogged) -> str:
         else ""
     )
     return (
-        f"<h3>✅ Записал{day_label} · {tg_time(m.eaten_at, d.today.timezone)}</h3>"
+        # MA-INV-70: правленая карточка не должна читаться как новая запись.
+        f"<h3>{'✏️ Поправил' if edited else '✅ Записал'}{day_label} · "
+        f"{tg_time(m.eaten_at, d.today.timezone)}</h3>"
         + f"<ul>{''.join(lis)}</ul>"
         + total
         + _notes(r)

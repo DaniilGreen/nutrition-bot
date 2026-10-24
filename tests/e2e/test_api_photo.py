@@ -57,7 +57,7 @@ def _plate(**kw) -> PlateReading:
             Component("курица жареная", 0.3, 100),
             Component("соус сливочный", 0.1, 40),
         ],
-        ask_fat=True, fat_kind="масло сливочное", ask_dressing=False,
+        cooking_fat="none", fat_kind="масло сливочное", dressing="none",
     )
     base.update(kw)
     return PlateReading(**base)
@@ -96,9 +96,9 @@ async def test_фото_без_подписи_даёт_карточку_на_г�
         d = r.json()
         assert d["kind"] == "photo" and d["weighed"] is False
         assert [x["grams"] for x in d["components"]] == [250, 100, 40]
-        assert d["ask_fat"] is True and "kcal" not in str(d)
+        assert "ask_fat" not in d and "kcal" not in str(d)
         r2 = await c.post("/api/meals/photo/commit", headers=_hdr(), json={
-            "draft_id": d["draft_id"], "components": _all(d), "fat": "none",
+            "draft_id": d["draft_id"], "components": _all(d),
         })
     assert r2.status_code == 200, r2.text
     meal = r2.json()["meal"]
@@ -147,21 +147,35 @@ async def test_вес_позиции_из_подписи_остаётся_а_о�
     assert grams[1] == 150 and sum(grams) == pytest.approx(400, abs=1)
 
 
-async def test_чип_масла_добавляет_позицию(client, fake_container):
-    """AC-MA-45: «Ложка» → 10 г того масла, что назвала модель."""
-    fake_container.vision = StubVision(None, _plate())
+async def test_масло_оценивает_модель_и_оно_строкой_в_карточке(client, fake_container):
+    """D-MA-20: вопроса нет — жарили на сковороде, значит ложка масла строкой «на готовку»;
+    вес закреплён (делёж тарелки не двигает) и карточку не делает «взвешенной»."""
+    fake_container.vision = StubVision(None, _plate(cooking_fat="spoon", caption_total_g=780))
+    nlu = EchoNlu()
+    fake_container.nlu = nlu
+    async with client as c:
+        d = (await c.post("/api/meals/photo", content=JPEG,
+                          headers=_hdr(**{"X-Caption": quote("780")}))).json()
+        oil = d["components"][-1]
+        assert (oil["name"], oil["grams"], oil["note"]) == ("масло сливочное", 10, "на готовку")
+        assert sum(x["grams"] for x in d["components"][:-1]) == pytest.approx(780, abs=1)
+        r2 = await c.post("/api/meals/photo/commit", headers=_hdr(), json={
+            "draft_id": d["draft_id"], "components": _all(d), "weighed": True})
+    assert nlu.texts[0].endswith("масло сливочное 10 г")
+    assert any(i["name"].startswith("масло сливочное") for i in r2.json()["meal"]["items"])
+
+
+async def test_масло_убирается_как_любая_позиция(client, fake_container):
+    fake_container.vision = StubVision(None, _plate(cooking_fat="lots", dressing="oil"))
     nlu = EchoNlu()
     fake_container.nlu = nlu
     async with client as c:
         d = (await c.post("/api/meals/photo", content=JPEG, headers=_hdr())).json()
-        r2 = await c.post("/api/meals/photo/commit", headers=_hdr(), json={
-            "draft_id": d["draft_id"], "components": _all(d), "fat": "spoon",
-            "dressing": "mayo",   # заправку модель не спрашивала — игнорируем
-        })
-    names = [i["name"] for i in r2.json()["meal"]["items"]]
-    assert any(n.startswith("масло сливочное") for n in names)
-    assert not any("майонез" in n for n in names)
-    assert nlu.texts[0].endswith("масло сливочное 10 г")
+        assert d["weighed"] is False  # строки «на готовку» — не весы человека
+        kept = [x for x in _all(d) if not d["components"][x["i"]]["note"]]
+        await c.post("/api/meals/photo/commit", headers=_hdr(), json={
+            "draft_id": d["draft_id"], "components": kept})
+    assert "масло" not in nlu.texts[0]
 
 
 async def test_убранная_позиция_не_пишется_и_правка_граммов_доходит(client, fake_container):
@@ -255,13 +269,13 @@ async def test_черновик_одноразовый_и_чужой_не_отд
 async def test_имя_из_черновика_не_ломает_разбор(client, fake_container):
     """MA-INV-47: запятая и цифры в имени от модели не порождают лишних позиций."""
     comps = [Component("курица, 150г; с овощами", 1.0, 200)]
-    fake_container.vision = StubVision(None, _plate(components=comps, ask_fat=False))
+    fake_container.vision = StubVision(None, _plate(components=comps))
     nlu = EchoNlu()
     fake_container.nlu = nlu
     async with client as c:
         d = (await c.post("/api/meals/photo", content=JPEG, headers=_hdr())).json()
         await c.post("/api/meals/photo/commit", headers=_hdr(),
-                     json={"draft_id": d["draft_id"], "components": _all(d), "fat": "lots"})
+                     json={"draft_id": d["draft_id"], "components": _all(d)})
     assert nlu.texts == ["курица с овощами 200 г"]
 
 
@@ -292,7 +306,7 @@ async def test_ключ_вместо_имени_возвращается_к_сл
             parsed.items[1].name = "grapes_red_fresh"
             return parsed
 
-    fake_container.vision = StubVision(None, _plate(ask_fat=False))
+    fake_container.vision = StubVision(None, _plate())
     fake_container.nlu = KeyNlu()
     async with client as c:
         d = (await c.post("/api/meals/photo", content=JPEG, headers=_hdr())).json()
@@ -350,7 +364,7 @@ async def test_сбой_разбора_не_сжигает_карточку(clie
                 raise RuntimeError("сеть")
             return await super().parse(text, known_keys)
 
-    fake_container.vision = StubVision(None, _plate(ask_fat=False))
+    fake_container.vision = StubVision(None, _plate())
     fake_container.nlu = Down()
     from app.main_api import app
     async with httpx.AsyncClient(
@@ -384,7 +398,7 @@ async def test_ключ_вместо_имени_при_другом_делени
             parsed.items[1].name = "chicken_fried"
             return parsed
 
-    fake_container.vision = StubVision(None, _plate(ask_fat=False))
+    fake_container.vision = StubVision(None, _plate())
     fake_container.nlu = SplitNlu()
     async with client as c:
         d = (await c.post("/api/meals/photo", content=JPEG, headers=_hdr())).json()
@@ -413,7 +427,7 @@ async def test_после_карточки_нет_уточнений_и_кост
     async with client as c:
         d = (await c.post("/api/meals/photo", content=JPEG, headers=_hdr())).json()
         r = await c.post("/api/meals/photo/commit", headers=_hdr(), json={
-            "draft_id": d["draft_id"], "components": _all(d), "fat": "little",
+            "draft_id": d["draft_id"], "components": _all(d),
             "weighed": True,
         })
     out = r.json()

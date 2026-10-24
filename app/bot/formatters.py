@@ -335,10 +335,6 @@ def _n(x: float) -> str:
     return f"{x:g}"
 
 
-_FAT_WORD = {"none": "без масла", "little": "немного, 5 г", "spoon": "ложка, 10 г",
-             "lots": "много, 20 г"}
-_DRESS_WORD = {"none": "без", "sour_cream": "сметана, 20 г", "mayo": "майонез, 15 г",
-               "oil": "масло, 10 г"}
 
 
 def format_recipe_saved(saved: object) -> str:
@@ -374,25 +370,22 @@ def format_set_saved(meal: object, name: str) -> str:
 
 
 def format_photo_card(
-    plate: object, grams: list[float], *, weighed: bool,
-    fat: str | None = None, dressing: str | None = None,
+    plate: object, grams: list[float], *, weighed: bool, off: list[int] | None = None,
 ) -> str:
     """FR-34: что увидели на фото и чего ждём. Калорий нет — их посчитает разбор
     после «Записать», и цифра до записи разошлась бы с цифрой после (INV-1)."""
     lines = [f"📷 <b>{escape(plate.dish or 'Блюдо')}</b> · "
              + ("взвешено" if weighed else "вес на глаз")]
-    for c, g in zip(plate.components, grams, strict=True):
-        lines.append(f"• {escape(c.name)} — {g:g} г")
-    lines.append(f"Всего {sum(grams):g} г")
+    off = off or []
+    for i, (c, g) in enumerate(zip(plate.components, grams, strict=True)):
+        note = f" · {escape(c.note)}" if getattr(c, "note", "") else ""
+        line = f"{escape(c.name)} — {g:g} г{note}"
+        lines.append(f"• <s>{line}</s>" if i in off else f"• {line}")
+    lines.append(f"Всего {sum(g for i, g in enumerate(grams) if i not in off):g} г")
     if not weighed:
         lines.append("\nВзвешивал? Пришли вес тарелки числом — пересчитаю, "
                      "так точнее.")
-    if plate.ask_fat:
-        oil = plate.fat_kind.replace("масло ", "") if plate.fat_kind else ""
-        answer = _FAT_WORD.get(fat or "", "❔ отметь кнопкой")
-        lines.append(f"\nМасло при готовке{f' ({escape(oil)})' if oil else ''}: {answer}")
-    if plate.ask_dressing:
-        lines.append(f"Заправка: {_DRESS_WORD.get(dressing or '', '❔ отметь кнопкой')}")
+    lines.append("\nНе ел что-то из списка — убери кнопкой ✖ ниже.")
     return "\n".join(lines)
 
 

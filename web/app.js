@@ -3345,21 +3345,16 @@
      граммы: пересчёт общего веса — умножение граммов, а не калорий, поэтому
      INV-1 не задет. Калорий здесь нет вовсе: их посчитает разбор после
      «Записать», и цифра до записи разошлась бы с цифрой после. */
-  var FAT_CHIPS = [['none', 'Без масла'], ['little', 'Немного · 5 г'],
-                   ['spoon', 'Ложка · 10 г'], ['lots', 'Много · 20 г']];
-  var DRESS_CHIPS = [['none', 'Без'], ['sour_cream', 'Сметана · 20 г'],
-                     ['mayo', 'Майонез · 15 г'], ['oil', 'Масло · 10 г']];
 
   function photoState(res) {
     return {
       draft_id: res.draft_id, dish: res.dish, weighed: !!res.weighed,
-      ask_fat: !!res.ask_fat, ask_dressing: !!res.ask_dressing, liquid: !!res.liquid,
-      fat_kind: res.fat_kind || '',
+      liquid: !!res.liquid,
       items: (res.components || []).map(function (c) {
         return { i: c.i, name: c.name, grams: String(Math.round(c.grams)), off: false,
-                 fixed: !!c.fixed };
+                 fixed: !!c.fixed, note: c.note || '' };
       }),
-      fat: null, dressing: null, missing: false, base: null
+      base: null
     };
   }
 
@@ -3369,18 +3364,12 @@
     }, 0);
   }
 
-  function pickChips(list, current, attr, label) {
-    return '<div class="chips wrap" role="group" aria-label="' + esc(label) + '">' +
-      list.map(function (o) {
-        return '<button class="chip" ' + attr + '="' + o[0] + '" aria-pressed="' +
-          (current === o[0]) + '">' + esc(o[1]) + '</button>';
-      }).join('') + '</div>';
-  }
-
   function photoCard(p) {
     var rows = p.items.map(function (it, k) {
       return '<div class="prow' + (it.off ? ' off' : '') + '">' +
-        '<span class="pname">' + esc(it.name) + '</span>' +
+        /* D-MA-20: масло «на готовку» — строкой списка, без вопроса; лишнее убирается ✕. */
+        '<span class="pname">' + esc(it.name) +
+          (it.note ? ' <span class="g">· ' + esc(it.note) + '</span>' : '') + '</span>' +
         (it.off
           ? '<button class="px" data-pback="' + k + '" aria-label="Вернуть ' + esc(it.name) +
             '">Вернуть</button>'
@@ -3393,10 +3382,6 @@
             'aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>') +
         '</div>';
     }).join('');
-    var ask = function (text, missing) {
-      return '<div class="mic pq' + (missing ? ' need' : '') + '">' + text + '</div>';
-    };
-    var oil = p.fat_kind ? p.fat_kind.replace('масло ', '') : '';
     return '<section class="card just photo" style="margin-top:var(--s-3)">' +
       '<div class="ttl">С фото: ' + esc(p.dish || 'блюдо') + '</div>' +
       '<div class="mic" id="pmark" style="margin-top:4px">' +
@@ -3408,15 +3393,6 @@
         '<span class="g">г</span><span class="px" aria-hidden="true"></span>' +
       '</div>' +
       rows +
-      (p.ask_fat
-        ? ask('Масло при готовке?' + (oil ? ' <span class="g">(' + esc(oil) + ')</span>' : ''),
-              p.missing && !p.fat) +
-          pickChips(FAT_CHIPS, p.fat, 'data-pfat', 'Масло при готовке')
-        : '') +
-      (p.ask_dressing
-        ? ask('Заправка?', p.missing && !p.dressing) +
-          pickChips(DRESS_CHIPS, p.dressing, 'data-pdress', 'Заправка')
-        : '') +
       (p.weighed ? '' :
         '<div class="mic" style="margin-top:var(--s-3);line-height:1.5">' +
         'Взвесь тарелку и впиши вес — так точнее.</div>') +
@@ -3474,14 +3450,6 @@
       var g = Number(it.grams);
       return !(g >= 1 && g <= 3000);
     })) { toast('Граммы — от 1 до 3000 на позицию.', true); return; }
-    /* Масло на фото не видно, а это главный недосчёт у всех фото-трекеров
-       (D-MA-11). Молчаливое «без масла» записало бы ровно ту ошибку, ради
-       которой вопрос задан, — поэтому без ответа не пишем. */
-    if ((p.ask_fat && !p.fat) || (p.ask_dressing && !p.dressing)) {
-      p.missing = true;
-      toast('Отметь, было ли масло или заправка — на фото их не видно.', true);
-      return repaintDay();
-    }
     state.sending = true;
     var id = 'photo:' + p.draft_id;
     busy('Записываю…');
@@ -3490,7 +3458,7 @@
       body: JSON.stringify({
         draft_id: p.draft_id,
         components: kept.map(function (it) { return { i: it.i, grams: Number(it.grams) }; }),
-        fat: p.fat, dressing: p.dressing, weighed: p.weighed
+        weighed: p.weighed
       })
     }).then(function (r) { dropKey(id); return handle(r); })
       .catch(function (e) {
@@ -4127,8 +4095,6 @@
           .catch(function (err) { toast(err.message, true); });
       });
     }
-    if (b.dataset.pfat) { state.photo.fat = b.dataset.pfat; return repaintDay(); }
-    if (b.dataset.pdress) { state.photo.dressing = b.dataset.pdress; return repaintDay(); }
     if (b.dataset.pdrop) {
       state.photo.items[Number(b.dataset.pdrop)].off = true;
       state.photo.base = null;
