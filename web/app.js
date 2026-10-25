@@ -2758,21 +2758,24 @@
      сервер по медиане граммовки за 30 дней. */
   function chips() {
     var xs = state.frequent || [], ss = state.sets || [];
-    if (!xs.length && !ss.length) return '';
-    /* FR-39.2, макет A: свои наборы — первыми. Тап пишет состав целиком, без модели. */
-    var sets = ss.map(function (x) {
-      return '<button class="chip" data-set="' + esc(x.name) + '">' + esc(x.name) +
-        ' <span class="g">· ' + n(x.kcal) + ' ккал</span></button>';
-    }).join('');
-    return '<div class="chips">' + sets + xs.map(function (i) {
+    /* Один рейтинг (FR-40, §6.26): набор встаёт рядом с продуктами по числу раз за 30 дней, а
+       не первым; несъеденный за окно — только в «Моё». sort устойчивый: ничья — продукт выше. */
+    var all = xs.map(function (i) {
       /* Есть product_id — пишем мгновенно, без модели. Нет (продукт не
          запиннен) — падаем на обычный путь через текст. */
       var attr = i.product_id
         ? 'data-quick="' + i.product_id + '" data-grams="' + i.grams + '"'
         : 'data-say="' + esc(i.name + ' ' + n(i.grams) + ' г') + '"';
-      return '<button class="chip" ' + attr + '>' +
-        esc(i.name) + ' <span class="g">· ' + n(i.grams) + ' г</span></button>';
-    }).join('') + '</div>';
+      return { t: i.times || 0, html: '<button class="chip" ' + attr + '>' +
+        esc(i.name) + ' <span class="g">· ' + n(i.grams) + ' г</span></button>' };
+    }).concat(ss.filter(function (x) { return x.uses_30d > 0; }).map(function (x) {
+      /* FR-39.2, макет A: тап по набору пишет состав целиком, без модели. */
+      return { t: x.uses_30d, html: '<button class="chip" data-set="' + esc(x.name) + '">' +
+        esc(x.name) + ' <span class="g">· ' + n(x.kcal) + ' ккал</span></button>' };
+    }));
+    if (!all.length) return '';
+    all.sort(function (a, b) { return b.t - a.t; });
+    return '<div class="chips">' + all.map(function (c) { return c.html; }).join('') + '</div>';
   }
 
   function loadFrequent() {

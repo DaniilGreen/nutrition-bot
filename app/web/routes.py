@@ -1161,11 +1161,17 @@ def _stated_json(s: StatedUse, user: User) -> dict[str, Any]:
 
 @router.get("/sets")
 async def sets(user: CurrentUser, assistant: CurrentAssistant) -> dict[str, Any]:
-    """FR-39.5: свои наборы для «Моё». Состав — чтобы было видно, что внутри, без захода."""
+    """FR-39.5: свои наборы для «Моё». Состав — чтобы было видно, что внутри, без захода.
+    `uses_30d` — сколько раз ели за 30 дней: по нему чипы ставят набор в общий рейтинг (§6.26)."""
+    recent = {
+        (m.template_name or "").casefold(): n
+        for m, n in await assistant.recent_sets(user, days=30)
+    }
     return {
         "items": [
             {
                 "name": m.template_name,
+                "uses_30d": recent.get((m.template_name or "").casefold(), 0),
                 "kcal": round(m.totals.kcal, 1),
                 "protein_g": round(m.totals.protein, 1),
                 "fat_g": round(m.totals.fat, 1),

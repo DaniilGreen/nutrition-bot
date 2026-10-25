@@ -154,3 +154,15 @@ async def test_bad_composition_is_refused(client, fake_container, bad):
         r = await c.post("/api/sets/log", headers=_hdr(), json={"name": SET, "items": bad})
 
     assert r.status_code == 400
+
+
+async def test_sets_report_uses_within_30_days(client, fake_container):
+    """Чипы ставят набор в общий рейтинг по `uses_30d` (FR-40, §6.26): давний набор — 0."""
+    async with client as c:
+        uid = await _login(c)
+        for ago in (60, 120):
+            await fake_container.meals.add(_wrap(uid, name=SET, ago_min=ago))
+        await fake_container.meals.add(_wrap(uid, name="Бургер", ago_min=60 * 24 * 31))
+        sets = (await c.get("/api/sets", headers=_hdr())).json()["items"]
+
+    assert {s["name"]: s["uses_30d"] for s in sets} == {SET: 2, "Бургер": 0}
