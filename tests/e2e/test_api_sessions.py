@@ -90,7 +90,7 @@ async def test_день_отдаёт_приёмы_пищи_дополнител�
 
 
 async def test_сохранить_приём_пищи_набором(client, fake_container):
-    """AC-181: одна запись с пятью позициями, остальные удалены, набор в «Моё»."""
+    """AC-181: одна НОВАЯ запись с пятью позициями, все прежние удалены, набор в «Моё»."""
     async with client as c:
         uid = await _login(c)
         burger = await _burger(fake_container, uid)
@@ -104,10 +104,12 @@ async def test_сохранить_приём_пищи_набором(client, fak
     body = r.json()
     assert r.status_code == 200, body
     assert body["kind"] == "set_saved" and body["name"] == "бургер"
-    assert body["meal"]["id"] == ids[0] and sorted(body["merged_ids"]) == ids[1:]
+    assert body["meal"]["id"] not in ids and sorted(body["merged_ids"]) == ids
+    assert body["totals"] == before  # остаток дня тот же
     assert [i["name"] for i in body["meal"]["items"]] == ["сыр", "сыр", "лаваш", "помидор",
                                                          "курица"]
-    assert [m["id"] for m in day["meals"]] == [ids[0]]
+    assert [m["id"] for m in day["meals"]] == [body["meal"]["id"]]
+    assert day["meals"][0]["at"] == "12:00"
     assert day["sessions"][0]["template_name"] == "бургер"
     assert day["totals"]["kcal"] == pytest.approx(before["kcal"], abs=0.1)
     assert [s["name"] for s in sets] == ["бургер"]
@@ -127,6 +129,18 @@ async def test_не_тот_приём_пищи_409(client, fake_container, pick)
         day = (await c.get("/api/day?days_ago=1", headers=_hdr())).json()
     assert r.status_code == 409 and r.json()["error"]["code"] == "not_a_session"
     assert len(day["meals"]) == 6
+    # MA-INV-79: рядом с ошибкой — текущий приём пищи первой живой записи, в форме sessions[].
+    want = [m["id"] for m in day["meals"][:5]]
+    assert r.json()["session"]["meal_ids"] == want
+
+
+async def test_409_без_живых_записей_session_null(client, fake_container):
+    async with client as c:
+        await _login(c)
+        r = await c.post("/api/sessions/template", json={"meal_ids": [777], "name": "x"},
+                         headers=_hdr())
+    assert r.status_code == 409 and r.json()["session"] is None
+    assert r.json()["error"]["code"] == "not_a_session"
 
 
 @pytest.mark.parametrize("body,code", [
@@ -135,7 +149,7 @@ async def test_не_тот_приём_пищи_409(client, fake_container, pick)
     ({"meal_ids": ["1"], "name": "x"}, "bad_meal_ids"),
     ({"meal_ids": [True], "name": "x"}, "bad_meal_ids"),
     ({"meal_ids": 7, "name": "x"}, "bad_meal_ids"),
-    ({"meal_ids": list(range(1, 52)), "name": "x"}, "bad_meal_ids"),
+    ({"meal_ids": list(range(1, 202)), "name": "x"}, "bad_meal_ids"),
     ({"meal_ids": [1], "name": ""}, "bad_name"),
     ({"meal_ids": [1], "name": "я" * 65}, "bad_name"),
 ])
@@ -224,3 +238,19 @@ async def test_вернуть_после_правки_отказывает(clien
                                                macros=Macros(110, 4, 1, 22))
         back = await c.post("/api/meals/restore", json={"undo": d["undo"]}, headers=_hdr())
     assert back.status_code == 409 and back.json()["error"]["code"] == "undo_stale"
+
+
+async def test_вернуть_чужого_приёма_пищи_после_слияния_200(client, fake_container):
+    """AC-202: удалённая запись ДРУГОГО приёма пищи возвращается и после слияния."""
+    async with client as c:
+        uid = await _login(c)
+        burger = await _burger(fake_container, uid)
+        tea = await _record(fake_container, uid, 180, _item("чай", 200, 2))
+        d = (await c.delete(f"/api/meals/{tea.id}", headers=_hdr())).json()
+        r = await c.post("/api/sessions/template",
+                         json={"meal_ids": [m.id for m in burger], "name": "бургер"},
+                         headers=_hdr())
+        back = await c.post("/api/meals/restore", json={"undo": d["undo"]}, headers=_hdr())
+        day = (await c.get("/api/day?days_ago=1", headers=_hdr())).json()
+    assert r.status_code == 200 and back.status_code == 200
+    assert [len(s["meal_ids"]) for s in day["sessions"]] == [1, 1]

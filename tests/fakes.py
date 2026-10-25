@@ -411,35 +411,46 @@ class InMemoryMealRepo:
         self._meals.remove(last)
         return last
 
-    async def set_template(self, user_id: int, meal_id: int, name: str) -> Meal | None:
+    async def set_template(
+        self, user_id: int, meal_id: int, name: str, *, at: datetime | None = None
+    ) -> Meal | None:
         meal = await self.get(user_id, meal_id)
         if meal is not None:
             meal.template_name = name
+            meal.template_at = at or datetime.now(UTC)
         return meal
 
-    async def merge_into(
-        self, user_id: int, target_id: int, source_ids: list[int], *,
-        raw_input: str, input_type: str, source_confidence: float, template_name: str,
+    async def lock(self, user_id: int, meal_ids: list[int]) -> list[Meal]:
+        return sorted((m for m in self._meals if m.id in meal_ids and m.user_id == user_id),
+                      key=lambda m: m.id or 0)
+
+    async def merge(
+        self, user_id: int, meal_ids: list[int], *, eaten_at: datetime,
+        created_at: datetime | None, input_type: str, raw_input: str, source_confidence: float,
+        template_name: str, template_at: datetime, totals: Macros,
     ) -> Meal | None:
-        ids = [target_id, *source_ids]
-        found = {m.id: m for m in self._meals if m.id in ids and m.user_id == user_id}
-        if len(set(ids)) != len(ids) or set(found) != set(ids):
+        found = {m.id: m for m in self._meals if m.id in meal_ids and m.user_id == user_id}
+        if len(set(meal_ids)) != len(meal_ids) or set(found) != set(meal_ids):
             return None  # как SQL: чего-то нет — ничего не меняем
-        target = found[target_id]
-        for sid in source_ids:
-            target.items.extend(found[sid].items)  # те же объекты позиций: id и снапшоты целы
-            self._meals.remove(found[sid])
-        target.raw_input, target.input_type = raw_input, input_type
-        target.source_confidence, target.template_name = source_confidence, template_name
-        target.totals = sum_macros(i.macros for i in target.items)
-        return target
+        self._seq += 1
+        new = Meal(  # как SQL: новая запись, те же объекты позиций — id и снапшоты целы
+            user_id=user_id, eaten_at=eaten_at, input_type=input_type, raw_input=raw_input,
+            items=[i for mid in meal_ids for i in found[mid].items],
+            source_confidence=source_confidence, totals=totals, template_name=template_name,
+            template_at=template_at, id=self._seq, created_at=created_at,
+        )
+        for mid in meal_ids:
+            self._meals.remove(found[mid])
+        self._meals.append(new)
+        return new
 
     async def latest_by_template(self, user_id: int, name: str) -> Meal | None:
         hits = [
             m for m in self._meals
             if m.user_id == user_id and (m.template_name or "").lower() == name.lower()
         ]
-        return max(hits, key=lambda m: m.eaten_at) if hits else None
+        # как SQL: coalesce(template_at, eaten_at), затем id (FR-47)
+        return max(hits, key=lambda m: (m.template_at or m.eaten_at, m.id or 0)) if hits else None
 
     async def template_names(self, user_id: int) -> list[str]:
         return sorted({

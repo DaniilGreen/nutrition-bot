@@ -36,7 +36,12 @@ from app.application.coach import (
 )
 from app.application.dto import SetPick, Unit
 from app.application.entities import Meal, Recipe, RecipeItem, StatedUse, User
-from app.application.meal_service import RecipeRejected, SessionRejected, meal_fingerprint
+from app.application.meal_service import (
+    RecipeRejected,
+    SessionRejected,
+    SnapshotStale,
+    meal_fingerprint,
+)
 from app.application.results import (
     BodyScanRead,
     ClarificationNeeded,
@@ -701,13 +706,13 @@ async def restore_meal(
     if entry is None or time.monotonic() - entry[0] > UNDO_TTL_S or entry[1].user_id != user.id:
         raise not_found("undo_expired", "Вернуть уже нельзя — прошло слишком много времени.")
     _TRASH.pop(str(body["undo"]), None)
-    snap = entry[1]
-    now = await assistant.get_meal(user, snap.id) if snap.id is not None else None
-    if meal_fingerprint(now) != entry[2]:
-        # MA-INV-80: запись с тех пор поправили или слили набором (FR-47) — снимок вернул бы
-        # поверх правки или задвоил бы позиции, уже лежащие в наборе.
-        raise ApiError(409, "undo_stale", "Приём уже поправили — вернуть нельзя.")
-    result = await assistant.restore_meal(user, snap)
+    try:
+        # MA-INV-80: сверка отпечатка и возврат — под блокировкой записи, в use-case. Запись с тех
+        # пор поправили или слили набором (FR-47) — снимок вернул бы поверх правки или задвоил бы
+        # позиции, уже лежащие в наборе.
+        result = await assistant.restore_meal(user, entry[1], expect=entry[2])
+    except SnapshotStale as exc:
+        raise ApiError(409, "undo_stale", "Приём уже поправили — вернуть нельзя.") from exc
     if result is None:
         raise not_found("undo_expired", "Вернуть уже нельзя.")
     return logged_json(result, user.timezone)
@@ -1284,7 +1289,8 @@ async def save_session_set(
         raise bad_request("bad_name", "Имя набора — от 1 до 64 символов.")
     raw = body.get("meal_ids")
     try:
-        if not isinstance(raw, list) or not 1 <= len(raw) <= 50:
+        # 200 — с запасом: за 2 часа приёма пищи (MAX_SPAN) столько записей не бывает.
+        if not isinstance(raw, list) or not 1 <= len(raw) <= 200:
             raise ValueError("список записей пуст или слишком длинный")
         ids = [_id(v) for v in raw]
         if len(set(ids)) != len(ids):
@@ -1297,17 +1303,21 @@ async def save_session_set(
         result = await assistant.save_session_as_set(user, ids, name)
     except SessionRejected as exc:
         if exc.code == "not_a_session":
-            raise ApiError(409, "not_a_session", "Приём пищи изменился — обнови экран.") from exc
+            now = session_json(0, exc.session, user.timezone) if exc.session else None
+            raise ApiError(409, "not_a_session", "Приём пищи изменился — обнови экран.",
+                           {"session": now}) from exc
         if exc.code == "bad_name":
             raise bad_request("bad_name", "Имя набора — от 1 до 64 символов.") from exc
         raise bad_request("bad_set", "Нужно хотя бы две позиции, и у каждой — вес.") from exc
-    # Успех = id совпали с приёмом пищи; всё, кроме выжившей самой ранней, слито и удалено.
-    gone = [i for i in ids if i != result.meal.id]
+    # Успех = id совпали с приёмом пищи. Одна запись — та же запись с именем; несколько — все
+    # прежние удалены, набор — новая запись (FR-47).
+    gone = [] if result.meal.id in ids else ids
     return idem.remember({
         "kind": "set_saved",
         "name": result.meal.template_name,
         "meal": meal_json(result.meal, user.timezone),
         "merged_ids": gone,
+        "totals": remaining_json(result.remaining),
     })
 
 

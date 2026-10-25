@@ -256,24 +256,30 @@ class MealRepo(Protocol):
 
     async def get(self, user_id: int, meal_id: int) -> Meal | None: ...
 
-    async def set_template(self, user_id: int, meal_id: int, name: str) -> Meal | None:
-        """FR-39.2: дать приёму имя блюда своей сборки."""
+    async def set_template(
+        self, user_id: int, meal_id: int, name: str, *, at: datetime | None = None
+    ) -> Meal | None:
+        """FR-39.2: дать приёму имя блюда своей сборки; `at` — метка `template_at` (FR-47)."""
         ...
 
     async def latest_by_template(self, user_id: int, name: str) -> Meal | None:
         """Самый свежий приём с этим именем — источник для повтора."""
         ...
 
-    async def merge_into(
-        self, user_id: int, target_id: int, source_ids: list[int], *,
-        raw_input: str, input_type: str, source_confidence: float, template_name: str,
-    ) -> Meal | None:
-        """FR-47: позиции записей `source_ids` переезжают в `target_id` со своими id и снапшотами
-        (INV-3), источники удаляются, итоги цели — сумма позиций, поля цели — переданные.
+    async def lock(self, user_id: int, meal_ids: list[int]) -> list[Meal]:
+        """Свои записи из `meal_ids`, заблокированные до конца транзакции (FOR UPDATE, по
+        возрастанию id), свежими. Чего нет или чужое — просто не вернётся (FR-47)."""
+        ...
 
-        Всё в транзакции вызывающего; строки записей блокируются до её конца. None — какой-то
-        записи нет (или она чужая, или параллельный запрос её уже слил): тогда НИЧЕГО не меняется.
-        """
+    async def merge(
+        self, user_id: int, meal_ids: list[int], *, eaten_at: datetime,
+        created_at: datetime | None, input_type: str, raw_input: str, source_confidence: float,
+        template_name: str, template_at: datetime, totals: Macros,
+    ) -> Meal | None:
+        """FR-47: записи `meal_ids` → одна НОВАЯ запись с этими полями; позиции переезжают в неё
+        в порядке `meal_ids` со своими id и снапшотами (INV-3), прежние записи удаляются. None —
+        какой-то записи нет (или она чужая): тогда НИЧЕГО не меняется. В транзакции вызывающего,
+        под той же блокировкой, что `lock`."""
         ...
 
     async def template_names(self, user_id: int) -> list[str]: ...

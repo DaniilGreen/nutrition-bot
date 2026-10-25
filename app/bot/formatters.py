@@ -176,11 +176,11 @@ def _format_weight_trend(t: WeightTrend) -> str:
 def _format_stats(r: DailyStats) -> str:
     if r.meals_count == 0:
         return (
-            "📊 Сегодня пока пусто.\nЗапиши приём — например «куриная грудка 250 г», "
+            "📊 Сегодня пока пусто.\nЗапиши еду — например «куриная грудка 250 г», "
             "наговори голосом или пришли фото этикетки 📷.\n\n" + _dashboard(r.remaining)
         )
     eaten = _eaten_lines(r.meals, r.timezone) if r.meals else ""
-    return f"📊 Сегодня · приёмов: {r.meals_count}\n{eaten}\n{_dashboard(r.remaining)}"
+    return f"📊 Сегодня · записей: {r.meals_count}\n{eaten}\n{_dashboard(r.remaining)}"
 
 
 def _eaten_lines(meals: list[Meal], tz_name: str) -> str:
@@ -192,13 +192,13 @@ def _eaten_lines(meals: list[Meal], tz_name: str) -> str:
         for it in m.items:
             g = f"{_n(it.grams)} г · " if it.grams else ""
             rows.append(f" {when} · {_esc(it.name_snapshot)} — {g}{_n(it.macros.kcal)} ккал")
-            when = "     "  # последующие позиции приёма — без повтора времени
+            when = "     "  # последующие позиции записи — без повтора времени
     return "<code>" + "\n".join(rows) + "</code>\n"
 
 
 def _format_weekly(r: WeeklyStats) -> str:
     if r.days_logged == 0:
-        return "📈 За неделю пока нет записей. Запиши пару приёмов — и покажу среднее в день."
+        return "📈 За неделю пока нет записей. Запиши еду пару дней — и покажу среднее в день."
     days = r.days_logged or 1
     c = r.consumed
     g = r.goal
@@ -211,7 +211,7 @@ def _format_weekly(r: WeeklyStats) -> str:
         ]
     )
     return (
-        f"📈 Неделя · {r.days_logged} дн · приёмов {r.meals_count}\n"
+        f"📈 Неделя · {r.days_logged} дн · записей {r.meals_count}\n"
         "среднее в день:\n"
         f"<code>{rows}</code>"
     )

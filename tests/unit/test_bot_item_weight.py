@@ -220,7 +220,7 @@ async def test_пресет_масштабирует_граммы_и_кбжу(ri
     _, html, kb = rich.await_args.args
     assert html.startswith("<h3>✏️ Поправил") and f"{grams} г" in html  # MA-INV-70
     assert _texts(kb)[:2] == ["🔁 Повторить", "✏️ Вес"]
-    assert "приём теперь" in rich.await_args.kwargs["fallback_text"]
+    assert "запись теперь" in rich.await_args.kwargs["fallback_text"]
 
 
 def test_числа_пресетов_как_у_чипов_аппки():
@@ -440,7 +440,7 @@ async def test_позиция_без_веса_и_удалённая_не_пиш�
     assert "гречка" not in html and "✏️ Вес" not in _texts(kb)
 
     await w.assistant.delete_meal(w.user, src.id)
-    assert _answers(await _tap(w, f"iw:{src.id}:{buck.id}:75")) == ["Запись уже удалена."]
+    assert _answers(await _tap(w, f"iw:{src.id}:{buck.id}:75")) == [handlers._GONE_CARD]
     for bad in ("iw:x", "iw", "iw:1:2:3:4", f"iw:{src.id}:²", f"iw:{src.id}:back:1"):
         assert _answers(await _tap(w, bad)) == ["Кнопка устарела."]
 

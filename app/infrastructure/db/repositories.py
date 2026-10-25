@@ -77,6 +77,7 @@ def _meal_to_domain(o: MealORM) -> Meal:
         raw_input=o.raw_input,
         source_confidence=o.source_confidence,
         template_name=o.template_name,
+        template_at=o.template_at,
         totals=Macros(o.total_kcal, o.total_protein, o.total_fat, o.total_carb),
         items=[
             MealItem(
@@ -628,6 +629,7 @@ class SqlMealRepo:
             raw_input=meal.raw_input,
             source_confidence=meal.source_confidence,
             template_name=meal.template_name,
+            template_at=meal.template_at,
             total_kcal=meal.totals.kcal,
             total_protein=meal.totals.protein,
             total_fat=meal.totals.fat,
@@ -683,63 +685,79 @@ class SqlMealRepo:
         )
         return await self._delete_orm(res.scalar_one_or_none())
 
-    async def set_template(self, user_id: int, meal_id: int, name: str) -> Meal | None:
-        """FR-39.2: дать приёму имя блюда. Сам приём не трогаем — только ярлык (INV-3)."""
+    async def set_template(
+        self, user_id: int, meal_id: int, name: str, *, at: datetime | None = None
+    ) -> Meal | None:
+        """FR-39.2: дать приёму имя блюда. Сам приём не трогаем — только ярлык (INV-3) и метку
+        `template_at` (FR-47): явно названный состав становится набором."""
         orm = await self._s.get(MealORM, meal_id)
         if orm is None or orm.user_id != user_id:
             return None
         orm.template_name = name
+        orm.template_at = at or datetime.now(UTC)
         await self._s.flush()
         return _meal_to_domain(orm)
 
-    async def merge_into(
-        self, user_id: int, target_id: int, source_ids: list[int], *,
-        raw_input: str, input_type: str, source_confidence: float, template_name: str,
-    ) -> Meal | None:
-        """FR-47: слить записи приёма пищи в одну. Позиции перепривязываются (UPDATE meal_id),
-        а не копируются: id и снапшоты те же (INV-3).
-
-        `FOR UPDATE` — защита от двойного слияния: второй параллельный запрос ждёт первого и
-        после его фиксации записей-источников уже не находит → None до любой записи.
-        `populate_existing` — объекты в сессии могли быть прочитаны до блокировки.
-        """
-        ids = [target_id, *source_ids]
-        res = await self._s.execute(
+    def _locked(self, user_id: int, meal_ids: list[int]):
+        """Свои записи под `FOR UPDATE`, по возрастанию id — один порядок у всех пишущих путей,
+        иначе две транзакции, берущие записи в разном порядке, ждали бы друг друга вечно.
+        `populate_existing` — в сессии могли лежать объекты, прочитанные до блокировки."""
+        return (
             select(MealORM)
-            .where(MealORM.id.in_(ids), MealORM.user_id == user_id)
+            .where(MealORM.id.in_(meal_ids), MealORM.user_id == user_id)
+            .order_by(MealORM.id)
             .with_for_update()
             .execution_options(populate_existing=True)
         )
+
+    async def lock(self, user_id: int, meal_ids: list[int]) -> list[Meal]:
+        res = await self._s.execute(self._locked(user_id, meal_ids))
+        return [_meal_to_domain(o) for o in res.scalars().all()]
+
+    async def merge(
+        self, user_id: int, meal_ids: list[int], *, eaten_at: datetime,
+        created_at: datetime | None, input_type: str, raw_input: str, source_confidence: float,
+        template_name: str, template_at: datetime, totals: Macros,
+    ) -> Meal | None:
+        """FR-47: записи `meal_ids` → одна НОВАЯ запись. Позиции перепривязываются (UPDATE
+        meal_id), а не копируются: id и снапшоты те же (INV-3). Все прежние записи удаляются —
+        старые кнопки с их id отказывают, а не действуют на весь набор. Итоги — переданные
+        (точная сумма итогов записей), позиции заново не складываются."""
+        res = await self._s.execute(self._locked(user_id, meal_ids))
         found = {o.id: o for o in res.scalars().all()}
-        if len(set(ids)) != len(ids) or set(found) != set(ids):
+        if len(set(meal_ids)) != len(meal_ids) or set(found) != set(meal_ids):
             return None
-        target = found[target_id]
-        for sid in source_ids:
-            src = found[sid]
-            # Явно из коллекции в коллекцию, а не `item.meal = target`: обратная связь не убрала
-            # бы позицию из незагруженной стороны, и каскад удаления источника снёс бы её. Позиция
+        new = MealORM(
+            user_id=user_id, eaten_at=eaten_at, input_type=input_type, raw_input=raw_input,
+            source_confidence=source_confidence, template_name=template_name,
+            template_at=template_at, total_kcal=totals.kcal, total_protein=totals.protein,
+            total_fat=totals.fat, total_carb=totals.carb,
+        )
+        if created_at is not None:
+            new.created_at = created_at
+        new.items = []
+        self._s.add(new)
+        for mid in meal_ids:
+            src = found[mid]
+            # Явно из коллекции в коллекцию, а не `item.meal = new`: обратная связь не убрала бы
+            # позицию из незагруженной стороны, и каскад удаления источника снёс бы её. Позиция
             # с новым родителем — не сирота, delete-orphan её не трогает.
             moved = list(src.items)
             src.items.clear()
-            target.items.extend(moved)
+            new.items.extend(moved)
             await self._s.delete(src)
-        target.raw_input = raw_input
-        target.input_type = input_type
-        target.source_confidence = source_confidence
-        target.template_name = template_name
-        target.total_kcal = round(sum(i.kcal for i in target.items), 1)
-        target.total_protein = round(sum(i.protein for i in target.items), 1)
-        target.total_fat = round(sum(i.fat for i in target.items), 1)
-        target.total_carb = round(sum(i.carb for i in target.items), 1)
         await self._s.flush()
-        return _meal_to_domain(target)
+        return _meal_to_domain(new)
 
     async def latest_by_template(self, user_id: int, name: str) -> Meal | None:
         """Самый свежий приём с этим именем: поменял состав и сохранил заново — идёт новый."""
         res = await self._s.execute(
             select(MealORM)
             .where(MealORM.user_id == user_id, func.lower(MealORM.template_name) == name.lower())
-            .order_by(MealORM.eaten_at.desc())
+            # FR-47: явно сохранённый состав (метка) побеждает и вчерашним днём; без метки —
+            # как раньше, по времени еды (повтор, записи до 0017).
+            .order_by(func.coalesce(MealORM.template_at, MealORM.eaten_at).desc(),
+                      MealORM.id.desc())
             .limit(1)
         )
         orm = res.scalars().first()
@@ -767,9 +785,8 @@ class SqlMealRepo:
         return await self._delete_orm(res.scalar_one_or_none())
 
     async def remove_item(self, user_id: int, meal_id: int, item_id: int) -> Meal | None:
-        res = await self._s.execute(
-            select(MealORM).where(MealORM.id == meal_id, MealORM.user_id == user_id)
-        )
+        # FR-47: та же блокировка записи, что у слияния, — итоги считаются по свежим позициям.
+        res = await self._s.execute(self._locked(user_id, [meal_id]))
         orm = res.scalar_one_or_none()
         if orm is None:
             return None
@@ -793,9 +810,8 @@ class SqlMealRepo:
     async def replace_item(
         self, user_id: int, meal_id: int, item_id: int, items: list[MealItem]
     ) -> Meal | None:
-        res = await self._s.execute(
-            select(MealORM).where(MealORM.id == meal_id, MealORM.user_id == user_id)
-        )
+        # FR-47: та же блокировка записи, что у слияния, — итоги считаются по свежим позициям.
+        res = await self._s.execute(self._locked(user_id, [meal_id]))
         orm = res.scalar_one_or_none()
         old = next((i for i in orm.items if i.id == item_id), None) if orm else None
         if orm is None or old is None or not items:
@@ -817,9 +833,8 @@ class SqlMealRepo:
     async def update_item(
         self, user_id: int, meal_id: int, item_id: int, *, grams: float, macros: Macros
     ) -> Meal | None:
-        res = await self._s.execute(
-            select(MealORM).where(MealORM.id == meal_id, MealORM.user_id == user_id)
-        )
+        # FR-47: та же блокировка записи, что у слияния, — итоги считаются по свежим позициям.
+        res = await self._s.execute(self._locked(user_id, [meal_id]))
         orm = res.scalar_one_or_none()
         if orm is None:
             return None

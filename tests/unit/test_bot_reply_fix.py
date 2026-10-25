@@ -254,7 +254,7 @@ async def test_ответ_заменяет_позицию_той_карточк�
     assert card["message_id"] == 5 and card["rich_message"].html.startswith("<h3>✏️ Поправил")
     assert _texts(card["reply_markup"])[:3] == ["⏪ Вернуть: гречка", "🔁 Повторить", "✏️ Вес"]
     [trace] = _sent(msg)
-    assert trace.text == "✏️ Поправил: гречка → булгур 150 г · приём теперь 510 ккал"
+    assert trace.text == "✏️ Поправил: гречка → булгур 150 г · запись теперь 510 ккал"
     assert trace.reply_markup is None  # карточку приняли — кнопки на ней, не на следе
     assert not msg.bot.send_rich_message.await_count  # нового «✅ Записал» нет
 
@@ -267,7 +267,7 @@ async def test_вес_и_удаление_ответом_только_в_это�
     msg = await _say(w, _reply("гречки было 75", meal_actions_keyboard(a)))
     assert _items(a) == [("гречка", 75), ("курица", 120)] and _items(b) == [("гречка", 150)]
     assert a.items[0].macros == Macros(150, 10, 5, 15)  # снапшот × ratio (INV-3)
-    assert _sent(msg)[0].text == "✏️ гречка: было 150 г, стало 75 г · приём теперь 390 ккал"
+    assert _sent(msg)[0].text == "✏️ гречка: было 150 г, стало 75 г · запись теперь 390 ккал"
 
     w.nlu.queue = [_fix("adjust", _food("", 100, kcal=0))]  # «не 150, а 100» — имени нет
     await _say(w, _reply("не 150, а 100", meal_actions_keyboard(b)))
@@ -278,7 +278,7 @@ async def test_вес_и_удаление_ответом_только_в_это�
     assert _items(a) == [("курица", 120)] and _items(b) == [("гречка", 100)]
     [card] = _edits(msg)
     assert _texts(card["reply_markup"])[0] == "⏪ Вернуть: гречка"  # как у 🗑 (FR-41)
-    assert _sent(msg)[0].text == "🗑 Убрал: гречка · приём теперь 240 ккал"
+    assert _sent(msg)[0].text == "🗑 Убрал: гречка · запись теперь 240 ккал"
 
 
 async def test_удаление_последней_позиции_отменяет_запись_с_вернуть():
@@ -381,7 +381,7 @@ async def test_несколько_позиций_спрашивает_и_тап_
 
     cb = await _tap(w, _data(ask.reply_markup)[0])
     assert _items(a) == [("булгур", 150), ("курица", 120)] and w.nlu.calls == 1
-    assert _answers(cb) == ["✏️ Поправил: гречка → булгур 150 г · приём теперь 750 ккал"]
+    assert _answers(cb) == ["✏️ Поправил: гречка → булгур 150 г · запись теперь 750 ккал"]
     card, trace = _edits(cb)
     assert card["message_id"] == 5 and card["rich_message"].html.startswith("<h3>✏️ Поправил")
     assert trace["message_id"] == 7 and trace["text"].startswith("✏️ Поправил: гречка → булгур")
@@ -463,7 +463,7 @@ async def test_приём_удалён_и_имя_не_нашлось():
     kb = meal_actions_keyboard(a)
     await w.assistant.delete_meal(w.user, a.id)  # удалили в аппке
     msg = await _say(w, _reply("это был булгур", kb))
-    assert _sent(msg)[0].text == "Этой записи уже нет — поправлять нечего."
+    assert _sent(msg)[0].text == handlers._GONE_CARD
     assert w.nlu.calls == 0 and w.meals._meals == []  # модель не звали, ничего не записали
 
     b = await w.meals.add(_meal(w.user.id, _BUCK))
@@ -609,7 +609,7 @@ async def test_голое_число_ответом_вес_без_модели()
     a = await w.meals.add(_meal(w.user.id, _BUCK))
     msg = await _say(w, _reply("200", meal_actions_keyboard(a)))
     assert _items(a) == [("гречка", 200)] and w.nlu.calls == 0
-    assert _sent(msg)[0].text == "✏️ гречка: было 150 г, стало 200 г · приём теперь 400 ккал"
+    assert _sent(msg)[0].text == "✏️ гречка: было 150 г, стало 200 г · запись теперь 400 ккал"
     await _say(w, _reply("x2", meal_actions_keyboard(a)))
     assert _items(a) == [("гречка", 400)]
     msg = await _say(w, _reply("2", meal_actions_keyboard(a)))

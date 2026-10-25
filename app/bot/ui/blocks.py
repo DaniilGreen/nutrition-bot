@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+from app.application.results import MealSession
 from app.bot.ui import kit
 from app.bot.ui.context import DayContext, day_status
 from app.bot.ui.kit import e, n
@@ -103,10 +104,13 @@ def eaten(d: DayContext, *, open_: bool = False) -> str:
         mark = "≈ " if it.is_estimate else ""
         # Времени тут НЕТ намеренно: список отсортирован по калориям, а «12:30» впереди строки
         # обещает хронологию и путает. Хронология — в «Дне» и в ленте дизайна C.
-        lis.append(f"<li>{mark}{e(it.name_snapshot)} — {kit.g(it.grams)}<b>{n(kcal)}</b> ккал</li>")
-    k, items = d.today.meals_count, len(rows)
+        row = f"{mark}{e(it.name_snapshot)} — {kit.g(it.grams)}<b>{n(kcal)}</b> ккал"
+        lis.append(f"<li>{kit.with_macros(row, it.macros, est=it.is_estimate)}</li>")
+    # Счёт — приёмов пищи, а не записей (FR-47): бургер пятью сообщениями — один приём пищи.
+    # Сам список по времени не группируем — он по калориям, и группы сломали бы этот порядок.
+    k, items = len(MealSession.group(d.today.meals)), len(rows)
     head = (
-        f"🍽 Съедено · {k} {kit.plural(k, 'приём', 'приёма', 'приёмов')} · "
+        f"🍽 Съедено · {k} {kit.plural(k, 'приём пищи', 'приёма пищи', 'приёмов пищи')} · "
         f"{items} {kit.plural(items, 'позиция', 'позиции', 'позиций')}"
     )
     attr = " open" if open_ else ""

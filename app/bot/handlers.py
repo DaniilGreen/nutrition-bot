@@ -44,13 +44,19 @@ from app.application.body_scans import BodyScanService, from_reading
 from app.application.coach import LimitReached
 from app.application.dto import Unit
 from app.application.entities import Meal, MealItem, User
-from app.application.meal_service import items_named
+from app.application.meal_service import (
+    SessionRejected,
+    SnapshotStale,
+    items_named,
+    meal_fingerprint,
+)
 from app.application.ports import UserRepo
 from app.application.results import (
     BodyScanRead,
     ClarificationNeeded,
     CorrectionFailed,
     DailyStats,
+    DayView,
     DishSaved,
     ItemAdjusted,
     ItemPickNeeded,
@@ -58,6 +64,7 @@ from app.application.results import (
     LabelRead,
     MealCorrected,
     MealLogged,
+    MealSession,
     PlateRead,
     Result,
     Unknown,
@@ -90,6 +97,7 @@ from app.bot.keyboards import (
     DAY_REP_PREFIX,
     DAY_REPEAT_MODE,
     DISH_SAVE_PREFIX,
+    DISH_SESSION,
     FIX_PICK_PREFIX,
     FREQ_PREFIX,
     FREQ_TOP,
@@ -133,7 +141,15 @@ from app.bot.keyboards import (
 )
 from app.bot.states import MealStates, ProfileStates
 from app.bot.ui import gather, screens
-from app.domain.goals import Goal, goal_from_macros, goal_from_profile, rebalance, set_macro
+from app.bot.ui.kit import plural
+from app.domain.goals import (
+    Goal,
+    Remaining,
+    goal_from_macros,
+    goal_from_profile,
+    rebalance,
+    set_macro,
+)
 from app.domain.label_portion import label_grams
 from app.domain.plate import Component
 from app.domain.plate import split as plate_split
@@ -254,7 +270,7 @@ async def on_onboard_skip(
             await callback.message.edit_reply_markup(reply_markup=None)
         await callback.message.answer(
             "Ок! Пока считаю остаток от 2000 ккал/день. Настроить позже — кнопка ⚙️ Профиль.\n"
-            "Запиши первый приём, например «куриная грудка 250 г». Полная инструкция — /help",
+            "Запиши, что съел, например «куриная грудка 250 г». Полная инструкция — /help",
             reply_markup=main_menu_keyboard(),
         )
     await callback.answer()
@@ -412,7 +428,7 @@ async def cmd_week(
 async def cmd_card(message: Message, app_user: User, assistant: Assistant) -> None:
     """Карточка дня для шеринга — тот же экран дня, но без стрелок навигации."""
     rem, dv = await assistant.day_card(app_user)
-    await _rich(message, screens.day(dv, rem))
+    await _day_send(lambda html: _rich(message, html), dv, rem)
 
 
 @router.message(Command("streak"))
@@ -559,7 +575,7 @@ _FREQ_HEAD = "⚡ <b>Частое</b> — тап сразу запишет в с
 _FREQ_HEAD_SETS = "\n📌 — наборы, остальное — твоя обычная порция."
 _FREQ_EMPTY = (
     "⚡ Пока пусто — тут появится то, что ешь чаще всего.\n"
-    "Запиши пару приёмов как обычно; несколько позиций сохраняются «📌 Сохранить набор»."
+    "Запиши еду пару раз как обычно; несколько позиций сохраняются «📌 Сохранить набор»."
 )
 
 
@@ -588,7 +604,7 @@ async def btn_frequent(
 
 
 _BUG_PROMPT = "🐛 Опиши, что не так — одним сообщением. Приложу последние записи."
-_BUG_DONE = "🐛 Спасибо! Записал багрепорт и последние приёмы — гляну."
+_BUG_DONE = "🐛 Спасибо! Записал багрепорт и последние записи — гляну."
 
 
 @router.message(Command("bug"))
@@ -663,7 +679,7 @@ async def on_bug_photo(
     note = (message.caption or "").strip() or "[скриншот без описания]"
     await assistant.report_bug(app_user, f"{note}\n[скриншот file_id={fid}]")
     await session.commit()
-    await message.answer("🐛 Спасибо! Скриншот и последние приёмы записал — гляну.")
+    await message.answer("🐛 Спасибо! Скриншот и последние записи сохранил — гляну.")
 
 
 @router.message(MealStates.awaiting_bug, F.voice)
@@ -717,16 +733,183 @@ async def on_density_input(
     )
 
 
+# --- «📌 Сохранить набор» / «📌 Приём пищи — в набор» (FR-39.2, FR-47) ----------------------
+
+# Кнопка карточки записи, которой больше нет: слили набором (FR-47) или удалили — с её id писать
+# нечего, и «уже удалено» без причины пугало бы после слияния («я же ничего не удалял»).
+_GONE_CARD = "Запись вошла в набор или удалена — см. 🗒 История"
+_DISH_DROPPED = "📌 Имя набора — вопрос снят."
+_DISH_RENAME, _DISH_CANCEL, _DISH_RETRY = "", "x", "r"  # хвосты `dish_save:<id>[:…]`
+# FR-47: отказы по коду `SessionRejected` — ничего не слито.
+_SET_REFUSED = {
+    "not_a_session": "Приём пищи изменился — ничего не слил.",
+    "bad_set": "Набор не сохранил: нужно хотя бы две позиции, и у каждой — вес.",
+    "bad_name": "Имя набора — от 1 до 64 знаков. Нажми «📌» ещё раз.",
+}
+_ASK_TAIL = "Пришли имя — дальше оно запишет этот же состав."
+
+
+def _weighed(meals: list[Meal]) -> bool:
+    """FR-39.2: набор повторяет состав по граммам — позиций ≥ 2, у каждой вес."""
+    items = [i for m in meals for i in m.items]
+    return len(items) >= 2 and all(i.grams and i.grams > 0 for i in items)
+
+
+def _session_brief(sess: MealSession, tz_name: str) -> str:
+    """«с 13:05 — 5 записей, ≈513 ккал: сыр, лаваш, …» — что именно войдёт в набор. Вопрос и
+    отказ называют состав: приём пищи мог вырасти с тех пор, как нарисовали карточку, —
+    человек подтверждает этот состав, а не тот, что помнит."""
+    k = len(sess.meals)
+    when = sess.start.astimezone(ZoneInfo(tz_name)).strftime("%H:%M")
+    names = ", ".join(i.name_snapshot for m in sess.meals for i in m.items)
+    names = names if len(names) <= 200 else names[:199] + "…"
+    approx = "≈" if sess.estimated else ""
+    return (
+        f"с {when} — {k} {plural(k, 'запись', 'записи', 'записей')}, "
+        f"{approx}{round(sess.totals.kcal)} ккал: {escape(names, quote=False)}"
+    )
+
+
+def _session_ask(sess: MealSession, tz_name: str) -> str:
+    brief = _session_brief(sess, tz_name)
+    return f"📌 Как назвать набор? В него войдёт приём пищи {brief}. {_ASK_TAIL}"
+
+
+def _dish_kb(meal_id: int, tail: str, text: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text=text, callback_data=f"{DISH_SAVE_PREFIX}:{meal_id}:{tail}"
+    )]])
+
+
+async def _drop_dish_question(bot: Bot | None, chat_id: int, state: FSMContext) -> None:
+    """Снять висящий вопрос об имени (еда текстом, ответ на карточку, голос, фото, «✖️»):
+    состояние — сбросить, вопрос — в «вопрос снят» без кнопок, как у «✍️ Своё» (FR-43)."""
+    if await state.get_state() != MealStates.awaiting_dish_name.state:
+        return
+    data = await state.get_data()
+    await state.clear()
+    if bot is not None:
+        await _say_prompt(bot, chat_id, data.get("dish_prompt"), _DISH_DROPPED)
+
+
+@router.callback_query(F.data.startswith(f"{DISH_SAVE_PREFIX}:"))
+async def on_dish_save(
+    callback: CallbackQuery, app_user: User, assistant: Assistant, state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    """FR-39.2: «Сохранить набор» → спрашиваем имя; состав берём из самой записи.
+
+    FR-47: `:s` — «📌 Приём пищи — в набор». Приём пищи берём заново, называем в вопросе, и его id
+    фиксируем В МОМЕНТ ВОПРОСА: сохранится ровно то, что названо, а изменился он, пока человек
+    думал над именем, — сервер откажет `not_a_session` (D-MA-29). Распался до одной записи —
+    прежний путь этой записи. `:x` — «✖️ Отмена» вопроса, `:r` — «Сохранить как «имя»» из отказа."""
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+    parts = (callback.data or "").split(":")
+    try:
+        meal_id = int(parts[1])
+    except (IndexError, ValueError):
+        await callback.answer("Кнопка устарела.")
+        return
+    tail = parts[2] if len(parts) == 3 else _DISH_RENAME
+    if tail == _DISH_CANCEL:
+        await _dish_cancel(callback, state)
+        return
+    if tail == _DISH_RETRY:
+        await _dish_retry(callback, app_user, assistant, state, session, meal_id)
+        return
+    whole = tail == DISH_SESSION
+    sess = await _session(app_user, assistant, meal_id) if whole else None
+    meal = None if sess is not None else await assistant.get_meal(app_user, meal_id)
+    if sess is None and meal is None:
+        await callback.answer(_GONE_CARD)
+        return
+    if not _weighed(sess.meals if sess is not None else [meal]):  # вес пропал (правка в аппке)
+        await callback.answer(_SET_REFUSED["bad_set"], show_alert=True)
+        return
+    if sess is not None:
+        ask = _session_ask(sess, app_user.timezone)
+    elif meal is not None and meal.template_name:  # запись уже набор — переименовать (AC-209)
+        ask = f"✏️ Как переименовать набор «{escape(meal.template_name, quote=False)}»? {_ASK_TAIL}"
+    else:
+        ask = f"📌 Как назвать набор? {_ASK_TAIL}"
+    await _drop_dish_question(callback.message.bot, callback.message.chat.id, state)
+    prompt = await callback.message.answer(ask, reply_markup=_dish_kb(meal_id, "x", "✖️ Отмена"))
+    await state.set_state(MealStates.awaiting_dish_name)
+    await state.update_data(
+        dish_meal_id=meal_id, dish_session=sess.meal_ids if sess else None,
+        dish_prompt=prompt.message_id, dish_card=callback.message.message_id,
+    )
+    await callback.answer()
+
+
+async def _dish_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    """Своя отмена — не общая `wiz_cancel`: та сбросила бы вопрос ДРУГОЙ карточки."""
+    assert isinstance(callback.message, Message)
+    data = await state.get_data()
+    if (await state.get_state() == MealStates.awaiting_dish_name.state
+            and data.get("dish_prompt") == callback.message.message_id):
+        await _drop_dish_question(callback.message.bot, callback.message.chat.id, state)
+        await callback.answer("Отменил.")
+        return
+    await callback.answer("Уже не жду имя.")
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(reply_markup=None)
+
+
+async def _dish_retry(
+    callback: CallbackQuery, user: User, assistant: Assistant, state: FSMContext,
+    session: AsyncSession, meal_id: int,
+) -> None:
+    """«📌 Сохранить как «имя»» из отказа `not_a_session` (AC-208): тот состав, что назван в
+    отказе, и то имя, что человек уже написал, — второй раз его не спрашиваем."""
+    assert isinstance(callback.message, Message)
+    retry = (await state.get_data()).get("dish_retry") or {}
+    ids = [int(x) for x in retry.get("ids", [])]
+    if meal_id not in ids:
+        await callback.answer("Кнопка устарела — нажми «📌» на карточке.")
+        return
+    await state.update_data(dish_retry=None)
+    await callback.answer()
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(reply_markup=None)
+    await _save_session_set(
+        callback.message, user, assistant, state, session, ids, str(retry.get("name", "")),
+        retry.get("card"),
+    )
+
+
 @router.message(MealStates.awaiting_dish_name, F.text)
 async def on_dish_name_input(
-    message: Message, app_user: User, assistant: Assistant, state: FSMContext
+    message: Message, bot: Bot, app_user: User, assistant: Assistant, state: FSMContext,
+    session: AsyncSession,
 ) -> None:
-    """FR-39.2: имя блюда → ярлык на приёме. Дальше это имя повторяет состав (INV-3)."""
-    data = await state.get_data()
-    meal_id = int(data.get("dish_meal_id", 0))
-    await state.clear()
+    """FR-39.2: имя блюда → ярлык на записи. Дальше это имя повторяет состав (INV-3). FR-47:
+    вопрос был про приём пищи — его записи сливаются в одну с этим именем.
+
+    Вопрос не глотает еду (AC-205) — правило «✍️ Своё» (FR-43): именем считается только
+    короткий текст без цифр и единиц, одной строкой и не ответом на карточку. Остальное —
+    снять вопрос и разобрать как обычно (правка FR-44 или запись). Длиннее 64 — отказ, вопрос
+    ждёт: молча обрезанное имя повторялось бы по обрезку (AC-206)."""
     name = (message.text or "").strip()
-    saved = await assistant.remember_dish(app_user, meal_id, name)
+    if not name or "\n" in name or _AMOUNT_RE.search(name) or _replied_meal(message) is not None:
+        await _drop_dish_question(bot, message.chat.id, state)
+        await on_text(message, bot, app_user, assistant, session, state)
+        return
+    if len(name) > 64:
+        await message.answer(_SET_REFUSED["bad_name"])
+        return
+    data = await state.get_data()
+    await _drop_dish_question(None, message.chat.id, state)  # вопрос стал ответом — не «снят»
+    await _say_prompt(bot, message.chat.id, data.get("dish_prompt"),
+                      f"📌 Имя набора: «{escape(name, quote=False)}»")
+    ids = data.get("dish_session")
+    if ids:
+        await _save_session_set(message, app_user, assistant, state, session, list(ids), name,
+                                data.get("dish_card"))
+        return
+    saved = await assistant.remember_dish(app_user, int(data.get("dish_meal_id", 0)), name)
     if saved is None:
         await message.answer(
             "Набор не сохранил: нужно хотя бы две позиции, и у каждой — вес. "
@@ -734,6 +917,41 @@ async def on_dish_name_input(
         )
         return
     await message.answer(format_set_saved(saved, name), parse_mode="HTML")
+
+
+async def _save_session_set(
+    message: Message, user: User, assistant: Assistant, state: FSMContext,
+    session: AsyncSession, ids: list[int], name: str, card_id: object = None,
+) -> None:
+    """FR-47: слить приём пищи набором → новая карточка слитой записи; карточка, где нажали «📌»,
+    — «📌 Вошло в набор» без кнопок (AC-207). Отказ — коротко, ничего не слито: группу сверил
+    application (группировке бота не верим); `not_a_session` предлагает тот же «имя» на текущий
+    состав (AC-208)."""
+    try:
+        logged = await assistant.save_session_as_set(user, ids, name)
+    except SessionRejected as exc:
+        text, again = _SET_REFUSED.get(exc.code, _SET_REFUSED["bad_set"]), None
+        now = getattr(exc, "session", None)
+        if exc.code == "not_a_session" and now is not None and now.meal_ids and _weighed(now.meals):
+            text += f" Сейчас в нём: {_session_brief(now, user.timezone)}."
+            await state.update_data(dish_retry={"ids": now.meal_ids, "name": name, "card": card_id})
+            again = _dish_kb(now.meal_ids[-1], _DISH_RETRY,
+                             f"📌 Сохранить как «{name if len(name) <= 24 else name[:23] + '…'}»")
+        elif exc.code == "not_a_session":
+            text += " Нажми «📌» ещё раз."
+        await message.answer(text, reply_markup=again)
+        return
+    await session.commit()  # фиксируем ДО карточки — «📌 Набор» не врёт
+    bot = message.bot
+    if len(ids) > 1 and bot is not None:  # слили: прежняя карточка — след, а не живые кнопки
+        await _rich_edit_at(bot, message.chat.id, card_id,
+                            f"<h3>📌 Вошло в набор «{escape(name, quote=False)}»</h3>"
+                            "<p>Карточка набора — ниже.</p>", None)
+    ctx, sess = await gather(assistant, user), await _session(user, assistant, logged.meal.id)
+    await _rich(
+        message, screens.meal_card(ctx, logged, saved=True, session=sess),
+        meal_actions_keyboard(logged.meal, None, sess, trash=False),
+    )
 
 
 @router.message(MealStates.awaiting_rename, F.text)
@@ -812,7 +1030,7 @@ async def on_portion_text(
         await state.clear()
         await message.answer(
             "⏳ Этот вопрос уже неактуален (бот перезапускался или прошло время). "
-            "Отправь приём заново."
+            "Отправь еду заново."
         )
         return
 
@@ -860,7 +1078,7 @@ async def on_variant_text(
         await state.clear()
         await message.answer(
             "⏳ Этот вопрос уже неактуален (бот перезапускался или прошло время). "
-            "Отправь приём заново."
+            "Отправь еду заново."
         )
         return
 
@@ -912,8 +1130,11 @@ async def on_voice(
     state: FSMContext,
     container: Container | None = None,
 ) -> None:
-    # Не затираем незавершённый черновик голосом; вопрос «✍️ Своё» голос снимает (FR-43).
-    if await _busy_with_flow(message, state, supersedes=MealStates.awaiting_item_grams.state):
+    # Не затираем незавершённый черновик голосом; вопросы «✍️ Своё» (FR-43) и имени набора
+    # (FR-47) голос снимает — это новая еда, а не ответ.
+    if await _busy_with_flow(message, state, supersedes=(
+        MealStates.awaiting_item_grams.state, MealStates.awaiting_dish_name.state,
+    )):
         return
     await _drop_fix_question(bot, message.chat.id, state)  # «что заменить» голос снимает (FR-44)
     await state.clear()
@@ -963,7 +1184,8 @@ async def on_photo(
     if await _busy_with_flow(
         message, state,
         supersedes=(MealStates.awaiting_label_grams.state, MealStates.awaiting_photo.state,
-                    MealStates.awaiting_scan.state, MealStates.awaiting_item_grams.state),
+                    MealStates.awaiting_scan.state, MealStates.awaiting_item_grams.state,
+                    MealStates.awaiting_dish_name.state),
     ):
         return
     await _drop_fix_question(bot, message.chat.id, state)  # «что заменить» фото снимает (FR-44)
@@ -1376,7 +1598,7 @@ async def on_meal_repeat(callback: CallbackQuery, app_user: User, assistant: Ass
     meal_id = int((callback.data or "meal_repeat:0").split(":", 1)[1])
     result = await assistant.repeat_meal(app_user, meal_id)
     if result is None:
-        await callback.message.answer("Запись уже удалена — повторять нечего.")
+        await callback.message.answer(_GONE_CARD)
         return
     await _send_meal_card(callback.message, result, app_user, assistant)
 
@@ -1502,7 +1724,6 @@ async def on_frequent_tap(
 
 UNDO_TTL_S = 600  # то же окно, что у снимка аппки (MA-INV-69): одно число в обоих каналах
 _PICKER_HEAD = "Что отменить? (по позициям)"
-_GONE = "gone"
 _ALREADY = "Уже вернул."
 _EDITED = "Приём уже поправили — вернуть нельзя."
 
@@ -1514,7 +1735,7 @@ class _Undo:
     token: str
     at: float
     snapshot: Meal
-    after: object  # _fingerprint приёма сразу после удаления
+    after: object  # meal_fingerprint записи сразу после удаления
     what: str  # подпись кнопки «⏪ Вернуть: <что>» — чтобы пересобрать её из снимка
     done: str | None = None  # не None — снимок израсходован, это ответ на следующие тапы
     day: date | None = None  # удалили на экране «День» — какой день он показывал (FR-41)
@@ -1528,14 +1749,9 @@ class _Undo:
 _trash: dict[int, _Undo] = {}
 
 
-def _fingerprint(meal: Meal | None) -> object:
-    """Каким приём остался: имя набора, id, граммы и ккал позиций; удалён — _GONE. Правка словами,
-    удаление или «Вернуть» в аппке его меняют — и тогда снимок вернул бы не то (D-MA-23). Имя
-    набора — тоже: «📌 Сохранить набор» на обрезанной карточке, и снимок молча стёр бы его."""
-    if meal is None:
-        return _GONE
-    items = tuple(sorted((i.id or 0, i.grams, round(i.macros.kcal, 1)) for i in meal.items))
-    return meal.template_name, items
+# Отпечаток «какой запись осталась» — `meal_fingerprint` из application, один с аппкой (MA-INV-80):
+# правка словами, удаление, «Вернуть» в аппке, имя набора и слияние приёма пищи набором (FR-47) его
+# меняют — и тогда снимок вернул бы не то или задвоил позиции (D-MA-23).
 
 
 def _remember(user: User, snapshot: Meal, after: Meal | None, what: str) -> str:
@@ -1543,7 +1759,7 @@ def _remember(user: User, snapshot: Meal, after: Meal | None, what: str) -> str:
     и не показывает «Вернуть» того, что на деле не удалено."""
     assert user.id is not None
     token = secrets.token_urlsafe(6)  # 8 знаков: callback «rst:<токен>:d20261024» далеко от 64 байт
-    _trash[user.id] = _Undo(token, time.monotonic(), snapshot, _fingerprint(after), what)
+    _trash[user.id] = _Undo(token, time.monotonic(), snapshot, meal_fingerprint(after), what)
     return token
 
 
@@ -1559,7 +1775,7 @@ def _live_restore(
     «✏️ Вес» кнопка вернулась бы на карточку и только отказала (FR-43)."""
     undo = _trash.get(user.id or 0)
     if (undo is None or undo.done or undo.snapshot.id != meal_id
-            or time.monotonic() - undo.at > UNDO_TTL_S or _fingerprint(now) != undo.after):
+            or time.monotonic() - undo.at > UNDO_TTL_S or meal_fingerprint(now) != undo.after):
         return None
     return restore_button(undo.token, where, undo.what)
 
@@ -1573,7 +1789,7 @@ def _day_restore(user: User, day: date, meals: list[Meal]) -> InlineKeyboardButt
     if (undo is None or undo.done or undo.day != day
             or time.monotonic() - undo.at > UNDO_TTL_S):
         return None
-    if _fingerprint(next((m for m in meals if m.id == undo.snapshot.id), None)) != undo.after:
+    if meal_fingerprint(next((m for m in meals if m.id == undo.snapshot.id), None)) != undo.after:
         return None
     return restore_button(undo.token, f"d{day:%Y%m%d}", undo.what)
 
@@ -1659,11 +1875,11 @@ async def _redraw_card(message: Message, user: User, assistant: Assistant, meal_
     meal = await assistant.get_meal(user, meal_id)
     if meal is None:
         return
-    ctx = await gather(assistant, user)
+    ctx, sess = await gather(assistant, user), await _session(user, assistant, meal.id)
     logged = MealLogged(meal=meal, remaining=(await assistant.today(user)).remaining)
     await _rich_edit(
-        message, screens.meal_card(ctx, logged, edited=True),
-        meal_actions_keyboard(meal, _live_restore(user, meal_id, "c", meal)),
+        message, screens.meal_card(ctx, logged, edited=True, session=sess),
+        meal_actions_keyboard(meal, _live_restore(user, meal_id, "c", meal), sess),
     )
 
 
@@ -1696,7 +1912,7 @@ async def on_meal_undo(
     if result.meal is None:
         # Карточку не трогаем: на ней может висеть «⏪ Вернуть» первого тапа (FR-41). Пикер
         # перерисовываем из живых данных — со своей строкой и кнопкой.
-        await callback.answer("Уже удалено.")
+        await callback.answer(_GONE_CARD)
         if in_picker:
             await _redraw_picker(
                 callback.message, app_user, assistant,
@@ -1717,9 +1933,9 @@ async def on_meal_undo(
         await _rich_edit(
             callback.message, screens.meal_deleted(snapshot, app_user.timezone),
             InlineKeyboardMarkup(inline_keyboard=[[restore_button(token, "c", what)]]),
-            fallback_text=f"🗑 Отменил приём: {escape(what)} · {kcal} ккал",
+            fallback_text=f"🗑 Отменил запись: {escape(what)} · {kcal} ккал",
         )
-    await callback.answer(f"🗑 Отменил приём ({kcal} ккал)")
+    await callback.answer(f"🗑 Отменил запись ({kcal} ккал)")
 
 
 @router.callback_query(F.data.startswith("item_del:"))
@@ -1735,8 +1951,9 @@ async def on_item_del(
     if removed == "busy":
         await callback.answer("Уже убираю…")
         return
-    if removed is None:
-        await callback.answer("Уже убрано.")
+    if removed is None:  # позиции нет: двойной тап — или записи нет вовсе (слили, удалили)
+        gone = await assistant.get_meal(app_user, meal_id) is None
+        await callback.answer(_GONE_CARD if gone else "Уже убрано.")
         await _redraw_card(callback.message, app_user, assistant, meal_id)
         return
     result, item, token = removed
@@ -1749,12 +1966,13 @@ async def on_item_del(
     else:
         # Правим карточку НА МЕСТЕ: повторный тап по кнопке не даст вторую карточку.
         ctx = await gather(assistant, app_user)
+        sess = await _session(app_user, assistant, result.meal.id)
         await _rich_edit(
-            callback.message, screens.meal_card(ctx, result, edited=True),
-            meal_actions_keyboard(result.meal, back),
+            callback.message, screens.meal_card(ctx, result, edited=True, session=sess),
+            meal_actions_keyboard(result.meal, back, sess),
             fallback_text=(
                 f"🗑 Убрал: {escape(item.name_snapshot)} · "
-                f"приём теперь {round(result.meal.totals.kcal)} ккал"
+                f"запись теперь {round(result.meal.totals.kcal)} ккал"
             ),
         )
     await callback.answer("🗑 Убрал позицию")
@@ -1819,12 +2037,15 @@ async def on_restore(
             await _drop_restore_button(callback.message)
         return
     try:
-        snap = undo.snapshot
-        now = await assistant.get_meal(app_user, snap.id) if snap.id is not None else None
-        # Приём с тех пор правили (словами, в аппке) или удалили/вернули в аппке — снимок
-        # молча откатил бы правку или задвоил приём. Отказ, а не «вернул».
-        stale = _fingerprint(now) != undo.after
-        result = None if stale else await assistant.restore_meal(app_user, snap)
+        # Запись с тех пор правили (словами, в аппке), слили набором (FR-47) или удалили/вернули
+        # в аппке — снимок молча откатил бы правку или задвоил позиции. Отказ, а не «вернул».
+        # Сверку делает `restore_meal` под блокировкой записи: правка между сверкой и возвратом
+        # не проскочит (MA-INV-80).
+        stale = False
+        try:
+            result = await assistant.restore_meal(app_user, undo.snapshot, expect=undo.after)
+        except SnapshotStale:
+            result, stale = None, True
         if result is not None:
             await session.commit()  # фиксируем ДО показа — «Вернул» не врёт
     except Exception:
@@ -1846,10 +2067,11 @@ async def on_restore(
     elif days_ago is not None:
         await _redraw_day(callback.message, app_user, assistant, days_ago, repeat=False)
     else:
-        ctx = await gather(assistant, app_user)
+        ctx, sess = await gather(assistant, app_user), await _session(app_user, assistant, meal.id)
         await _rich_edit(
-            callback.message, screens.meal_card(ctx, result, restored=True),
-            meal_actions_keyboard(meal), fallback_text=f"⏪ Вернул: {what} · {kcal} ккал",
+            callback.message, screens.meal_card(ctx, result, restored=True, session=sess),
+            meal_actions_keyboard(meal, None, sess),
+            fallback_text=f"⏪ Вернул: {what} · {kcal} ккал",
         )
 
 
@@ -1935,8 +2157,11 @@ async def _weight_card(
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Карточка после правки веса: «✏️ Поправил» (MA-INV-70) и обычные кнопки — без «⏪ Вернуть»:
     отпечаток приёма теперь другой, и снимок всё равно отказал бы (FR-41)."""
-    ctx = await gather(assistant, user)
-    return screens.meal_card(ctx, logged, edited=True), meal_actions_keyboard(logged.meal)
+    ctx, sess = await gather(assistant, user), await _session(user, assistant, logged.meal.id)
+    return (
+        screens.meal_card(ctx, logged, edited=True, session=sess),
+        meal_actions_keyboard(logged.meal, None, sess),
+    )
 
 
 async def _rich_edit_at(
@@ -2172,12 +2397,13 @@ async def on_item_weight(
         await _drop_weight_question(bot, card.chat.id, state)
     meal = await assistant.get_meal(app_user, meal_id)
     if meal is None:
-        await callback.answer("Запись уже удалена.")
+        await callback.answer(_GONE_CARD)
         return
     if tail == ["back"]:
-        await _swap_keyboard(
-            card, meal_actions_keyboard(meal, _live_restore(app_user, meal_id, "c", meal))
-        )
+        await _swap_keyboard(card, meal_actions_keyboard(
+            meal, _live_restore(app_user, meal_id, "c", meal),
+            await _session(app_user, assistant, meal.id),
+        ))
         await callback.answer()
         return
     items = weighable(meal)
@@ -2199,7 +2425,7 @@ async def on_item_weight(
         await callback.answer(f"✏️ {name[:60]} · сейчас {_g(item.grams)} г")
         return
     if op == "own":
-        await _ask_grams(callback, app_user, session, state, meal, item)
+        await _ask_grams(callback, app_user, assistant, session, state, meal, item)
         return
     split = _split_base(op)
     if split is None:
@@ -2240,13 +2466,13 @@ async def on_item_weight(
     html, markup = await _weight_card(app_user, assistant, result)
     await _rich_edit(
         card, html, markup,
-        fallback_text=f"{escape(trace)} · приём теперь {round(result.meal.totals.kcal)} ккал",
+        fallback_text=f"{escape(trace)} · запись теперь {round(result.meal.totals.kcal)} ккал",
     )
 
 
 async def _ask_grams(
-    callback: CallbackQuery, app_user: User, session: AsyncSession, state: FSMContext,
-    meal: Meal, item: MealItem,
+    callback: CallbackQuery, app_user: User, assistant: Assistant, session: AsyncSession,
+    state: FSMContext, meal: Meal, item: MealItem,
 ) -> None:
     """«✍️ Своё»: карточке — обычные кнопки, вопрос — отдельным сообщением со своей отменой.
     Под стражем двойного тапа: второй тап не шлёт второй вопрос (AC-130)."""
@@ -2258,9 +2484,10 @@ async def _ask_grams(
     async def ask() -> Message | None:
         await _drop_weight_question(card.bot, card.chat.id, state)  # вопрос другой карточки
         await state.set_state(MealStates.awaiting_item_grams)
-        await _swap_keyboard(
-            card, meal_actions_keyboard(meal, _live_restore(app_user, meal_id, "c", meal))
-        )
+        await _swap_keyboard(card, meal_actions_keyboard(
+            meal, _live_restore(app_user, meal_id, "c", meal),
+            await _session(app_user, assistant, meal.id),
+        ))
         prompt = await card.answer(
             f"✍️ Сколько граммов: {escape(item.name_snapshot, quote=False)}? Сейчас "
             f"{_g(item.grams)} г. Пришли число — «180», «180 г» или «0,2 кг».",
@@ -2298,7 +2525,7 @@ def _replied_meal(message: Message) -> int | None:
 
 
 def _fix_trace(r: MealCorrected) -> str:
-    """След правки (без HTML): «✏️ Поправил: гречка → булгур 150 г · приём теперь 420 ккал»."""
+    """След правки (без HTML): «✏️ Поправил: гречка → булгур 150 г · запись теперь 420 ккал»."""
     def named(i: MealItem) -> str:
         return f"{i.name_snapshot} {_g(i.grams)} г" if i.grams else i.name_snapshot
 
@@ -2315,13 +2542,13 @@ def _fix_trace(r: MealCorrected) -> str:
         )
     else:
         head = f"✏️ Поправил: {r.old[0].name_snapshot} → {', '.join(named(i) for i in r.new)}"
-    tail = f"приём теперь {round(r.meal.totals.kcal)} ккал" if r.meal else "запись отменена"
+    tail = f"запись теперь {round(r.meal.totals.kcal)} ккал" if r.meal else "запись отменена"
     return f"{head} · {tail}"
 
 
 def _fix_refusal(r: CorrectionFailed | Unknown) -> str:
     if isinstance(r, CorrectionFailed) and r.reason == "meal_gone":
-        return "Этой записи уже нет — поправлять нечего."
+        return _GONE_CARD
     if isinstance(r, CorrectionFailed) and r.reason == "one_at_a_time":
         return "Поправь по одной позиции за раз."
     if isinstance(r, CorrectionFailed) and r.reason == "not_found" and r.target:
@@ -2347,10 +2574,10 @@ async def _show_fix(
         html = "<h3>🗑 Запись отменена</h3><p>Позиций не осталось.</p>"
         markup = InlineKeyboardMarkup(inline_keyboard=[[restore]] if restore else [])
     else:
-        ctx = await gather(assistant, user)
+        ctx, sess = await gather(assistant, user), await _session(user, assistant, result.meal.id)
         logged = MealLogged(meal=result.meal, remaining=result.remaining)
-        html = screens.meal_card(ctx, logged, edited=True)
-        markup = meal_actions_keyboard(result.meal, restore)
+        html = screens.meal_card(ctx, logged, edited=True, session=sess)
+        markup = meal_actions_keyboard(result.meal, restore, sess)
     keep = None if await _rich_edit_at(bot, message.chat.id, card_id, html, markup) else markup
     trace = escape(_fix_trace(result), quote=False)
     if not await _say_prompt(bot, message.chat.id, prompt_id, trace, keep):
@@ -2375,7 +2602,7 @@ async def _reply_weight(
     assert reply is not None
     meal = await assistant.get_meal(user, meal_id)
     if meal is None:
-        await message.answer("Этой записи уже нет — поправлять нечего.")
+        await message.answer(_GONE_CARD)
         return
     items = weighable(meal)
     if not items:
@@ -2612,23 +2839,6 @@ async def on_prod_fix(
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith(f"{DISH_SAVE_PREFIX}:"))
-async def on_dish_save(
-    callback: CallbackQuery, app_user: User, assistant: Assistant, state: FSMContext
-) -> None:
-    """FR-39.2: «Сохранить набор» → спрашиваем имя; состав берём из самой записи."""
-    if not isinstance(callback.message, Message):
-        await callback.answer()
-        return
-    meal_id = int((callback.data or f"{DISH_SAVE_PREFIX}:0").split(":", 1)[1])
-    await state.set_state(MealStates.awaiting_dish_name)
-    await state.update_data(dish_meal_id=meal_id)
-    await callback.message.answer(
-        "📌 Как назвать набор? Пришли слово — дальше оно запишет этот же состав."
-    )
-    await callback.answer()
-
-
 @router.callback_query(F.data.startswith(f"{PROD_RENAME_PREFIX}:"))
 async def on_prod_rename(
     callback: CallbackQuery, app_user: User, assistant: Assistant, state: FSMContext
@@ -2708,7 +2918,7 @@ async def on_profile_goal(
     await _send_goal_card(callback.message, goal, app_user, assistant, header="✅ Дневная цель")
     if data.get("onboarding"):  # первый запуск → передаём к записи еды + справке
         await callback.message.answer(
-            "🎉 Всё готово! Запиши первый приём — например «куриная грудка 250 г».\n"
+            "🎉 Всё готово! Запиши, что съел, — например «куриная грудка 250 г».\n"
             "📍 /timezone — чтобы «день» статистики шёл по твоему поясу. Инструкция — /help"
         )
     await callback.answer()
@@ -2740,12 +2950,10 @@ async def _redraw_day(
     """Экран «День» на месте: соседний день не «прыгает» в конец чата (edit rich, Bot API 10.1).
     «⏪ Вернуть» — только живая и только своего дня, и только в режиме 🗑 (`_day_restore`)."""
     rem, dv = await assistant.day_card(user, days_ago)
-    await _rich_edit(
-        message, screens.day(dv, rem, repeat, note),
-        day_nav_keyboard(
-            days_ago, dv.meals, dv.timezone, _day_restore(user, dv.day, dv.meals), repeat, dv.day
-        ),
+    kb = day_nav_keyboard(
+        days_ago, dv.meals, dv.timezone, _day_restore(user, dv.day, dv.meals), repeat, dv.day
     )
+    await _day_send(lambda html: _rich_edit(message, html, kb), dv, rem, repeat, note)
 
 
 @router.callback_query(F.data.startswith(f"{DAY_REP_PREFIX}:"))
@@ -2901,10 +3109,24 @@ async def _show_weight(message: Message, app_user: User, assistant: Assistant) -
 
 async def _show_history(message: Message, app_user: User, assistant: Assistant) -> None:
     rem, dv = await assistant.day_card(app_user)  # день + стрелки ← →
-    await _rich(
-        message, screens.day(dv, rem),
-        day_nav_keyboard(dv.days_ago, dv.meals, dv.timezone, day=dv.day),
-    )
+    kb = day_nav_keyboard(dv.days_ago, dv.meals, dv.timezone, day=dv.day)
+    await _day_send(lambda html: _rich(message, html, kb), dv, rem)
+
+
+async def _day_send(
+    send: Callable[[str], Awaitable[object]], dv: DayView, rem: Remaining,
+    repeat: bool = False, note: str = "",
+) -> None:
+    """Экран дня — с запасным видом (AC-211): Telegram отверг вложенный список приёма пищи
+    (FR-47) — тот же день плоско, а не упавший экран. Живой Bot API вложенный принял;
+    ponytail: страховка на смену разметки, без отдельной ветки для каждого места."""
+    try:
+        await send(screens.day(dv, rem, repeat, note))
+    except TelegramBadRequest as exc:
+        if "not modified" in str(exc).lower():
+            return
+        logger.warning("экран дня не принят, рисую плоско: %s", exc)
+        await send(screens.day(dv, rem, repeat, note, flat=True))
 
 
 async def _show_undo_picker(message: Message, app_user: User, assistant: Assistant) -> None:
@@ -2980,6 +3202,8 @@ async def _busy_with_flow(
     if current in allowed:
         if current == MealStates.awaiting_item_grams.state:  # вопрос «✍️ Своё» — «вопрос снят»
             await _drop_weight_question(message.bot, message.chat.id, state)
+        if current == MealStates.awaiting_dish_name.state:  # вопрос имени набора — тоже (FR-47)
+            await _drop_dish_question(message.bot, message.chat.id, state)
         await state.clear()
         return False
     await message.answer(
@@ -3040,9 +3264,27 @@ async def _latest_weight(assistant: Assistant, user: User) -> float | None:
 async def _send_meal_card(
     message: Message, result: MealLogged, app_user: User, assistant: Assistant
 ) -> None:
-    """Карточка приёма единым Rich-стилем: что записал + дневной прогресс всеми барами + кнопки."""
+    """Карточка записи единым Rich-стилем: что записал + дневной прогресс всеми барами + кнопки.
+    Запись — часть приёма пищи из нескольких записей: строка его суммы и «📌» на весь (FR-47)."""
     ctx = await gather(assistant, app_user)
-    await _rich(message, screens.meal_card(ctx, result), meal_actions_keyboard(result.meal))
+    sess = await _session(app_user, assistant, result.meal.id)
+    await _rich(
+        message, screens.meal_card(ctx, result, session=sess),
+        meal_actions_keyboard(result.meal, None, sess),
+    )
+
+
+async def _session(user: User, assistant: Assistant, meal_id: int | None) -> MealSession | None:
+    """FR-47: приём пищи записи — только если в нём больше одной записи: иначе ни строки суммы,
+    ни «📌 Приём пищи — в набор» (одна запись — её прежний «Сохранить набор»). Группу считает
+    application (`session_of`): у бота своего правила разрыва нет (MA-INV-79).
+
+    ponytail: +2 запроса на каждую карточку (запись и записи её дня) поверх `gather` — при двух
+    людях и десятке карточек в день незаметно; потолок — отдать сессию из того же `day_view`."""
+    if meal_id is None:
+        return None
+    found = await assistant.session_of(user, meal_id)
+    return found if found is not None and len(found.meals) > 1 else None
 
 
 async def _reply_screen(

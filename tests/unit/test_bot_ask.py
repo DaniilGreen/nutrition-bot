@@ -274,7 +274,7 @@ async def test_строка_состояния_инструмента():
     w = await _world(port)
     msg = await _ask(w, _Chat(), "что я ел вчера?", clock=clock)
     edits = [t for t, _ in msg.sent[0].edits]
-    assert edits[:2] == ["🔎 Смотрю приёмы…", "🔎 Смотрю данные…"]
+    assert edits[:2] == ["🔎 Смотрю записи…", "🔎 Смотрю данные…"]
 
 
 async def test_длинный_ответ_режется_дисклеймер_у_последнего():

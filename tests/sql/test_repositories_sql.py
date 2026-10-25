@@ -444,29 +444,65 @@ async def _rec(session, user: User, minutes: int, name: str, grams: float) -> Me
 
 
 async def test_приём_пищи_набором_переносит_позиции(session):
-    """FR-47, AC-181: позиции переезжают в самую раннюю запись со своими id и снапшотами,
-    остальные записи удалены, итоги — сумма позиций. Через сервис: `session_of` грузит записи в
-    сессию ДО блокировки — `populate_existing` обязан это пережить."""
+    """FR-47, AC-181/AC-198: позиции переезжают в НОВУЮ запись со своими id и снапшотами, все
+    прежние записи удалены, итог — точная сумма итогов записей. Через сервис: `session_of` грузит
+    записи в сессию ДО блокировки — `populate_existing` обязан это пережить."""
     from app.application.meal_service import MealService
 
     me = await _user(session, 9701)
     recs = [await _rec(session, me, 10 * k, n, g)
             for k, (n, g) in enumerate([("сыр", 20), ("лаваш", 50), ("курица", 120)])]
+    old = [r.id for r in recs]
     item_ids = [r.items[0].id for r in recs]
     svc = MealService(SqlProductRepo(session), SqlMealRepo(session))
 
-    out = await svc.save_session_as_set(me, [r.id for r in recs], "бургер")
+    out = await svc.save_session_as_set(me, old, "бургер")
     session.expire_all()
     repo = SqlMealRepo(session)
-    again = await repo.get(me.id, recs[0].id)
+    again = await repo.get(me.id, out.id)
 
-    assert out.id == recs[0].id and again.template_name == "бургер"
+    assert out.id not in old and again.template_name == "бургер"
+    assert again.template_at is not None
     assert sorted(i.id for i in again.items) == sorted(item_ids)
     assert again.totals.kcal == pytest.approx(380) and again.totals.carb == pytest.approx(57)
     assert again.raw_input == "сыр 20, лаваш 50, курица 120"
-    assert again.eaten_at == recs[0].eaten_at
-    assert await repo.get(me.id, recs[1].id) is None and await repo.get(me.id, recs[2].id) is None
-    assert (await repo.latest_by_template(me.id, "бургер")).id == recs[0].id
+    assert (again.eaten_at, again.created_at) == (recs[0].eaten_at, recs[0].created_at)
+    assert all([await repo.get(me.id, i) is None for i in old])
+    assert (await repo.latest_by_template(me.id, "бургер")).id == out.id
+    # Старые кнопки (AC-197): правки по прежнему id — ничего.
+    assert await repo.remove_item(me.id, old[0], item_ids[0]) is None
+    assert await repo.update_item(me.id, old[0], item_ids[0], grams=5,
+                                  macros=Macros(1, 1, 1, 1)) is None
+
+
+async def test_итог_слитой_записи_без_нового_округления(session):
+    """AC-198: итоги записей по 1,8 г жира (позиции 1,75) → 9,0, а не 8,8."""
+    me = await _user(session, 9704)
+    repo = SqlMealRepo(session)
+    ids = []
+    for k in range(5):
+        it = MealItem(name_snapshot=f"п{k}", grams=10, macros=Macros(10, 0.2, 1.75, 0.4))
+        ids.append((await repo.add(Meal(
+            user_id=me.id, eaten_at=_yesterday_noon(k), input_type="text", raw_input="x",
+            items=[it], source_confidence=1, totals=Macros(10, 0.2, 1.8, 0.4)))).id)
+    out = await repo.merge(
+        me.id, ids, eaten_at=_yesterday_noon(0), created_at=None, input_type="text",
+        raw_input="x", source_confidence=1, template_name="п", template_at=datetime.now(UTC),
+        totals=Macros(50, 1.0, 9.0, 2.0))
+    session.expire_all()
+    assert (await repo.get(me.id, out.id)).totals.fat == pytest.approx(9.0)
+
+
+async def test_набор_по_метке_даже_вчерашний(session):
+    """AC-199: явно сохранённый вчерашний состав — набор, хотя сегодня есть запись с тем же
+    именем без метки (повтор)."""
+    me = await _user(session, 9705)
+    repo = SqlMealRepo(session)
+    today = await _rec(session, me, 24 * 60, "бургер старый", 200)
+    await repo.set_template(me.id, today.id, "бургер", at=datetime.now(UTC) - timedelta(days=1))
+    old = await _rec(session, me, 0, "бургер новый", 250)
+    await repo.set_template(me.id, old.id, "бургер", at=datetime.now(UTC))
+    assert (await repo.latest_by_template(me.id, "Бургер")).id == old.id
 
 
 async def test_слияние_без_источника_ничего_не_меняет(session):
@@ -477,13 +513,66 @@ async def test_слияние_без_источника_ничего_не_мен
     b = await _rec(session, me, 10, "лаваш", 50)
     alien = await _rec(session, other, 5, "чужое", 100)
     repo = SqlMealRepo(session)
-    kw = dict(raw_input="x", input_type="text", source_confidence=1.0, template_name="бургер")
+    kw = dict(eaten_at=a.eaten_at, created_at=None, raw_input="x", input_type="text",
+              source_confidence=1.0, template_name="бургер", template_at=datetime.now(UTC),
+              totals=Macros(1, 1, 1, 1))
 
-    assert await repo.merge_into(me.id, a.id, [b.id, 2**31 - 2], **kw) is None
-    assert await repo.merge_into(me.id, a.id, [alien.id], **kw) is None
-    assert await repo.merge_into(me.id, a.id, [a.id], **kw) is None  # сам в себя — тоже нет
+    assert await repo.merge(me.id, [a.id, b.id, 2**31 - 2], **kw) is None
+    assert await repo.merge(me.id, [a.id, alien.id], **kw) is None
+    assert await repo.merge(me.id, [a.id, a.id], **kw) is None
     session.expire_all()
-    left = await repo.get(me.id, a.id)
-    assert left.template_name is None and len(left.items) == 1
-    assert await repo.get(me.id, b.id) is not None
+    assert len(await repo.lock(me.id, [a.id, b.id])) == 2
+    assert (await repo.get(me.id, a.id)).template_name is None
     assert await repo.get(other.id, alien.id) is not None
+
+
+async def test_два_параллельных_слияния_сливают_один_раз():
+    """AC-203: две сессии БД. Вторая ждёт блокировку первой и после её фиксации записей уже не
+    находит — отказ, слито один раз. Данные фиксируются по-настоящему, поэтому в конце убираем
+    тестового пользователя (записи уходят каскадом)."""
+    import asyncio
+
+    from sqlalchemy import delete as sa_delete
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from app.application.meal_service import MealService, SessionRejected
+    from app.infrastructure.db.base import Base
+    from app.infrastructure.db.models import UserORM
+    from tests.sql.conftest import URL
+
+    if not URL:
+        pytest.skip("нет DATABASE_URL — набор на живом SQL пропущен")
+    engine = create_async_engine(URL)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception as exc:  # noqa: BLE001 — как в conftest: БД нет — пропуск, не падение
+        await engine.dispose()
+        pytest.skip(f"БД недоступна: {type(exc).__name__}")
+    factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    try:
+        async with factory() as s0:
+            me = await _user(s0, 9799001)
+            ids = [(await _rec(s0, me, 10 * k, n, g)).id
+                   for k, (n, g) in enumerate([("сыр", 20), ("лаваш", 50)])]
+            await s0.commit()
+        async with factory() as s1, factory() as s2:
+            first = await MealService(SqlProductRepo(s1), SqlMealRepo(s1)).save_session_as_set(
+                me, ids, "бургер")  # блокировка взята, транзакция открыта
+            second = asyncio.create_task(MealService(
+                SqlProductRepo(s2), SqlMealRepo(s2)).save_session_as_set(me, ids, "бургер"))
+            await asyncio.sleep(0.3)
+            assert not second.done()  # ждёт блокировку первой
+            await s1.commit()
+            with pytest.raises(SessionRejected) as e:
+                await second
+            assert e.value.code == "not_a_session"
+            await s2.rollback()
+        async with factory() as s3:
+            assert [m.id for m in await SqlMealRepo(s3).lock(me.id, [first.id, *ids])] == [
+                first.id]
+    finally:
+        async with factory() as s4:
+            await s4.execute(sa_delete(UserORM).where(UserORM.telegram_id == 9799001))
+            await s4.commit()
+        await engine.dispose()

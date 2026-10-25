@@ -18,6 +18,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 from app.application.entities import Meal, MealItem, Product
+from app.application.results import MealSession
 from app.assets import asset_version
 from app.config import get_settings
 from app.domain.plausibility import MAX_PORTION_G, MIN_PORTION_G
@@ -37,6 +38,7 @@ MEAL_REPEAT_PREFIX = "meal_repeat"
 PROD_FIX_PREFIX = "prod_fix"
 PROD_RENAME_PREFIX = "prod_rename"  # переименовать продукт в /products (FR-27 #6)
 DISH_SAVE_PREFIX = "dish_save"  # запомнить запись как блюдо своей сборки (FR-39)
+DISH_SESSION = "s"  # хвост `dish_save:<id>:s` — набором весь приём пищи записи (FR-47)
 ONBOARD_PREFIX = "onb"
 PHOTO_PREFIX = "ph"  # карточка фото блюда: ph:fat:<id> / ph:dr:<id> / ph:ok (FR-34)
 SCAN_PREFIX = "scan"  # карточка бланка InBody: scan:save / scan:confirm / scan:apply (FR-36)
@@ -208,9 +210,9 @@ def day_nav_keyboard(
         when = meal.eaten_at.astimezone(tz).strftime("%H:%M")
         items = [it for it in meal.items if it.id is not None]
         whole = repeat and len(items) > 1
-        if whole:  # приём целиком — как «Повторить приём сегодня» аппки; позиции под ним — «↳»
+        if whole:  # запись целиком — как «Повторить приём сегодня» аппки; позиции под ней — «↳»
             builder.button(
-                text=f"🔁 {when} · весь приём · {round(meal.totals.kcal)} ккал",
+                text=f"🔁 {when} · вся запись · {round(meal.totals.kcal)} ккал",
                 callback_data=f"{DAY_REP_PREFIX}:d{day:%Y%m%d}:{meal.id}",
             )
             rows.append(1)
@@ -326,12 +328,16 @@ def frequent_keyboard(
 
 
 def meal_actions_keyboard(
-    meal: Meal, restore: InlineKeyboardButton | None = None
+    meal: Meal, restore: InlineKeyboardButton | None = None, session: MealSession | None = None,
+    *, trash: bool = True,
 ) -> InlineKeyboardMarkup:
     """Под свежей записью: удалить отдельную позицию (если их >1) и отменить всё.
 
     Это контекстная отмена «без вопроса» — кнопки знают конкретную запись. restore — «⏪ Вернуть»
-    только что убранной позиции (FR-41), первой: сразу после удаления нужна именно она.
+    только что убранной позиции (FR-41), первой: сразу после удаления нужна именно она. session —
+    приём пищи записи (FR-47): из нескольких записей «📌» сохраняет набором его целиком.
+    trash=False — без «🗑 позиция» на каждую позицию: карточка только что слитого набора, где их
+    пять подряд (FR-47); убрать позицию — ответом на карточку (FR-44) или в 🗒 История.
     """
     builder = InlineKeyboardBuilder()
     if restore is not None:
@@ -346,11 +352,23 @@ def meal_actions_keyboard(
     # FR-39.2: несколько взвешенных позиций → набор, чтобы завтра не
     # вводить состав заново. Одна позиция — уже продукт, делать из неё блюдо нечего; позиция
     # без веса не даёт плотности, поэтому кнопку не показываем вовсе, а не ругаемся после тапа.
-    if len(meal.items) > 1 and all(item.grams for item in meal.items):
+    # FR-47: запись — часть приёма пищи из нескольких записей → набором весь приём пищи (бургер
+    # пятью сообщениями). Хвост `:s` в callback — кнопка делает то, что на ней написано: к
+    # старой «Сохранить набор» мог прилипнуть кофе, и тап по ней не должен слить чужое (D-MA-29).
+    # Весь приём пищи набором не сохранить (у позиции нет веса) — сама запись, если годится,
+    # получает свой «📌 Сохранить набор» (AC-210). Запись уже набор — «Переименовать» (AC-209).
+    whole = session is not None and len(session.meals) > 1
+    if whole and all(i.grams for m in session.meals for i in m.items):
         builder.button(
-            text="📌 Сохранить набор", callback_data=f"{DISH_SAVE_PREFIX}:{meal.id}"
+            text="📌 Приём пищи — в набор",
+            callback_data=f"{DISH_SAVE_PREFIX}:{meal.id}:{DISH_SESSION}",
         )
-    if len(meal.items) > 1:
+    elif len(meal.items) > 1 and all(item.grams for item in meal.items):
+        builder.button(
+            text="✏️ Переименовать набор" if meal.template_name else "📌 Сохранить набор",
+            callback_data=f"{DISH_SAVE_PREFIX}:{meal.id}",
+        )
+    if len(meal.items) > 1 and trash:
         for item in meal.items:
             if item.id is not None:
                 builder.button(
@@ -462,9 +480,9 @@ def card_meal_id(markup: object) -> int | None:
 def undo_picker_keyboard(
     meals: Sequence[Meal], tz_name: str, restore: InlineKeyboardButton | None = None
 ) -> InlineKeyboardMarkup:
-    """Меню «Отменить» (FR-12/D-13): для каждого приёма — «весь приём» + позиции (если их >1).
+    """Меню «Отменить» (FR-12/D-13): для каждой записи — она целиком + позиции (если их >1).
 
-    Единый смысл с контекстной отменой под свежей записью: можно снять и приём целиком, и позицию.
+    Единый смысл с контекстной отменой под свежей записью: можно снять и запись целиком, и позицию.
     restore — «⏪ Вернуть» только что отменённого (FR-41), первой строкой.
     """
     tz = ZoneInfo(tz_name)

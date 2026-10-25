@@ -174,7 +174,7 @@ async def test_отменить_всё_карточка_остаётся_под�
     cb = await _do(handlers.on_meal_undo, f"meal_undo:{src.id}", w)
     assert w.meals._meals == []
     _, html, kb = edits.rich.await_args.args
-    assert html.startswith("<h3>🗑 Отменил приём") and "<b>357</b> ккал" in html
+    assert html.startswith("<h3>🗑 Отменил запись") and "<b>357</b> ккал" in html
     [back] = _buttons(kb)  # на отменённом приёме других кнопок нет — им не к чему относиться
     assert back.text == "⏪ Вернуть: курица с мазиком, лаваш"  # 23 знака — целиком
     assert not any(type(c.args[0]).__name__ == "DeleteMessage" for c in cb.bot.await_args_list)
@@ -184,7 +184,7 @@ async def test_отменить_всё_карточка_остаётся_под�
     assert _shape(restored) == before and restored.id != src.id  # новым id, как в аппке
     assert edits.rich.await_args.args[1].startswith("<h3>⏪ Вернул")
     old = await _do(handlers.on_meal_undo, f"meal_undo:{src.id}", w)  # кнопка со старым id
-    assert _answers(old) == ["Уже удалено."] and len(w.meals._meals) == 1
+    assert _answers(old) == [handlers._GONE_CARD] and len(w.meals._meals) == 1
 
 
 async def test_пикер_приём_целиком(edits):
@@ -301,7 +301,7 @@ async def test_fallback_правки_несёт_кнопку_вернуть():
     cb.bot.side_effect = bot
     await handlers.on_item_del(cb, w.user, w.assistant, AsyncMock())
     [sent] = _calls(cb, SendMessage)
-    assert sent.text.startswith("🗑 Убрал: лаваш · приём теперь 220 ккал")
+    assert sent.text.startswith("🗑 Убрал: лаваш · запись теперь 220 ккал")
     assert _back(sent.reply_markup).text == "⏪ Вернуть: лаваш"
 
 
@@ -480,7 +480,7 @@ async def test_отменить_всё_второй_раз_карточку_не
     src = await w.meals.add(_wrap(w.user.id))
     await _do(handlers.on_meal_undo, f"meal_undo:{src.id}", w)
     again = await _do(handlers.on_meal_undo, f"meal_undo:{src.id}", w)
-    assert _answers(again) == ["Уже удалено."]  # и никакого DeleteMessage — «Вернуть» цел
+    assert _answers(again) == [handlers._GONE_CARD]  # и никакого DeleteMessage — «Вернуть» цел
     assert edits.rich.await_count == 1
 
 

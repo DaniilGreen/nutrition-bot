@@ -73,6 +73,23 @@ def g(grams: float) -> str:
     return f"{n(grams)} г · " if grams else ""
 
 
+# Строка позиции на 320 px: пузырь там ≈ 600 у.е. против 760 у iPhone, минус отступ маркера списка.
+ROW_NARROW = 560
+_NEST = 60  # вложенный список (позиции приёма пищи, FR-47) сдвинут ещё на отступ
+
+
+def with_macros(row: str, m: Macros, *, est: bool = False, nested: bool = False) -> str:
+    """Строка позиции + «Б25 Ж27 У2» (≈ — оценка, INV-13) — тем же видом, что на карточке.
+
+    Влезает в узкий пузырь — в ту же строку; нет — второй строкой курсивом: свой перенос лучше,
+    чем Telegram порвёт «Б25 Ж27» посередине. Ширина — по модели kit, не на глаз (ПРАВИЛО 4)."""
+    tail = f"{'≈' if est else ''}Б{n(m.protein)} Ж{n(m.fat)} У{n(m.carb)}"
+    one = f"{row} · {tail}"
+    if text_width(one) <= ROW_NARROW - (_NEST if nested else 0):
+        return one
+    return f"{row}<br><i>{tail}</i>"
+
+
 def em(eid: str, fallback: str) -> str:
     """Кастом-эмодзи; fallback обязателен по спеке — там, где кастом не рендерится."""
     return f'<tg-emoji emoji-id="{eid}">{fallback}</tg-emoji>'

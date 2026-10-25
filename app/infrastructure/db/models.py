@@ -130,6 +130,8 @@ class MealORM(Base):
     source_confidence: Mapped[float] = mapped_column(Float, default=1.0)
     # FR-39.2: имя блюда своей сборки. Переносится на повтор — шаблон жив, пока блюдо едят.
     template_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # FR-47: когда состав явно назван набором — по ней `latest_by_template` (миграция 0017).
+    template_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     total_kcal: Mapped[float] = mapped_column(Float, default=0.0)
     total_protein: Mapped[float] = mapped_column(Float, default=0.0)
     total_fat: Mapped[float] = mapped_column(Float, default=0.0)

@@ -85,7 +85,7 @@ async def http_error(request: Request, exc: StarletteHTTPException) -> JSONRespo
     message = exc.detail if isinstance(exc.detail, str) else "Что-то пошло не так."
     return JSONResponse(
         status_code=exc.status_code,
-        content={"error": {"code": code, "message": message}},
+        content={**getattr(exc, "extra", {}), "error": {"code": code, "message": message}},
         headers=getattr(exc, "headers", None),
     )
 

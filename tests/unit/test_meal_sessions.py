@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-from dataclasses import astuple
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -133,35 +132,129 @@ async def test_бэкдейт_не_липнет_к_сегодняшним(repo, 
 
 # --- «Сохранить приём пищи набором» -------------------------------------------------------
 
-async def test_слияние_в_самую_раннюю_запись(repo, svc):
-    """AC-181: одна запись с пятью позициями, id/снапшоты позиций те же, итоги дня на месте."""
+async def test_слияние_в_новую_запись(repo, svc):
+    """AC-181: одна НОВАЯ запись с пятью позициями (id/снапшоты позиций те же), все пять прежних
+    удалены, время и created_at — самой ранней, итоги дня до знака прежние."""
     u = _user()
     burger = await _burger(repo)
-    burger[3].input_type = "voice"
+    burger[0].created_at = _at(12, 1)
+    old_ids = [m.id for m in burger]
     items = [(i.id, i.grams, i.macros) for m in burger for i in m.items]
-    day_before = sum_macros(m.totals for m in burger)
+    day_before = sum(m.totals.kcal for m in burger)
 
-    meal = await svc.save_session_as_set(u, [m.id for m in reversed(burger)], " бургер ")
+    meal = await svc.save_session_as_set(u, old_ids[::-1], " бургер ")
 
-    assert meal.id == burger[0].id and meal.eaten_at == burger[0].eaten_at
-    assert meal.template_name == "бургер"
+    assert meal.id not in old_ids
+    assert (meal.eaten_at, meal.created_at) == (burger[0].eaten_at, _at(12, 1))
+    assert meal.template_name == "бургер" and meal.template_at == NOW
     assert [(i.id, i.grams, i.macros) for i in meal.items] == items  # INV-3
-    # Итог записи — сумма позиций, как после любой правки; день — тот же до округления 0,1.
-    assert meal.totals == sum_macros(mac for _, _, mac in items)
-    for got, was in zip(astuple(meal.totals), astuple(day_before), strict=True):
-        assert abs(got - was) <= 0.1 * len(burger) / 2 + 1e-9
+    assert meal.totals.kcal == day_before
     assert meal.raw_input == "сыр 20, сыр 20, лаваш 50, помидор 40, курица 120"
-    assert meal.input_type == "text"  # разные способы ввода → общий text
     left = [m.id for m in await repo.list_between(1, _at(0, 0), _at(23, 59))]
-    assert left == [burger[0].id]
+    assert left == [meal.id]
     assert [s.template_name for s in await svc.sets(u)] == ["бургер"]
 
 
-async def test_один_способ_ввода_сохраняется(repo, svc):
-    a = await repo.add(_meal(1, _at(9, 0), ("овсянка", 60, 220), kind="voice"))
-    b = await repo.add(_meal(1, _at(9, 5), ("банан", 120, 105), kind="voice"))
-    meal = await svc.save_session_as_set(_user(), [a.id, b.id], "завтрак")
-    assert meal.input_type == "voice"
+async def test_старые_кнопки_прежних_записей_отказывают(repo, svc):
+    """AC-197: «🔁», «↩️ Отменить всё», «📌», «🗑 позиция», «✏️ Вес» по прежнему id — ничего, а не
+    весь набор (+485 ккал на повтор). Самая ранняя — тоже: её id больше не существует."""
+    u = _user()
+    burger = await _burger(repo)
+    first, item = burger[0], burger[0].items[0]
+    await svc.save_session_as_set(u, [m.id for m in burger], "бургер")
+    before = len(repo._meals)
+
+    assert await svc.repeat(u, first.id) is None
+    assert await svc.repeat_item(u, first.id, item.id) is None
+    assert await svc.delete(u, first.id) is None
+    assert await svc.save_template(u, first.id, "сыр") is None
+    assert await svc.remove_item(u, first.id, item.id) is None
+    assert await svc.adjust_item(u, first.id, item.id, 40) is None
+    assert len(repo._meals) == before and repo._meals[0].template_name == "бургер"
+
+
+async def test_итог_набора_сумма_итогов_записей_без_округления(repo, svc):
+    """AC-198: позиции по 1,75 г жира → итог записи 1,8; пять записей → 9,0, а не 8,8."""
+    for k in range(5):
+        it = MealItem(name_snapshot=f"п{k}", grams=10, macros=Macros(10.05, 0.25, 1.75, 0.45))
+        await repo.add(Meal(user_id=1, eaten_at=_at(12, k), input_type="text", raw_input="x",
+                            items=[it], source_confidence=1, totals=sum_macros([it.macros])))
+    day = sum_macros(m.totals for m in repo._meals)
+    meal = await svc.save_session_as_set(_user(), [m.id for m in repo._meals], "п")
+    assert sum_macros([meal.totals]) == day
+    assert meal.totals.fat == pytest.approx(9.0) and round(5 * 1.75, 1) == 8.8
+
+
+async def test_тип_ввода_самой_ранней_записи(repo, svc):
+    """AC-200: фото первым — у набора «photo»."""
+    a = await repo.add(_meal(1, _at(9, 0), ("паста", 300, 450), kind="photo"))
+    b = await repo.add(_meal(1, _at(9, 5), ("сок", 200, 90)))
+    meal = await svc.save_session_as_set(_user(), [a.id, b.id], "обед")
+    assert meal.input_type == "photo"
+
+
+async def test_равное_время_по_id_а_не_по_вставке(repo, svc):
+    """AC-201: id не в порядке вставки — группа и «самая ранняя» по (eaten_at, id)."""
+    a = await repo.add(_meal(1, _at(9, 0), ("паста", 300, 450), kind="photo"))
+    b = await repo.add(_meal(1, _at(9, 0), ("сок", 200, 90)))
+    a.id, b.id = 101, 100
+    s = await svc.session_of(_user(), 101)
+    assert s.meal_ids == [100, 101]
+    meal = await svc.save_session_as_set(_user(), [101, 100], "обед")
+    assert meal.input_type == "text" and [i.name_snapshot for i in meal.items] == ["сок", "паста"]
+
+
+async def test_вчерашний_состав_становится_набором(repo, svc):
+    """AC-199: набор «бургер» есть сегодня; вчерашний приём пищи сохранили «бургером» — набор он,
+    и «⏪ Вернуть» сегодняшней старой версии набор не откатывает."""
+    u = _user()
+    today = await repo.add(_meal(1, _at(13, 0), ("котлета", 100, 250), ("булка", 60, 160),
+                                 template="бургер"))
+    y1 = await repo.add(_meal(1, _at(12, 0, days=-1), ("котлета", 100, 250)))
+    y2 = await repo.add(_meal(1, _at(12, 5, days=-1), ("булка", 60, 160), ("сыр", 20, 70)))
+    merged = await svc.save_session_as_set(u, [y1.id, y2.id], "Бургер")
+    assert (await repo.latest_by_template(1, "бургер")).id == merged.id
+
+    snap = await svc.delete(u, today.id)
+    await svc.restore(snap)
+    assert (await repo.latest_by_template(1, "бургер")).id == merged.id
+
+
+async def test_отказ_несёт_текущий_приём_пищи(repo, svc):
+    """MA-INV-79: на `not_a_session` — приём пищи первой живой из присланных."""
+    burger = await _burger(repo)
+    with pytest.raises(SessionRejected) as e:
+        await svc.save_session_as_set(_user(), [999, burger[1].id], "бургер")
+    assert e.value.session.meal_ids == [m.id for m in burger]
+
+
+async def test_потолок_два_часа_от_начала(repo, svc):
+    """AC-196: паузы по 25 минут, но 20:05 — уже новый приём пищи."""
+    ids = [(await repo.add(_meal(1, _at(h, m), ("орехи", 10, 60)))).id
+           for h, m in [(18, 0), (18, 25), (18, 50), (19, 15), (19, 40), (20, 5)]]
+    assert (await svc.session_of(_user(), ids[0])).meal_ids == ids[:5]
+    assert (await svc.session_of(_user(), ids[5])).meal_ids == ids[5:]
+
+
+async def test_вернуть_сверяет_отпечаток_под_блокировкой(repo, svc):
+    """MA-INV-80 в use-case: совпал — вернул; не совпал — `SnapshotStale`, ничего не записано."""
+    from copy import deepcopy
+
+    from app.application.meal_service import SnapshotStale
+
+    u = _user()
+    a = _assistant(repo, svc)
+    meal = await repo.add(_meal(1, _at(12, 0), ("гречка", 200, 220), ("котлета", 100, 250)))
+    snap = deepcopy(meal)
+    after = await svc.remove_item(u, meal.id, meal.items[1].id)
+    fp = meal_fingerprint(after)
+    await svc.adjust_item(u, meal.id, meal.items[0].id, 100)  # правка после удаления
+    with pytest.raises(SnapshotStale):
+        await a.restore_meal(u, snap, expect=fp)
+    assert len(repo._meals) == 1 and len(repo._meals[0].items) == 1
+
+    ok = await a.restore_meal(u, snap, expect=meal_fingerprint(repo._meals[0]))
+    assert ok is not None and len(ok.meal.items) == 2 and len(repo._meals) == 1
 
 
 @pytest.mark.parametrize("pick", ["missing", "extra", "foreign", "empty"])

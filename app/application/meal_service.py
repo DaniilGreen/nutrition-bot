@@ -12,10 +12,12 @@
 from __future__ import annotations
 
 import difflib
+import operator
 import re
 from collections import Counter
 from collections.abc import Sequence
 from datetime import datetime, timedelta
+from functools import reduce
 
 from app.application.dto import ParsedItem, ParsedMessage, SetPick, Unit
 from app.application.entities import (
@@ -57,7 +59,7 @@ from app.domain.portions import GramsResolution, resolve_grams
 from app.domain.prefs import day_start
 from app.domain.stated_amount import stated_grams
 from app.domain.timeframe import day_bounds_utc
-from app.domain.value_objects import Density, Macros, sum_macros
+from app.domain.value_objects import ZERO_MACROS, Density, Macros, sum_macros
 
 # Ключи, которые LLM возвращает «от неуверенности» — не идентичность продукта.
 _JUNK_KEYS = frozenset(
@@ -226,6 +228,7 @@ class MealService:
                    for i in meal.items],
             source_confidence=meal.source_confidence, totals=meal.totals,
             estimated=meal.estimated, template_name=meal.template_name,
+            template_at=meal.template_at,  # FR-47: возврат старой версии набор не откатывает
         ))
 
     async def recent(self, user: User, limit: int = 10) -> list[Meal]:
@@ -507,15 +510,21 @@ class MealService:
         на вес нельзя (больше начинки ≠ больше лаваша), а состав нужен, чтобы его править.
         Сам приём не трогаем (INV-3) — добавляется только ярлык.
         """
-        clean = name.strip()[:64]
-        if not clean:
-            return None
-        meal = await self._meals.get(_require_id(user), meal_id)
+        clean = name.strip()
+        if not clean or len(clean) > 64:
+            return None  # длинное не режем молча: обрезок стал бы именем набора навсегда
+        # Под блокировкой записи (FR-47): параллельная «🗑 позиция» не оставит набор из одной.
+        meal = next(iter(await self._meals.lock(_require_id(user), [meal_id])), None)
         if meal is None or len(meal.items) < 2:
             return None  # одна позиция — это уже продукт, блюдо из неё делать нечего
         if any(not item.grams or item.grams <= 0 for item in meal.items):
             return None  # нечего повторять: вес позиции неизвестен
-        return await self._meals.set_template(_require_id(user), meal_id, clean)
+        return await self._meals.set_template(_require_id(user), meal_id, clean, at=self._clock())
+
+    async def lock(self, user: User, meal_ids: list[int]) -> list[Meal]:
+        """Свои записи под блокировкой до конца транзакции (FR-47): для проверок, которые не
+        должны устареть до записи — слияние, «Вернуть»."""
+        return await self._meals.lock(_require_id(user), meal_ids)
 
     async def session_of(self, user: User, meal_id: int) -> MealSession | None:
         """FR-47: приём пищи, в который входит запись. None — записи нет (или она чужая).
@@ -537,37 +546,59 @@ class MealService:
         """FR-47: «📌 Сохранить приём пищи набором» — записи приёма пищи сливаются в одну с именем.
 
         Группу считаем ЗДЕСЬ: клиент мог видеть устаревшую (запись с другого устройства), и
-        слить «почти тот» приём пищи значило бы утащить в набор чужое или забыть своё. Слияние —
-        в самую раннюю запись; позиции переносятся со снапшотами (INV-3), итоги дня не двигаются.
-        Отказ — `SessionRejected` с кодом, ничего не записано.
+        слить «почти тот» приём пищи значило бы утащить в набор чужое или забыть своё. Затем те
+        же проверки — на ЗАБЛОКИРОВАННЫХ строках: между чтением и записью группа могла измениться.
+        Слияние — в НОВУЮ запись (время и `created_at` самой ранней), все прежние удаляются:
+        старые кнопки с их id отказывают, а не действуют на весь набор. Позиции переносятся со
+        снапшотами (INV-3); итог — точная сумма итогов записей, итоги дня не двигаются.
+        Отказ — `SessionRejected` с кодом (и текущим приёмом пищи), ничего не записано.
         """
-        clean = name.strip()[:64]
-        if not clean:
+        clean = name.strip()
+        if not clean or len(clean) > 64:
             raise SessionRejected("bad_name")
         uid = _require_id(user)
         session = await self.session_of(user, meal_ids[0]) if meal_ids else None
         if session is None or sorted(session.meal_ids) != sorted(set(meal_ids)):
-            raise SessionRejected("not_a_session")
+            raise SessionRejected("not_a_session", await self._any_session(user, meal_ids))
         if len(session.meals) == 1:  # одна запись — обычный «Сохранить набор» (FR-39.2)
             meal = await self.save_template(user, session.meals[0].id or 0, clean)
             if meal is None:
                 raise SessionRejected("bad_set")
             return meal
-        if any(not i.grams or i.grams <= 0 for m in session.meals for i in m.items):
+        locked = await self._meals.lock(uid, session.meal_ids)
+        start, end = day_bounds_utc(session.start, user.timezone, day_start(user.ui_prefs))
+        groups = MealSession.group(locked)
+        if (sorted(m.id or 0 for m in locked) != sorted(session.meal_ids) or len(groups) != 1
+                or not all(start <= m.eaten_at < end for m in locked)):
+            raise SessionRejected("not_a_session", await self._any_session(user, meal_ids))
+        meals = groups[0].meals
+        if any(not i.grams or i.grams <= 0 for m in meals for i in m.items):
             raise SessionRejected("bad_set")  # FR-39.2: без веса набор нечем повторять
-        target, *rest = session.meals
-        kinds = {m.input_type for m in session.meals}
-        raw = ", ".join(m.raw_input.strip() for m in session.meals if m.raw_input.strip())
-        merged = await self._meals.merge_into(
-            uid, target.id or 0, [m.id or 0 for m in rest],
+        first = meals[0]
+        raw = ", ".join(m.raw_input.strip() for m in meals if m.raw_input.strip())
+        merged = await self._meals.merge(
+            uid, [m.id or 0 for m in meals],
+            eaten_at=first.eaten_at, created_at=first.created_at,
+            # Тип самой ранней: значок ленты — про то, с чего начали; «смешанного» типа нет.
+            input_type=first.input_type,
             raw_input=raw if len(raw) <= 1024 else raw[:1023] + "…",
-            input_type=kinds.pop() if len(kinds) == 1 else "text",
-            source_confidence=min(m.source_confidence for m in session.meals),
-            template_name=clean,
+            source_confidence=min(m.source_confidence for m in meals),
+            template_name=clean, template_at=self._clock(),
+            # Сумма итогов записей БЕЗ нового округления: итоги дня — до знака прежние (AC-198).
+            totals=reduce(operator.add, (m.totals for m in meals), ZERO_MACROS),
         )
-        if merged is None:  # параллельный запрос успел слить (или удалить) раньше
-            raise SessionRejected("not_a_session")
+        if merged is None:  # ponytail: под блокировкой недостижимо; страховка — отказ, не 500
+            raise SessionRejected("not_a_session", await self._any_session(user, meal_ids))
         return merged
+
+    async def _any_session(self, user: User, meal_ids: list[int]) -> MealSession | None:
+        """Текущий приём пищи первой ещё живой записи из присланных — чтобы клиент перерисовал
+        отказ без второго запроса. Только на пути отказа."""
+        for mid in meal_ids:
+            found = await self.session_of(user, mid)
+            if found is not None:
+                return found
+        return None
 
     async def repeat_template(
         self, user: User, name: str, *, day_offset: int = 0, times: int = 1
@@ -634,6 +665,8 @@ class MealService:
                 items=items,
                 source_confidence=src.source_confidence,
                 template_name=src.template_name if (untouched or update) else None,
+                # FR-47: «Обновить набор» — явное сохранение состава, он становится набором.
+                template_at=self._clock() if update else None,
                 totals=sum_macros(i.macros for i in items),
                 estimated=any(i.is_estimate for i in items),
             )
@@ -987,11 +1020,18 @@ _DENSITY_SLACK = 1.15  # до +15% над физической границей 
 
 class SessionRejected(ValueError):
     """FR-47: приём пищи набором не сохранить. `code` — машинный: `bad_name`, `bad_set`
-    (позиций < 2 или без веса), `not_a_session` (id не совпали с текущим приёмом пищи)."""
+    (позиций < 2 или без веса), `not_a_session` (id не совпали с текущим приёмом пищи) — тогда
+    `session` — текущий приём пищи первой ещё живой из присланных записей, если такая есть."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, session: MealSession | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.session = session
+
+
+class SnapshotStale(ValueError):
+    """MA-INV-80: запись с удаления поправили, слили набором, удалили или вернули — снимок
+    «Вернуть» положил бы поверх правки или задвоил позиции. Ничего не записано."""
 
 
 def meal_fingerprint(meal: Meal | None) -> object:

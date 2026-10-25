@@ -13,9 +13,14 @@ class ApiError(HTTPException):
     """Ошибка API. Наружу уходит через обработчик в `main_api`, который кладёт
     её в единый конверт §7.4 — здесь только код и текст."""
 
-    def __init__(self, status_code: int, code: str, message: str) -> None:
+    def __init__(
+        self, status_code: int, code: str, message: str, extra: dict | None = None
+    ) -> None:
         super().__init__(status_code=status_code, detail=message)
         self.code = code
+        # Поля рядом с `error` в конверте (FR-47: `session` при `not_a_session`) — данные для
+        # перерисовки, а не объяснение отказа; тексты по-прежнему одинаковые.
+        self.extra = extra or {}
 
 
 def unauthorized(code: str) -> ApiError:

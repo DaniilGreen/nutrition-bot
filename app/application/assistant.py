@@ -35,7 +35,13 @@ from app.application.entities import (
     User,
     WeightLog,
 )
-from app.application.meal_service import MealService, RecipeRejected, items_named
+from app.application.meal_service import (
+    MealService,
+    RecipeRejected,
+    SnapshotStale,
+    items_named,
+    meal_fingerprint,
+)
 from app.application.ports import (
     BugRepo,
     NluPort,
@@ -871,13 +877,25 @@ class Assistant:
             return CorrectionFailed(target=names, reason="not_found")
         return MealCorrected("adjust", last.meal, last.remaining, olds, news)
 
-    async def restore_meal(self, user: User, snapshot: Meal) -> MealLogged | None:
+    async def restore_meal(
+        self, user: User, snapshot: Meal, *, expect: object = None
+    ) -> MealLogged | None:
         """«Вернуть» (MA-INV-69). Приём ещё есть (убрали позицию) — сперва убираем его нынешний
-        вид, потом кладём снимок: восстанавливается ровно то, что было до удаления."""
+        вид, потом кладём снимок: восстанавливается ровно то, что было до удаления.
+
+        Всё под блокировкой записи (FR-47): `expect` — отпечаток записи сразу после удаления
+        (`meal_fingerprint`); не совпал с тем, что лежит сейчас, — `SnapshotStale`, ничего не
+        записано (MA-INV-80). Сверка и возврат под одной блокировкой: правка между ними не
+        потеряется. `expect=None` — без сверки (вызывающий сверил сам).
+        """
         if snapshot.user_id != user.id:
             return None
-        if snapshot.id is not None and await self._meals.get(user, snapshot.id) is not None:
-            await self._meals.delete(user, snapshot.id)
+        now = (next(iter(await self._meals.lock(user, [snapshot.id])), None)
+               if snapshot.id is not None else None)
+        if expect is not None and meal_fingerprint(now) != expect:
+            raise SnapshotStale(snapshot.id)
+        if now is not None:
+            await self._meals.delete(user, now.id or 0)
         meal = await self._meals.restore(snapshot)
         stats = await self._stats.daily(user)
         return MealLogged(meal=meal, remaining=stats.remaining)

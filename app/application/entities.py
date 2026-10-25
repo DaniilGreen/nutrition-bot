@@ -86,6 +86,10 @@ class Meal:
     template_name: str | None = None  # FR-39.2: имя блюда своей сборки, по нему идёт повтор
     id: int | None = None
     created_at: datetime | None = None
+    # FR-47: когда состав ЯВНО назван набором (сохранение, слияние, «Обновить набор»). Набор —
+    # запись с самой поздней coalesce(template_at, eaten_at): вчерашний состав, сохранённый
+    # набором сегодня, побеждает сегодняшний повтор старого. Повтор метку не ставит.
+    template_at: datetime | None = None
 
 
 @dataclass

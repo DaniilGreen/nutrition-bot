@@ -3,7 +3,8 @@
 Сессионизация по разрыву бездействия, как визиты в веб-аналитике: запись, сделанная не позже
 чем через `GAP` после ПРЕДЫДУЩЕЙ, продолжает тот же приём пищи; иначе начинается новый. Разрыв
 скользящий, а не окно от первой: бургер из пяти сообщений по 15 минут — один приём пищи, хотя
-от первого до последнего час.
+от первого до последнего час. Но не дольше `MAX_SPAN` от первой записи: иначе перекусы каждые
+20 минут весь вечер слиплись бы в один «приём» (тот же потолок длины сессии, что в аналитике).
 
 Группа не хранится — считается при чтении (храним факты, агрегируем при чтении). Поэтому здесь
 только время: какие записи и какого дня группировать, решает вызывающий — он передаёт записи
@@ -15,9 +16,12 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 
 GAP = timedelta(minutes=30)  # одна константа на бот и аппку; ровно GAP — ещё тот же приём пищи
+MAX_SPAN = timedelta(hours=2)  # от первой записи приёма пищи; ровно MAX_SPAN — ещё тот же
 
 
-def group(times: Sequence[datetime], gap: timedelta = GAP) -> list[list[int]]:
+def group(
+    times: Sequence[datetime], gap: timedelta = GAP, span: timedelta = MAX_SPAN
+) -> list[list[int]]:
     """Индексы `times`, разложенные по приёмам пищи; группы и индексы внутри — по времени.
 
     Сортировка устойчивая: при равном времени порядок — как во входе (вызывающий сортирует
@@ -25,7 +29,7 @@ def group(times: Sequence[datetime], gap: timedelta = GAP) -> list[list[int]]:
     """
     out: list[list[int]] = []
     for i in sorted(range(len(times)), key=times.__getitem__):
-        if out and times[i] - times[out[-1][-1]] <= gap:
+        if out and times[i] - times[out[-1][-1]] <= gap and times[i] - times[out[-1][0]] <= span:
             out[-1].append(i)
         else:
             out.append([i])
@@ -47,6 +51,10 @@ def demo() -> None:
     assert group([at(9, 0), at(9, 0), at(9, 0)]) == [[0, 1, 2]]
     # Бургер 50 минут по 15 минут на сообщение — один приём пищи.
     assert group([at(19, m) for m in (0, 15, 30, 45)] + [at(19, 50)]) == [[0, 1, 2, 3, 4]]
+    # AC-196: паузы по 25 минут, но 20:05 — 2 ч 05 мин от начала 18:00 → новый приём пищи.
+    evening = [at(18, 0), at(18, 25), at(18, 50), at(19, 15), at(19, 40), at(20, 5)]
+    assert group(evening) == [[0, 1, 2, 3, 4], [5]]
+    assert group([at(18, 0), at(18, 30), at(19, 0), at(19, 30), at(20, 0)]) == [[0, 1, 2, 3, 4]]
     assert group([]) == []
     assert group([at(8, 0)], gap=timedelta(0)) == [[0]]
     print("sessions: ок")

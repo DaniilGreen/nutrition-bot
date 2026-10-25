@@ -19,7 +19,14 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from app.application.entities import Meal, MealItem, Product
-from app.application.results import DayView, ItemAdjusted, ItemRemoved, LabelRead, MealLogged
+from app.application.results import (
+    DayView,
+    ItemAdjusted,
+    ItemRemoved,
+    LabelRead,
+    MealLogged,
+    MealSession,
+)
 from app.bot.ui import blocks, kit
 from app.bot.ui.context import DayContext, day_status
 from app.bot.ui.kit import e, em, n, pct, tg_time, verdict
@@ -44,7 +51,7 @@ def today(d: DayContext) -> str:
     c, g = d.today.remaining.consumed, d.goal
     if not d.today.meals:
         return (
-            "<h3>📊 Сегодня</h3><p>Пока пусто. Запиши приём — «куриная грудка 250 г», "
+            "<h3>📊 Сегодня</h3><p>Пока пусто. Запиши еду — «куриная грудка 250 г», "
             "голосом или фото блюда и этикетки 📷.</p>"
         )
     # Недельный якорь убран с «Сегодня» по просьбе владельца (остаётся в вечернем итоге). <hr/>
@@ -75,14 +82,17 @@ def _meal_day_label(eaten_at: datetime, tz_name: str, today: date) -> str:
 
 
 def meal_card(
-    d: DayContext, r: MealLogged, *, edited: bool = False, restored: bool = False
+    d: DayContext, r: MealLogged, *, edited: bool = False, restored: bool = False,
+    session: MealSession | None = None, saved: bool = False,
 ) -> str:
     """Карточка сразу после записи — самый горячий момент: человек ещё у тарелки, уточнить 5 сек.
 
-    Показываем ЧТО записали (метки ≈/📋), вклад приёма, прогресс ЕГО дня всеми барами и одну
+    Показываем ЧТО записали (метки ≈/📋), вклад записи, прогресс ЕЁ дня всеми барами и одну
     подсказку. При «вчера/завтра» бары и заголовок — про ТОТ день (r.remaining), а добор молчит:
     он про сегодняшний конец дня, к прошлому/будущему дню неприменим. restored — после «⏪ Вернуть»
-    (FR-41): заголовок называет то, что человек нажал.
+    (FR-41): заголовок называет то, что человек нажал. session — приём пищи этой записи (FR-47):
+    из нескольких записей — строка его суммы, из одной — ничего (повторила бы итог записи).
+    saved — запись только что стала набором («📌 Приём пищи — в набор»): заголовок — имя набора.
     """
     m, g = r.meal, d.goal
     today = d.days[-1][0] if d.days else m.eaten_at.astimezone(ZoneInfo(d.today.timezone)).date()
@@ -94,18 +104,27 @@ def meal_card(
             f"<li>{_item_mark(it)}{e(it.name_snapshot)} — {grams}<b>{n(it.macros.kcal)}</b> ккал · "
             f"Б{n(it.macros.protein)} Ж{n(it.macros.fat)} У{n(it.macros.carb)}</li>"
         )
-    total = (  # при одной позиции строка «Приём: …» дословно повторяет её же
-        f"<p>Приём: <b>{n(m.totals.kcal)} ккал</b> ({pct(m.totals.kcal, g.daily_kcal)}% цели) · "
+    total = (  # при одной позиции строка «Запись: …» дословно повторяет её же
+        f"<p>Запись: <b>{n(m.totals.kcal)} ккал</b> ({pct(m.totals.kcal, g.daily_kcal)}% цели) · "
         f"Б{n(m.totals.protein)} Ж{n(m.totals.fat)} У{n(m.totals.carb)}</p>"
         if len(m.items) > 1
         else ""
     )
+    tz = d.today.timezone
+    # MA-INV-70: правленая карточка не должна читаться как новая запись.
+    head = "⏪ Вернул" if restored else "✏️ Поправил" if edited else "✅ Записал"
+    hint = ""
+    if saved and m.template_name:  # имя — в абзаце: 64 знака заголовок в пузырь не вмещает
+        name = e(m.template_name)
+        head = "📌 Набор сохранён"
+        hint = (f"<p><b>{name}</b> — дальше пиши «{name}», запишу этот же состав, "
+                f"«2 {name}» — вдвое.</p>")
     return (
-        # MA-INV-70: правленая карточка не должна читаться как новая запись.
-        f"<h3>{'⏪ Вернул' if restored else '✏️ Поправил' if edited else '✅ Записал'}{day_label} · "
-        f"{tg_time(m.eaten_at, d.today.timezone)}</h3>"
+        f"<h3>{head}{day_label} · {tg_time(m.eaten_at, tz)}</h3>"
         + f"<ul>{''.join(lis)}</ul>"
         + total
+        + (session_line(session, tz) if session is not None and len(session.meals) > 1 else "")
+        + hint
         + _notes(r)
         + "<hr/>"
         + _bars(r.remaining.consumed, r.remaining.goal)  # прогресс ДНЯ ПРИЁМА (бэкдейт → тот день)
@@ -149,7 +168,7 @@ def week(d: DayContext) -> str:
     w = d.week7
     if not w.days_logged:
         return (
-            "<h3>📈 Неделя</h3><p>За 7 дней записей нет. Запиши пару приёмов — покажу среднее.</p>"
+            "<h3>📈 Неделя</h3><p>За 7 дней записей нет. Запиши еду пару дней — покажу среднее.</p>"
         )
     a, g = w.avg_macros, d.goal
     return (
@@ -283,23 +302,39 @@ def products(items: list[Product], query: str | None = None) -> str:
 # ---------- экраны произвольного дня и разбора ввода ----------
 
 
-def day(dv: DayView, rem: Remaining, repeat: bool = False, note: str = "") -> str:
+def day(
+    dv: DayView, rem: Remaining, repeat: bool = False, note: str = "", *, flat: bool = False
+) -> str:
     """Один день истории (стрелки ← →). НЕ сегодня-центричный: без якоря и советов — это прошлое.
 
-    ПЛОСКИЙ список: строка на КАЖДУЮ позицию с её временем «время · продукт — ккал». Заголовка-
-    подытога приёма («13:37 · 852 ккал») НЕТ намеренно: владелец логирует по одному продукту, а не
-    составными приёмами, поэтому подытог у одиночной позиции дублировал бы её же (11:56 · 325 ккал →
-    «Фо бо 325 ккал» — одно и то же дважды). Время у позиции = время её приёма.
+    Строка на КАЖДУЮ позицию с её временем «время · продукт — ккал». Подытога у записи НЕТ
+    намеренно: владелец логирует по одному продукту, и подытог одиночной позиции дублировал бы её
+    же («11:56 · 325 ккал» → «Фо бо 325 ккал»). Подытог есть у ПРИЁМА ПИЩИ из нескольких записей
+    (FR-47): бургер пятью сообщениями — шапка «🍽 13:05–13:45 · сумма», его позиции вложенным
+    списком под ней. Запись, одна в своём приёме пищи, — строкой, как раньше. flat — запасной
+    вид без вложенного списка (Telegram его отверг): шапка строкой, позиции под ней с «↳».
     """
     title = _day_title(dv)
     if not dv.meals:
         return f"<h3>🗒 {title}</h3><p>Ничего не записано.</p>"
-    lines = "".join(
-        f"<li>{tg_time(m.eaten_at, dv.timezone)} · {_item_mark(it)}{e(it.name_snapshot)} — "
-        f"{kit.g(it.grams)}<b>{n(it.macros.kcal)}</b> ккал</li>"
-        for m in dv.meals
-        for it in m.items
-    )
+    tz, rows = dv.timezone, []
+    for s in dv.sessions or MealSession.group(dv.meals):  # группу считает application
+        nested = len(s.meals) > 1
+        arrow = "↳ " if nested and flat else ""
+        lis = "".join(  # Б/Ж/У у каждой позиции — как на карточке (FR-47 «Бот», AC-204)
+            "<li>" + kit.with_macros(
+                f"{arrow}{tg_time(m.eaten_at, tz)} · {_item_mark(it)}{e(it.name_snapshot)} — "
+                f"{kit.g(it.grams)}<b>{n(it.macros.kcal)}</b> ккал",
+                it.macros, est=it.is_estimate, nested=nested,
+            ) + "</li>"
+            for m in s.meals
+            for it in m.items
+        )
+        if nested:
+            head = f"🍽 {tg_time(s.start, tz)}–{tg_time(s.end, tz)} · {_session_sum(s)}"
+            lis = f"<li>{head}</li>{lis}" if flat else f"<li>{head}<ul>{lis}</ul></li>"
+        rows.append(lis)
+    lines = "".join(rows)
     # FR-42: в режиме повтора — куда пишет 🔁, прямо над кнопками (заголовок дня — «вчера», и без
     # этой строки повтор читался бы как запись во вчера, урок аппки 13.10.2026). После повтора та
     # же строка говорит, что записано: всплывашка гаснет, а след должен остаться.
@@ -315,7 +350,7 @@ def meal_deleted(meal: Meal, tz_name: str) -> str:
     под ней «⏪ Вернуть». Раньше её удаляли, и вернуть было не из чего."""
     names = ", ".join(e(i.name_snapshot) for i in meal.items)
     return (
-        f"<h3>🗑 Отменил приём · {tg_time(meal.eaten_at, tz_name)}</h3>"
+        f"<h3>🗑 Отменил запись · {tg_time(meal.eaten_at, tz_name)}</h3>"
         f"<p>{names} — <b>{n(meal.totals.kcal)}</b> ккал.</p>"
     )
 
@@ -412,7 +447,7 @@ def help_() -> str:
         "<ul><li>📊 Сегодня · 📈 Неделя · 🗒 История</li>"
         "<li>⚖️ Вес · 🎯 Цель · /month · /streak</li></ul></details>"
         "<details><summary>🤖 Спросить</summary>"
-        "<p><code>/ask чем добрать белок?</code> — ассистент сам посмотрит твои приёмы, продукты "
+        "<p><code>/ask чем добрать белок?</code> — ассистент сам посмотрит твои записи, продукты "
         "и вес. Или просто напиши вопрос со знаком «?». Он не врач и ничего не записывает — "
         "записать продукт из ответа можно кнопкой под ним.</p></details>"
         "<details><summary>🎯 Настроить</summary>"
@@ -437,8 +472,32 @@ def _item_mark(it: MealItem) -> str:
     return ""
 
 
+def _session_sum(s: MealSession) -> str:
+    """«≈640 ккал · Б52 Ж31 У38» — сумма приёма пищи (FR-47): те же числа, что в итогах дня
+    (INV-1, INV-3). ≈ — хоть одна позиция оценкой (INV-13): сумма не точнее худшей позиции."""
+    t = s.totals
+    return (
+        f"<b>{'≈' if s.estimated else ''}{n(t.kcal)} ккал</b> · "
+        f"Б{n(t.protein)} Ж{n(t.fat)} У{n(t.carb)}"
+    )
+
+
+def session_line(s: MealSession, tz_name: str) -> str:
+    """Блок карточки (FR-47): «🍽 Приём пищи с 13:05 · 5 записей» / «640 ккал · Б52 Ж31 У38».
+
+    Бургер пятью сообщениями — пять карточек по одной позиции; без этого блока сумму блюда человек
+    складывал в голове. Время — первой записи: приём пищи начинается с неё. Перенос — свой, после
+    счёта записей: одной строкой это ≈ 840 у.е. при пузыре 760 — Telegram порвал бы её где попало,
+    на 320 px посреди «Б52 Ж31»."""
+    k = len(s.meals)
+    return (
+        f"<p>🍽 Приём пищи с {tg_time(s.start, tz_name)} · "
+        f"{k} {kit.plural(k, 'запись', 'записи', 'записей')}<br>{_session_sum(s)}</p>"
+    )
+
+
 def _notes(r: MealLogged) -> str:
-    """Сноски-легенды под карточкой приёма (только те, что реально встретились)."""
+    """Сноски-легенды под карточкой записи (только те, что реально встретились)."""
     notes = []
     if any(it.is_estimate for it in r.meal.items):
         notes.append("≈ — прикинул сам, приблизительно. Неверно? /products")
@@ -474,8 +533,10 @@ __all__ = [
     "item_removed",
     "label",
     "meal_card",
+    "meal_deleted",
     "month",
     "products",
+    "session_line",
     "start",
     "streak",
     "today",
