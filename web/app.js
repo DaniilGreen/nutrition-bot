@@ -13,7 +13,7 @@
     .match(/[?&]v=([^&]+)/) || [])[1] || '';
   var root = document.getElementById('screen');
   var nav = document.getElementById('tabs');
-  var state = { tab: 'day', daysAgo: 0, open: {}, prefs: null,
+  var state = { tab: 'day', daysAgo: 0, open: {}, sessOpen: {}, prefs: null,
                 cat: { q: '', offset: 0, view: 'list', product: null, dup: null } };
 
   // Проверка идёт ДО регистрации слушателей: иначе на экране «открой из
@@ -576,7 +576,13 @@
         toast('Вернул.');
         if (r.meal) { state.open[r.meal.id] = true; }
         rerender();
-      }).catch(function (err) { oops(err); });
+      }).catch(function (err) {
+        /* MA-INV-80: запись с тех пор поправили, слили набором или вернули в боте — снимок
+           вернул бы прошлое поверх или задвоил позиции. Экран мог это ещё не показать. */
+        if (err.code !== 'undo_stale') return oops(err);
+        toast('Запись уже изменилась — вернуть нельзя.', true);
+        rerender();
+      });
     }
     send('/api/meals/' + b.dataset.undo, { method: 'DELETE' })
       .then(function () { state.fresh = null; toast('Отменил.'); rerender(); })
@@ -814,7 +820,7 @@
       closeSheet();
       if (what === 'again') return logged(r, 0);
       if (what === 'remove') {
-        restoreToast('Убрал: ' + sh.title + (r.meal ? '' : ' — приём опустел и удалён'), r.undo);
+        restoreToast('Убрал: ' + sh.title + (r.meal ? '' : ' — запись опустела и удалена'), r.undo);
       } else if (what === 'save') {
         toast(sh.title + ': было ' + n(r.old_grams) + ' г, стало ' + n(r.item.grams) + ' г.');
       } else {
@@ -866,6 +872,11 @@
       root.insertBefore(x, before ? keep : null);
     });
     markStale();
+  }
+
+  function naming() {
+    var a = document.activeElement;
+    return !!a && (a.id === 'sessname' || a.id === 'setname');
   }
 
   function typing() {
@@ -1000,7 +1011,9 @@
     var kg = d.weight_kg;
     var third = (wantWeight && kg != null)
       ? foot('Вес', kg, null, 'right', 1)
-      : foot('Приёмов', d.meals.length, null, 'right');
+      /* FR-47, словарь: «приём» — приём пищи, а не запись. Счёт — групп сервера (MA-INV-79);
+         у сохранённого дня старой формы групп нет — тогда записей. */
+      : foot('Приёмов', mealCount(d), null, 'right');
     return '<div class="sep" style="margin:var(--s-4) 0 0"></div>' +
       '<div class="foot">' + foot('Жир', t.fat_g, g.fat_g, 'left') +
       foot('Углеводы', t.carb_g, g.carb_g, 'left') + third + '</div>';
@@ -1068,8 +1081,9 @@
      «📋» — человек назвал сам. Бот метит так же; расхождение аппки и бота
      на одних данных читалось бы как баг в подсчёте. */
   function itemMark(i) {
-    if (i.is_estimate) return ' <span style="color:var(--text-faint)">≈</span>';
-    if (i.is_stated) return ' <span style="color:var(--text-faint)">📋</span>';
+    /* Неразрывный пробел: на 320 «≈» уезжало одно на новую строку под имя. */
+    if (i.is_estimate) return '\u00a0<span style="color:var(--text-faint)">≈</span>';
+    if (i.is_stated) return '\u00a0<span style="color:var(--text-faint)">📋</span>';
     return '';
   }
 
@@ -1097,6 +1111,162 @@
       : parts.join(', ');
   }
 
+  /* FR-47, MA-INV-79, MA-INV-81: лента дня блоками. Приём пищи из нескольких записей — группой,
+     из одной — обычной строкой. Группы считает сервер; здесь только раскладка по
+     `meals[].session` и сверка: группа рисуется, только если под ней ровно её `meal_ids`, подряд —
+     иначе сумма в шапке разошлась бы с записями под ней или лента пошла бы не по времени. Не
+     сошлось или полей нет (сохранённый день старой формы) — записи строками, как до FR-47.
+     `meals` с сервера — по времени. Числа шапки — с сервера, без своего округления (INV-1).
+     Чистая функция: ветки проверяет `node web/check.mjs`. */
+  function feedModel(d, newFirst) {
+    var meals = (d && d.meals) || [], ss = (d && d.sessions) || [];
+    var of = {}, at = {};
+    meals.forEach(function (m, pos) {
+      var s = typeof m.session === 'number' ? ss[m.session] : null;
+      if (!s || s.index !== m.session) return;
+      (of[m.session] = of[m.session] || []).push(m);
+      (at[m.session] = at[m.session] || []).push(pos);
+    });
+    var out = [], seen = {};
+    meals.forEach(function (m) {
+      var k = m.session, xs = of[k], s = xs && ss[k], ids = (s && s.meal_ids) || [];
+      var whole = !!xs && xs.length > 1 && xs.length === ids.length &&
+        at[k][xs.length - 1] - at[k][0] === xs.length - 1 &&
+        xs.every(function (x) { return ids.indexOf(x.id) >= 0; });
+      if (!whole) return out.push({ meal: m });
+      if (seen[k]) return;
+      seen[k] = true;
+      var c = xs.length, r = c % 10, h = c % 100, one = r === 1 && h !== 11, noWeight = null;
+      xs.forEach(function (x) {
+        (x.items || []).forEach(function (i) {
+          if (!(i.grams > 0) && noWeight === null) noWeight = i.name;
+        });
+      });
+      out.push({
+        meals: newFirst ? xs.slice().reverse() : xs.slice(),
+        group: {
+          key: 'g' + ids[0], ids: ids.slice(), n: c, one: one,
+          range: s.start === s.end ? s.start : s.start + '–' + s.end,
+          count: c + ' ' + (one ? 'запись'
+                           : r >= 2 && r <= 4 && (h < 12 || h > 14) ? 'записи' : 'записей'),
+          kcal: s.kcal, p: s.protein_g, f: s.fat_g, c: s.carb_g, approx: !!s.estimated,
+          noWeight: noWeight  // FR-39.2: позиция без веса — набором не сохранить
+        }
+      });
+    });
+    return newFirst ? out.reverse() : out;
+  }
+
+  /* Подвал «Приёмов» (FR-47, словарь): приёмы пищи сервера; у сохранённого дня старой формы
+     групп нет — тогда записи. Чистая функция: проверяет `node web/check.mjs`. */
+  function mealCount(d) {
+    return ((d && (d.sessions || d.meals)) || []).length;
+  }
+
+  /* MA-INV-81, §6.28: шапка приёма пищи — сумма читается первой, записи под ней живые, как
+     обычные строки (тап — раскрыть, позиция — шторка, «Удалить» с «Вернуть»). Тап по шапке
+     открывает её действие — «📌 Сохранить набором»: редкое и необратимое, держать его на виду у
+     каждой группы — шум. Шеврон под суммой говорит, что за шапкой что-то есть. */
+  function sessionBlock(b) {
+    var g = b.group, open = !!state.sessOpen[g.key];
+    var head =
+      '<button class="sess-h" data-sess="' + g.key + '" aria-expanded="' + open + '" ' +
+        'aria-label="Приём пищи ' + esc(g.range) + ': ' + (g.approx ? 'примерно ' : '') +
+          n(g.kcal) + ' ккал, белки ' + n(g.p) + ', жиры ' + n(g.f) + ', углеводы ' + n(g.c) +
+          ' г, ' + esc(g.count) + '. Действия">' +
+        '<span class="st">Приём пищи<span class="num rng">' + esc(g.range) + '</span></span>' +
+        '<span class="num sk">' + (g.approx ? '<span class="ap">≈</span>' : '') + n(g.kcal) +
+        '</span>' +
+        '<span class="mic num pfc"><span style="color:var(--prot)">Б ' + n(g.p) + '</span> · ' +
+          '<span style="color:var(--fat)">Ж ' + n(g.f) + '</span> · ' +
+          '<span style="color:var(--carb)">У ' + n(g.c) + '</span>' +
+          '<span class="cnt"> · ' + esc(g.count) + '</span></span>' +
+        '<svg class="more" width="16" height="16" viewBox="0 0 24 24" fill="none" ' +
+          'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
+          'aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>' +
+      '</button>';
+    var acts = '';
+    if (open && state.sessNaming === g.key) {
+      acts = '<div class="naming sess-a">' +
+        '<label class="mic" for="sessname">Как назвать набор? ' + esc(g.count) +
+          (g.one ? ' станет' : ' станут') + ' одной записью, дальше это слово запишет весь ' +
+          'состав</label>' +
+        '<div class="naming-row">' +
+          '<input id="sessname" type="text" maxlength="64" autocomplete="off" enterkeyhint="done" ' +
+            'value="' + esc(state.sessName || '') + '">' +
+          '<button class="primary" data-sesssave="' + g.key + '">Готово</button></div>' +
+        '<button class="link" data-sesscancel="1" style="align-self:flex-start">Отмена</button>' +
+      '</div>';
+    } else if (open) {
+      /* FR-39.2: у набора каждая позиция с весом. «Свои цифры» без веса — объясняем сразу,
+         а не отказом сервера после ввода имени. */
+      acts = '<div class="sess-a">' + (g.noWeight !== null
+        ? '<div class="mic" style="padding:var(--s-1) 0 var(--s-2)">Набором не сохранить: у «' +
+          esc(g.noWeight) + '» свои цифры без веса.</div>'
+        : '<button class="link" data-sessname="' + g.key + '">📌 Сохранить набором</button>') +
+      '</div>';
+    }
+    return '<div class="sess" role="group" aria-label="Приём пищи ' + esc(g.range) + '">' +
+      head + acts + '<div class="sess-b">' +
+      b.meals.map(function (m) { return mealBlock(m, true); }).join('') + '</div></div>';
+  }
+
+  /* FR-47: «📌 Сохранить набором» — записи приёма пищи сливаются в одну с именем. Id шлём те,
+     что на экране; совпали ли они с приёмом пищи сейчас, решает сервер (MA-INV-79). Слияние
+     необратимо одной кнопкой — ключ на дело, двойной тап не сольёт дважды (§7.5). Ответ читаем
+     терпимо: запись-набор может прийти новым id, слитые — любым списком `merged_ids`. */
+  function saveSession(gkey) {
+    var inp = document.getElementById('sessname');
+    var nm = ((inp || {}).value || '').trim();
+    var b = feedModel(state.lastDay, false).filter(function (x) {
+      return x.group && x.group.key === gkey;
+    })[0];
+    if (!b || state.sending) return;
+    if (!nm) { if (inp) inp.focus(); return; }  // пустое «Готово» — вернуть в поле, а не молчать
+    state.sessName = nm;
+    state.sending = true;
+    var btn = document.querySelector('[data-sesssave]');
+    if (btn) { btn.disabled = true; btn.textContent = 'Сохраняю…'; }
+    busy('Сохраняю набор…');
+    var key = 'sess:' + b.group.ids.join(',') + ':' + nm;
+    send('/api/sessions/template', {
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': keyFor(key) },
+      body: JSON.stringify({ meal_ids: b.group.ids, name: nm })
+    }).then(function (r) {
+      dropKey(key);
+      state.sessNaming = null; state.sessName = '';
+      delete state.sessOpen[gkey];
+      b.group.ids.concat(r.merged_ids || []).forEach(function (id) {
+        delete state.open[id];
+        if (state.fresh === id) state.fresh = null;
+      });
+      /* Набор раскрыт: состав, который только что слили, виден сразу — это и подтверждение. */
+      if (r.meal) state.open[r.meal.id] = true;
+      toast('Набор «' + r.name + '» сохранён: ' + b.group.count +
+            (b.group.one ? ' стала' : ' стали') + ' одной. Он в «Продуктах» → «Моё».');
+      renderDay();
+      loadFrequent();  // чип нового набора — сразу (§6.26)
+    }).catch(function (err) {
+      if (err.code === 'not_a_session') {
+        /* Запись добавили, удалили или поправили с другого устройства — нужен свежий день. Имя
+           остаётся в поле, если приём пищи с той же первой записью ещё есть. */
+        dropKey(key);
+        toast('Приём пищи изменился — проверь и сохрани ещё раз.', true);
+        return renderDay();
+      }
+      if (err.code === 'bad_name') toast('Имя набора — от 1 до 64 знаков.', true);
+      else if (err.code === 'bad_set') {
+        dropKey(key);
+        toast('Набором не сохранить: нужны две позиции и больше, и у каждой — вес.', true);
+      } else if (oops(err)) return;  // oops уже освежил день
+      /* MA-INV-32: отказ не стирает экран. Из полученного дня, без сети: поле ввода вернулось из
+         busy(), поле имени — с набранным именем и в фокусе. */
+      repaintDay();
+      var again = document.getElementById('sessname');
+      if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+    }).then(function () { state.sending = false; });
+  }
+
   function feed(d) {
     if (!d.meals.length) {
       return '<section class="card" style="margin-top:var(--s-3)">' +
@@ -1104,81 +1274,89 @@
     }
     /* Новое сверху по умолчанию: только что записанное проверяют сразу,
        а утренний кофе — почти никогда. Порядок переключается тут же и
-       запоминается, чтобы не спорить с привычкой. */
-    var meals = feedOrder() === 'new_first' ? d.meals.slice().reverse() : d.meals;
-    var rows = meals.map(function (m) {
-      var opened = !!state.open[m.id];
-      var isFresh = state.fresh === m.id && state.daysAgo === 0;
-      var mark = m.estimated ? ' <span style="color:var(--text-faint)">≈</span>' : '';
-      var head =
-        '<button class="meal" data-meal="' + m.id + '" aria-expanded="' + opened + '">' +
-          '<span class="num t">' + esc(m.at) + '</span>' +
-          '<span class="n">' + esc(mealTitle(m)) + mark + '</span>' +
-          (INPUT_MARK[m.input_type]
-            ? '<span class="how">· ' + INPUT_MARK[m.input_type] + '</span>' : '') +
-          '<span class="num k">' + n(m.kcal) + '</span>' +
-        '</button>';
-      if (!opened) return head;
-      var items = m.items.map(function (i) {
-        /* MA-INV-22, §6.27: правка достижима из ленты всегда — тап по строке открывает
-           шторку этой записи в любой день, и у «своих цифр» тоже (без чипов веса). */
-        return '<div class="row" data-item="' + i.id + '" data-meal="' + m.id +
-               '" style="cursor:pointer">' +
-          '<span style="flex-grow:1">' + esc(i.name) +
-            itemMark(i) + '</span>' +
-          (i.grams > 0 ? '<span class="num g">' + n(i.grams) + ' г</span>'
-                       : '<span class="mic g">свои цифры</span>') +
-          '<span class="num" style="width:52px;text-align:right">' + n(i.kcal) + '</span>' +
-          /* §6.25: с прошлого дня — «ещё раз сегодня». На сегодняшнем дне повтор
-             удобнее чипами частого, и кнопка там лишняя. */
-          (state.daysAgo > 0
-            ? '<button class="again" data-again-m="' + m.id + '" data-again-i="' + i.id + '" ' +
-              'aria-label="Записать ' + esc(i.name) + ' в сегодня">↻</button>'
-            : '') +
-        '</div>';
-      }).join('');
-      var macros = '<div class="row" style="border-top:1px solid var(--separator);margin-top:4px;padding-top:8px">' +
-        '<span style="flex-grow:1">Б ' + n(m.protein_g) + ' · Ж ' + n(m.fat_g) + ' · У ' + n(m.carb_g) + '</span></div>';
-      /* FR-39.2: несколько взвешенных позиций — можно сохранить набор. Уже набор — кнопки нет,
-         в шапке бейдж с именем. Имя вводится прямо в карточке, без модалки (макет A). */
-      var canSet = !m.template_name && m.items.length > 1 &&
-                   m.items.every(function (i) { return i.grams > 0; });
-      var acts = state.naming === m.id
-        ? '<div class="naming">' +
-            '<label class="mic" for="setname">Как назвать набор? Дальше это слово запишет тот же ' +
-              'состав</label>' +
-            '<div class="naming-row">' +
-              '<input id="setname" type="text" maxlength="64" autocomplete="off" ' +
-                'enterkeyhint="done">' +
-              '<button class="primary" data-setsave="' + m.id + '">Готово</button></div>' +
-            '<button class="link" data-setcancel="1" style="align-self:flex-start">Отмена</button>' +
-          '</div>'
-        : '<div class="actions" style="margin-top:var(--s-2)">' +
-            '<button data-repeat="' + m.id + '">' +
-              (state.daysAgo > 0 ? 'Повторить приём сегодня' : 'Повторить') + '</button>' +
-            '<button data-drop="' + m.id + '" class="danger">Удалить</button></div>' +
-            /* Отдельной строкой, а не третьей кнопкой в ряду: на 320 в ряду 204px, «Повторить» +
-               «Сохранить набор» = 245px — ряд рвался на три строки. Набор сохраняют изредка,
-               ему хватает ссылки; «Удалить» остаётся последним. */
-            (canSet ? '<button class="link" data-setname="' + m.id + '">Сохранить набор</button>' : '');
-      /* На 320 подпись «↻ сегодня» у каждой позиции съедала строку — кнопка-иконка,
-         а смысл один раз над позициями. */
-      var hint = isFresh
-        ? '<div class="mic" style="padding:2px 0 4px;color:var(--accent)">только что · ' +
-          'тап по строке — поправить</div>'
-        : state.daysAgo > 0
-          ? '<div class="mic" style="padding:2px 0 4px">↻ — ещё раз сегодня. ' +
-            'Тап по позиции — поправить.</div>' : '';
-      var body = head + '<div class="items">' + hint + items + macros + acts + '</div>';
-      return isFresh ? '<div class="fresh">' + body + '</div>' : body;
+       запоминается, чтобы не спорить с привычкой. Внутри приёма пищи — тот же порядок. */
+    var rows = feedModel(d, feedOrder() === 'new_first').map(function (b) {
+      return b.group ? sessionBlock(b) : mealBlock(b.meal);
     }).join('');
     var newFirst = feedOrder() === 'new_first';
-    var head = '<div style="display:flex;align-items:center;margin-bottom:var(--s-2)">' +
+    var head = '<div class="feedhead" style="display:flex;align-items:center;margin-bottom:var(--s-2)">' +
       '<span class="cap" style="flex-grow:1">Съедено</span>' +
       '<button class="sortbtn" data-order="' + (newFirst ? 'old_first' : 'new_first') +
         '" aria-label="Порядок записей">' +
         (newFirst ? 'сначала новое' : 'сначала старое') + '</button></div>';
     return '<section class="card" style="margin-top:var(--s-3)">' + head + rows + '</section>';
+  }
+
+  /* Одна запись ленты — одинаково и отдельно, и внутри приёма пищи (MA-INV-82). */
+  function mealBlock(m, inGroup) {
+    var opened = !!state.open[m.id];
+    var isFresh = state.fresh === m.id && state.daysAgo === 0;
+    /* «≈» вне многоточия: длинное имя режется, метка оценки остаётся (MA-INV-26). */
+    var mark = m.estimated ? '<span class="ap">\u00a0≈</span>' : '';
+    var head =
+      '<button class="meal" data-meal="' + m.id + '" aria-expanded="' + opened + '">' +
+        '<span class="num t">' + esc(m.at) + '</span>' +
+        '<span class="n"><span class="nt">' + esc(mealTitle(m)) + '</span>' + mark + '</span>' +
+        (INPUT_MARK[m.input_type]
+          ? '<span class="how">· ' + INPUT_MARK[m.input_type] + '</span>' : '') +
+        '<span class="num k">' + n(m.kcal) + '</span>' +
+      '</button>';
+    if (!opened) return head;
+    var items = m.items.map(function (i) {
+      /* MA-INV-22, §6.27: правка достижима из ленты всегда — тап по строке открывает
+         шторку этой записи в любой день, и у «своих цифр» тоже (без чипов веса). */
+      return '<div class="row" data-item="' + i.id + '" data-meal="' + m.id +
+             '" style="cursor:pointer">' +
+        '<span style="flex-grow:1">' + esc(i.name) +
+          itemMark(i) + '</span>' +
+        (i.grams > 0 ? '<span class="num g">' + n(i.grams) + ' г</span>'
+                     : '<span class="mic g">свои цифры</span>') +
+        '<span class="num" style="width:52px;text-align:right">' + n(i.kcal) + '</span>' +
+        /* §6.25: с прошлого дня — «ещё раз сегодня». На сегодняшнем дне повтор
+           удобнее чипами частого, и кнопка там лишняя. */
+        (state.daysAgo > 0
+          ? '<button class="again" data-again-m="' + m.id + '" data-again-i="' + i.id + '" ' +
+            'aria-label="Записать ' + esc(i.name) + ' в сегодня">↻</button>'
+          : '') +
+      '</div>';
+    }).join('');
+    var macros = '<div class="row" style="border-top:1px solid var(--separator);margin-top:4px;padding-top:8px">' +
+      '<span style="flex-grow:1">Б ' + n(m.protein_g) + ' · Ж ' + n(m.fat_g) + ' · У ' + n(m.carb_g) + '</span></div>';
+    /* FR-39.2: несколько взвешенных позиций — можно сохранить набор. Уже набор — кнопки нет,
+       в шапке бейдж с именем. Имя вводится прямо в карточке, без модалки (макет A). */
+    var canSet = !m.template_name && m.items.length > 1 &&
+                 m.items.every(function (i) { return i.grams > 0; });
+    var acts = state.naming === m.id
+      ? '<div class="naming">' +
+          '<label class="mic" for="setname">Как назвать набор? Дальше это слово запишет тот же ' +
+            'состав</label>' +
+          '<div class="naming-row">' +
+            '<input id="setname" type="text" maxlength="64" autocomplete="off" ' +
+              'enterkeyhint="done">' +
+            '<button class="primary" data-setsave="' + m.id + '">Готово</button></div>' +
+          '<button class="link" data-setcancel="1" style="align-self:flex-start">Отмена</button>' +
+        '</div>'
+      : '<div class="actions" style="margin-top:var(--s-2)">' +
+          '<button data-repeat="' + m.id + '">' +
+            (state.daysAgo > 0 ? 'Повторить запись сегодня' : 'Повторить') + '</button>' +
+          '<button data-drop="' + m.id + '" class="danger">Удалить</button></div>' +
+          /* Отдельной строкой, а не третьей кнопкой в ряду: на 320 в ряду 204px, «Повторить» +
+             «Сохранить набор» = 245px — ряд рвался на три строки. Набор сохраняют изредка,
+             ему хватает ссылки; «Удалить» остаётся последним. */
+          /* В приёме пищи у группы своё «Сохранить набором» (слияние); здесь — только эта
+             запись, без слияния (FR-39.2), и подпись это говорит (§6.28). */
+          (canSet ? '<button class="link" data-setname="' + m.id + '">' +
+            (inGroup ? 'Сохранить запись набором' : 'Сохранить набор') + '</button>' : '');
+    /* На 320 подпись «↻ сегодня» у каждой позиции съедала строку — кнопка-иконка,
+       а смысл один раз над позициями. */
+    var hint = isFresh
+      ? '<div class="mic" style="padding:2px 0 4px;color:var(--accent)">только что · ' +
+        'тап по строке — поправить</div>'
+      : state.daysAgo > 0
+        ? '<div class="mic" style="padding:2px 0 4px">↻ — ещё раз сегодня. ' +
+          'Тап по позиции — поправить.</div>' : '';
+    var body = head + '<div class="items">' + hint + items + macros + acts + '</div>';
+    return isFresh ? '<div class="fresh">' + body + '</div>' : body;
   }
 
   /* ── экраны ──────────────────────────────────────────────────────────── */
@@ -1211,7 +1389,12 @@
     document.getElementById('title').textContent = title(d);
     document.getElementById('nav-day').classList.toggle('hidden', false);
     document.getElementById('fwd').disabled = state.daysAgo === 0;
+    /* Поле имени набора в ленте пересоздаётся вместе с ней: фокус возвращаем, иначе
+       клавиатура закрывалась посреди ввода. Текст держит state.sessName. */
+    var was = document.activeElement && document.activeElement.id;
     if (around) showAround(dayHtml(d)); else show(dayHtml(d));
+    var nf = (was === 'sessname' || was === 'setname') && document.getElementById(was);
+    if (nf) { nf.focus(); nf.setSelectionRange(nf.value.length, nf.value.length); }
     var inp = document.getElementById('say');
     if (inp && state.keepFocus) { inp.focus(); state.keepFocus = false; }
     if (state.freshScroll) {
@@ -1573,7 +1756,7 @@
       /* MA-INV-25: человек должен знать заранее, что история не поедет.
          Иначе он ждёт пересчёта съеденного и считает его отсутствие багом. */
       var vow = '<div class="mic" style="padding:0 var(--s-2) var(--s-3);line-height:1.55">' +
-        'Слияние меняет только каталог. Съеденное не пересчитается — в приёмах ' +
+        'Слияние меняет только каталог. Съеденное не пересчитается — в записях ' +
         'лежит снапшот КБЖУ на момент записи.</div>';
       if (!d.groups.length) {
         show('<section class="card"><div class="state">Дублей не нашлось.</div></section>' +
@@ -1826,7 +2009,7 @@
       if (!d.days.some(function (x) { return x.meals > 0; })) {
         show(wk + comp + periods() +
           card('За этот период записей нет',
-               '<div class="state">Выбери период побольше или запиши приём — ' +
+               '<div class="state">Выбери период побольше или запиши, что съел, — ' +
                'графики появятся сами.</div>', ''));
         return landAt(land);
       }
@@ -2257,7 +2440,7 @@
               '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
               'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
               '<path d="M5 12h14M13 6l6 6-6 6"/></svg></button></div>',
-          'Вместе с текстом уйдут последние приёмы — без них «посчитало не так» ' +
+          'Вместе с текстом уйдут последние записи — без них «посчитало не так» ' +
           'не воспроизвести.') +
 
         group('Ассистент',
@@ -2556,7 +2739,7 @@
            '<div class="cardhead"><span class="cap">Спроси про свои данные</span>' +
              budget + '</div>' +
            '<div class="mic" style="margin-top:6px;line-height:1.5">' +
-             'Ассистент смотрит твои записи сам: приёмы, продукты, вес. Он не врач и не ставит диагнозов.' +
+             'Ассистент смотрит твои записи сам: съеденное, продукты, вес. Он не врач и не ставит диагнозов.' +
            '</div>' + sug + '</section>' +
          chat +
          '<div class="composer ask"><input id="ask" type="text" ' +
@@ -2578,7 +2761,7 @@
      говорим словами, КУДА он полез: «жди» не сообщает ничего, а это сообщает. */
   var TOOL_SAYS = {
     day_totals: 'смотрю дни',
-    meals_on: 'смотрю приёмы',
+    meals_on: 'смотрю записи',
     top_products: 'смотрю продукты',
     weight_log: 'смотрю вес'
   };
@@ -3733,7 +3916,10 @@
      нём человеку нечего: кнопка и так в состоянии «пишу». */
   function oops(e) {
     if (e && e.code === 'in_flight') return false;
-    toast(e.message, true);
+    /* Словарь FR-47: сервер называет запись «приёмом» — в аппке это запись. */
+    toast(e && e.code === 'meal_not_found' ? 'Этой записи уже нет.'
+          : e && e.message === 'Failed to fetch' ? 'Нет связи — не сохранилось. Попробуй ещё раз.'
+          : e.message, true);
     /* MA-INV-74: экран мог быть нарисован из сохранённого дня, а приём к тому
        времени удалили с другого устройства. Ошибки мало — день надо освежить,
        иначе человек тапает по тому, чего уже нет. Поверх экрана, без скелета. */
@@ -4032,12 +4218,34 @@
     }
     if (b.dataset.setname) {
       state.naming = Number(b.dataset.setname);
-      renderDay();
+      state.sessNaming = null;
+      /* Раскладка, а не новые цифры (MA-INV-33): из полученного дня и сразу — иначе поле
+         появлялось только с ответом сети и фокус до него не доходил. */
+      repaintDay();
       var ni = document.getElementById('setname');
       if (ni) ni.focus();
       return;
     }
-    if (b.dataset.setcancel) { state.naming = null; return renderDay(); }
+    if (b.dataset.setcancel) { state.naming = null; return repaintDay(); }
+    /* FR-47, §6.28: шапка приёма пищи открывает его действие; закрыл — и имя забыто. */
+    if (b.dataset.sess) {
+      var sk = b.dataset.sess;
+      state.sessOpen[sk] = !state.sessOpen[sk];
+      /* Закрыл — имя забыто: оно не должно всплыть в поле другой группы. */
+      if (!state.sessOpen[sk] && state.sessNaming === sk) { state.sessNaming = null; state.sessName = ''; }
+      return repaintDay();
+    }
+    if (b.dataset.sessname) {
+      if (state.sessNaming !== b.dataset.sessname) state.sessName = '';
+      state.sessNaming = b.dataset.sessname;
+      state.naming = null;
+      repaintDay();
+      var si = document.getElementById('sessname');
+      if (si) si.focus();
+      return;
+    }
+    if (b.dataset.sesscancel) { state.sessNaming = null; state.sessName = ''; return repaintDay(); }
+    if (b.dataset.sesssave) return saveSession(b.dataset.sesssave);
     if (b.dataset.setsave) {
       var mid = b.dataset.setsave;
       var nm = ((document.getElementById('setname') || {}).value || '').trim();
@@ -4341,6 +4549,18 @@
       var sv = document.querySelector('[data-setsave]');
       if (sv) sv.click();
     }
+    /* Escape — «Отмена» у поля имени набора (записи и приёма пищи). */
+    if (e.key === 'Escape' && (e.target.id === 'sessname' || e.target.id === 'setname')) {
+      e.preventDefault();
+      var cx = document.querySelector(e.target.id === 'sessname' ? '[data-sesscancel]' : '[data-setcancel]');
+      if (cx) cx.click();
+      return;
+    }
+    if (e.key === 'Enter' && e.target.id === 'sessname') {
+      e.preventDefault();
+      var ss = document.querySelector('[data-sesssave]');
+      if (ss) ss.click();
+    }
     if (e.key === 'Enter' && e.target.id === 'grams') {
       e.preventDefault();
       var v = (e.target.value || '').trim();
@@ -4355,6 +4575,8 @@
   });
 
   root.addEventListener('input', function (e) {
+    /* Имя набора приёма пищи переживает перерисовку дня (фоновую или после отказа). */
+    if (e.target.id === 'sessname') { state.sessName = e.target.value; return; }
     if (e.target.id === 'say') {
       var was = !!(state.text || '').trim();
       state.text = e.target.value;
@@ -4539,7 +4761,9 @@
     var act = shouldRepaint({
       untouched: state.lastDay === base || state.lastDay === d,
       tab: state.tab, daysAgo: state.daysAgo,
-      busy: !!(state.sending || state.recording),
+      /* Поле имени набора в фокусе — тоже занятость: перерисовка закрыла бы клавиатуру iOS
+         и сбила набор через IME. Свежий день запомним и покажем следующей перерисовкой. */
+      busy: !!(state.sending || state.recording || naming()),
       same: same, typing: typing()
     });
     if (act === 'skip') return;

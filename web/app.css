@@ -91,9 +91,13 @@ header h1{font-size:var(--f-t2);font-weight:700;letter-spacing:-.4px;margin:0}
 .meal{width:100%;text-align:left;background:none;border:0;color:inherit;font:inherit;
   padding:11px 0;display:flex;align-items:baseline;gap:var(--s-3);cursor:pointer}
 .meal + .meal{border-top:1px solid var(--separator)}
-.meal .t{width:44px;color:var(--text-faint);font-size:var(--f-caption)}
-.meal .n{flex-grow:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+/* flex:none — длинное имя ужимало колонку времени на пару пикселей, и имена шли лесенкой. */
+.meal .t{width:44px;flex:none;color:var(--text-faint);font-size:var(--f-caption)}
+/* Имя режется многоточием, «≈» за ним — нет: метка оценки видна всегда (MA-INV-26). */
+.meal .n{flex-grow:1;min-width:0;display:flex;align-items:baseline;white-space:nowrap;
   font-size:var(--f-body-s)}
+.meal .nt{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.meal .n .ap{flex:none;color:var(--text-faint)}
 /* Приписка «как записано» не должна уезжать в многоточие вместе с именем:
    сжимается имя, приписка держит свою ширину. */
 .meal .how{flex:none;white-space:nowrap;color:var(--text-faint);font-size:var(--f-caption-s)}
@@ -103,6 +107,41 @@ header h1{font-size:var(--f-t2);font-weight:700;letter-spacing:-.4px;margin:0}
   color:var(--text-muted)}
 .items .row .g{color:var(--text-faint)}
 .items .row .num{white-space:nowrap}
+
+/* ── приём пищи: группа записей подряд (FR-47, §6.28) ──────────────────────
+   Не вложенная карточка, а шапка и «рельс» слева: карточка в карточке съела бы на 320 ещё
+   ~30px ширины и спорила бы с карточкой ленты за главное. Сумма шапки — белая и крупнее,
+   ккал записей под ней приглушены: глаз читает итог, детали не прячутся. */
+.sess{border-top:1px solid var(--separator)}
+.feedhead + .sess{border-top:0}
+.sess + .meal{border-top:1px solid var(--separator)}
+.sess-h{width:100%;text-align:left;background:none;border:0;color:inherit;font:inherit;
+  cursor:pointer;padding:11px 0 6px;display:grid;grid-template-columns:minmax(0,1fr) auto;
+  column-gap:var(--s-3);row-gap:2px;align-items:baseline}
+.sess-h .st{font-size:var(--f-body-s);font-weight:600;min-width:0;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.sess-h .rng{font-weight:400;font-size:var(--f-caption-s);color:var(--text-faint);
+  margin-left:var(--s-2)}
+.sess-h .sk{font-size:var(--f-body);font-weight:700;text-align:right;white-space:nowrap}
+.sess-h .ap{font-weight:400;color:var(--text-faint);margin-right:3px}
+.sess-h .pfc{min-width:0}
+.sess-h .cnt{color:var(--text-faint)}
+/* Шеврон: за шапкой есть действие; раскрыто — смотрит вверх. */
+.sess-h .more{color:var(--text-muted);justify-self:end;align-self:center;transition:transform .15s}
+.sess-h[aria-expanded="true"] .more{transform:rotate(180deg)}
+@media (prefers-reduced-motion:reduce){.sess-h .more{transition:none}}
+.sess-h:active{opacity:.55}
+.sess-a{display:flex;flex-direction:column;margin:0 0 var(--s-1)}
+.sess-a .link{align-self:flex-start;padding:0}
+.sess-b{margin:0 0 var(--s-2) 1px;padding-left:10px;border-left:2px solid var(--surface-3)}
+/* Внутри группы записи плотнее и без линий: их держит рельс, а не разделители. */
+/* Цель пальца ≥ 44px и в группе: плотность — от отсутствия линий, а не от высоты строки. */
+.sess-b .meal{padding:0;min-height:44px;align-items:center}
+.sess-b .meal + .meal{border-top:0}
+.sess-b .meal .k{font-weight:500;color:var(--text-muted)}
+/* Отступ рельса забрал у раскрытой записи ширину: на 320 «Повторить» + «Удалить» = 186px при
+   185 свободных, и ряд рвался на две строки (замер 25.10.2026). Рельс прижат, кнопки чуть уже. */
+.sess-b .actions button{padding-left:13px;padding-right:13px}
 
 /* ── нижние вкладки ──────────────────────────────────────────────────── */
 nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:rgba(20,22,26,.92);
