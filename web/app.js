@@ -1942,7 +1942,8 @@
         '<div class="state">За эту неделю записей нет.</div></section>';
     }
     var over = w.balance_kcal > 0;
-    var past = w.days.filter(function (x) { return ago > 0 || x.date < today; }).length;
+    /* «из M прошедших» — с регистрации, числом сервера: бот пишет то же (AC-230). */
+    var past = w.past_days;
     var counted = w.counted_days;
     return '<section class="card" id="weekcard">' + head +
       '<div style="display:flex;align-items:baseline;gap:var(--s-2);margin-top:var(--s-2);' +
@@ -1952,7 +1953,7 @@
         '<span class="cap">' + (over ? 'ккал перебор' : 'ккал в запасе') + '</span>' +
         '<span style="margin-left:auto">' + badge + '</span></div>' +
       '<div class="mic" style="margin-top:2px">' + (ago > 0
-        ? 'записано ' + n(w.logged_days) + ' дн. из 7'
+        ? 'записано ' + n(w.logged_days) + ' дн. из ' + n(past)
         : 'записано ' + n(w.past_logged_days) + ' дн. из ' + n(past) + ' прошедших') + '</div>' +
       '<div class="chart">' + weekBars(w, ago > 0 ? '9999' : today) + '</div>' +
       (counted ? '<div class="rows">' +

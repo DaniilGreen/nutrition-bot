@@ -59,6 +59,14 @@ def n(v: float) -> str:
     return str(round(v))
 
 
+NB = "\u202f"  # узкий неразрывный пробел: «1 240» не рвётся переносом
+
+
+def k(v: float) -> str:
+    """Тысячи с разделителем: 1240 → «1 240». Числа недели (FR-48) — одним видом везде."""
+    return f"{round(v):,}".replace(",", NB)
+
+
 def e(s: str) -> str:
     return escape(s.strip(), quote=False)
 

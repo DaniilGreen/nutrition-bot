@@ -10,10 +10,15 @@
 """
 from __future__ import annotations
 
+from zoneinfo import ZoneInfo
+
 from app.application.results import MealSession
 from app.bot.ui import kit
-from app.bot.ui.context import DayContext, day_status
+from app.bot.ui.context import DayContext
 from app.bot.ui.kit import e, n
+from app.domain.week import WeekBalance
+from app.domain.weight_change import kg as wkg
+from app.domain.weight_change import weight_change
 
 KCAL_PER_KG_FAT = 7700  # ккал в килограмме жировой ткани — перевод абстракции в физику
 
@@ -117,47 +122,27 @@ def eaten(d: DayContext, *, open_: bool = False) -> str:
     return f"<details{attr}><summary>{head}</summary><ul>{''.join(lis)}</ul></details>"
 
 
-def week_table(d: DayContext) -> str:
-    """Таблица недели. ТАБЛИЦА ЗДЕСЬ ЗАКОННА (Правило 2 кита): узкие числа, бара в ячейках нет.
-
-    Статус дня — кружком, а не баром: бар в ячейку пихать нельзя, он ломает ширину колонок.
-    """
-    icons = {"none": "▫️", "ok": "🟢", "low": "🟡", "over": "🔴"}
-    rows = []
-    for day, kcal in d.days:
-        st = day_status(kcal, d.goal.daily_kcal)
-        rows.append(
-            f"<tr><td>{kit.WD[day.weekday()]}</td>"
-            f'<td align="center">{icons[st]}</td>'
-            f'<td align="right">{n(kcal) if kcal > 0 else "—"}</td></tr>'
-        )
-    return f"<table striped>{''.join(rows)}</table>"
-
-
 def weight_block(d: DayContext) -> str:
-    """Вес: тренд — но ТОЛЬКО когда его честно есть из чего считать.
+    """Вес — только записанные замеры и их разности (FR-8, D-40): «как записал, так и показывай».
 
-    Дневной вес — шум: вода, гликоген и содержимое ЖКТ дают ±1–1.5 кг за сутки. Показывать сырое
-    число как «мой вес» — значит заставлять человека реагировать на воду. Линия — сигнал.
-
-    НО линия по четырём точкам месячной давности — не сглаживание, а выдумка. Если замеров мало
-    или последний протух, честнее сказать «встань на весы», чем нарисовать красивую ложь.
+    Сглаженный «тренд» снят решением владельца: человек записал 90,0, а экран говорил 89,6 —
+    число, которое без формулы не проверить. Скачки воды (±1 кг за сутки) видны на графике
+    точками, глазом. Когда был замер — пишем всегда: вес месячной давности без даты выдаёт
+    старое за текущее.
     """
-    logs = d.weight.logs
-    if not logs:
+    ch = weight_change(d.weight_points)
+    if ch is None:
         return "<p>⚖️ Вес ещё не записан. Напиши «вес 86.8».</p>"
-    last = f"{logs[0].weight_kg:.1f}"
-    stale = d.days_since_weigh_in or 0
-    if not d.trend_ok:
-        why = (
-            f"последний замер {stale} дн. назад — тренд протух"
-            if stale > 10
-            else f"замеров всего {len(logs)} — линии пока нет"
-        )
-        return f"<p>⚖️ <b>{last} кг</b> · {why}.<br><i>Встань на весы — покажу линию.</i></p>"
-    return (
-        f"<p>⚖️ Тренд <b>{d.trend_kg} кг</b> · последнее {last} кг · {len(logs)} замеров</p>"
-    )
+    ago = d.days_since_weigh_in or 0
+    when = {0: "сегодня", 1: "вчера"}.get(ago, f"{ago} дн. назад")
+    parts = []
+    if len(d.weight.logs) > 1:
+        first = ch.first_at.astimezone(ZoneInfo(d.weight.timezone)).date()
+        parts.append(f"с {first.day} {kit.MON[first.month - 1]} {wkg(ch.period_kg, sign=True)} кг")
+    if ch.month_kg is not None:
+        parts.append(f"за 4 недели {wkg(ch.month_kg, sign=True)} кг")
+    tail = "<br>" + " · ".join(parts) if parts else ""
+    return f"<p>⚖️ <b>{wkg(ch.last_kg)} кг</b> · последний замер, {when}{tail}</p>"
 
 
 def coverage_block(d: DayContext) -> str:
@@ -183,38 +168,46 @@ def macro_block(label: str, cons: float, goal: float) -> str:
     return f"<p>{kit.macro_line(label, cons, goal)}<br>{kit.bar(cons, goal, label)}</p>"
 
 
+def week_shown(w: WeekBalance | None) -> bool:
+    """Есть ли что сказать о неделе (§6.23) — те же правила показа, что у плашки в аппке:
+    не в понедельник и не без прошедших записанных дней. Одно правило на итог и «📈 Неделю»."""
+    if w is None or not w.goal_kcal or w.verdict == "empty" or w.today == w.start:
+        return False
+    if not w.start <= w.today <= w.end:
+        return False
+    return any(x.kcal is not None and x.day < w.today for x in w.days)
 
 
 def week_balance(d: DayContext, *, sunday_summary: bool = True) -> str:
-    """Недельный баланс (§6.23) — те же правила показа, что у плашки в аппке:
-    не в понедельник и не без прошедших записанных дней."""
+    """Недельный баланс (§6.23) строкой — для вечернего итога и карточки «закрыто»."""
     w = d.week_bal
-    if w is None or not w.goal_kcal or w.verdict == "empty" or w.today == w.start:
-        return ""
-    if not w.start <= w.today <= w.end:
-        return ""
-    if not any(x.kcal is not None and x.day < w.today for x in w.days):
+    if w is None or not week_shown(w):
         return ""
     if w.verdict == "few_logs":
         return f"<p>🗓 Неделя: записано {w.logged_days} дн. — для баланса маловато.</p>"
     if w.today == w.end and sunday_summary:
         verdict = "в плане ✅" if w.balance_kcal <= 0 else "перебор"
+        result = (f"<b>{_word(w.balance_kcal)}</b> ✅" if not w.balance_kcal
+                  else f"<b>{_word(w.balance_kcal)}</b>, {verdict}")
         return (
             f"<p>🗓 <b>Неделя {w.start.day}–{w.end.day} {kit.MON[w.end.month - 1]}</b><br/>"
-            f"Цель за {w.counted_days} дн. — {n(w.week_goal_kcal)} · съедено "
-            f"{n(w.consumed_kcal)}<br/>"
-            f"Итог: <b>{_word(w.balance_kcal)}</b>, {verdict}<br/>"
+            f"Цель за {w.counted_days} дн. — {kit.k(w.week_goal_kcal)} · съедено "
+            f"{kit.k(w.consumed_kcal)}<br/>"
+            f"Итог: {result}<br/>"
             f"Записано {w.logged_days} из 7 дней.</p>"
         )
     tail = ""
     if w.floor_hit:
         tail = "<br/>Неделю уже не догнать — ешь по обычной цели, с понедельника новая."
     elif w.per_day_kcal is not None:
-        tail = f"<br/>До воскресенья по {n(w.per_day_kcal)} — и неделя сойдётся."
+        tail = f"<br/>До воскресенья по {kit.k(w.per_day_kcal)} — и неделя сойдётся."
     return f"<p>🗓 <b>Неделя</b> · {_word(w.balance_kcal)}{tail}</p>"
 
 
 def _word(balance: float) -> str:
-    """Слово вместо знака: минус рядом с «в плане» читается как плохо."""
-    return (f"перебор {n(balance)} ккал" if balance > 0
-            else f"в запасе {n(abs(balance))} ккал")
+    """Слово вместо знака: минус рядом с «в плане» читается как плохо. Тысячи — kit.k, как на
+    «📈 Неделе» (FR-48): одно число не должно выглядеть по-разному в двух местах."""
+    if not balance:
+        return "ровно по плану"  # «в запасе 0 ккал» звучит как «запаса нет» — а он и не нужен
+    return (f"перебор {kit.k(balance)} ккал" if balance > 0
+            else f"в запасе {kit.k(abs(balance))} ккал")

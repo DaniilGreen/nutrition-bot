@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import re
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -28,6 +28,7 @@ from app.bot.ui.context import DayContext
 from app.bot.ui.kit import BUBBLE, SAFE, bar, lines_of, macro_line, text_width, verdict
 from app.domain.goals import Goal, remaining
 from app.domain.value_objects import Density, Macros
+from app.domain.week import balance
 
 GOAL = Goal(daily_kcal=2200, protein_g=165, fat_g=61, carb_g=248)
 _WEEK = (2050.0, 0.0, 1980.0, 2410.0, 1720.0, 2200.0)
@@ -92,7 +93,6 @@ def _ctx(meals: list[Meal], *, hour: int = 20, has_weight: bool = True) -> DayCo
         weight=WeightTrend(logs, "Europe/Moscow"),
         products=_PRODUCTS if has_weight else [],
         weight_kg=86.8 if has_weight else None,
-        trend_kg=87.2 if has_weight else None,
         local_hour=hour,
         est_kcal_share=38,
     )
@@ -283,3 +283,121 @@ def test_variant_keyboard_preserves_index_order() -> None:
     rows = variant_keyboard(opts).inline_keyboard
     assert [b.callback_data for r in rows for b in r][:2] == ["variant:0", "variant:1"]
     assert [b.text for r in rows for b in r][:2] == ["мягкий (силкен)", "плотный (фирм, обычный)"]
+
+
+# ---------- «📈 Неделя» (FR-48): каждая строка, ВКЛЮЧАЯ текст, ≤ SAFE ----------
+
+WEEK_GOAL = Goal(daily_kcal=2176, protein_g=165, fat_g=72, carb_g=248)
+
+
+def day_macros(kcal: float) -> Macros:
+    """КБЖУ дня из его ккал — средние экрана считаются из них, а не задаются руками."""
+    return Macros(kcal, kcal * 0.07, kcal * 0.033, kcal * 0.1)
+
+
+def week_ctx(
+    kcal: list[float | None],
+    today_idx: int,
+    *,
+    mon: date = date(2026, 9, 14),
+    prev: float = 2000.0,
+    goals: list[float] | None = None,
+    first_day: date | None = None,
+    bmr: float | None = None,
+) -> DayContext:
+    """Контекст «Недели»: календарная неделя с `mon` (FR-35) + скользящие 7 дней до сегодня.
+
+    Прошлая неделя целиком по `prev` ккал — из неё скользящее окно добирает дни до понедельника.
+    `goals` — цель каждого дня недели (смена цели посреди недели), иначе WEEK_GOAL; `first_day`
+    — регистрация: до неё записей нет, как в жизни. `week7` и `macros7` выведены из ккал.
+    """
+    week = [mon + timedelta(days=i) for i in range(7)]
+    today = week[today_idx]
+    goals = goals or [WEEK_GOAL.daily_kcal] * 7
+    w = balance(list(zip(week, kcal, goals, strict=True)), today=today, bmr_kcal=bmr,
+                first_day=first_day)
+    eaten = {mon - timedelta(days=7 - i): prev for i in range(7)}
+    eaten.update({d: k or 0.0 for d, k in zip(week, kcal, strict=True)})
+    if first_day is not None:
+        eaten = {d: (k if d >= first_day else 0.0) for d, k in eaten.items()}
+    window = [today - timedelta(days=6 - i) for i in range(7)]
+    days = [(d, eaten[d]) for d in window]
+    macros7 = [(d, day_macros(k)) for d, k in days]
+    logged = [m for (_, k), (_, m) in zip(days, macros7, strict=True) if k > 0]
+    n_ = len(logged) or 1
+    avg = Macros(*(sum(getattr(m, f) for m in logged) / n_
+                   for f in ("kcal", "protein", "fat", "carb")))
+    empty = Macros(0, 0, 0, 0)
+    return DayContext(
+        today=DailyStats(remaining(day_macros(eaten[today]), WEEK_GOAL), 0, [], "Europe/Moscow"),
+        days=days,
+        goal=Goal(goals[today_idx], WEEK_GOAL.protein_g, WEEK_GOAL.fat_g, WEEK_GOAL.carb_g),
+        week7=MonthReport(7, len(logged), len(logged), avg if logged else empty, None),
+        month=MonthReport(30, len(logged), len(logged), avg, None),
+        weight=WeightTrend([], "Europe/Moscow"),
+        products=[],
+        weight_kg=None,
+        local_hour=20,
+        est_kcal_share=0,
+        week_bal=w,
+        macros7=macros7,
+        first_day=first_day,
+    )
+
+
+_SEP = date(2026, 9, 14)
+WEEK: dict[str, DayContext] = {
+    # AC-222: пн–чт по 1800, пт 2556 (перебор дня входит в баланс)
+    "пятница в плане": week_ctx([1800] * 4 + [2556, None, None], 4),
+    # AC-223: вс, сегодня ещё в цели → один оставшийся день; вс с «мало записей»
+    "полная неделя · вс": week_ctx([2000, 2100, 1900, 2200, 2050, 2300, 1400], 6),
+    "мало записей · вс": week_ctx([2000, None, None, 1900, None, None, 1500], 6, prev=0.0),
+    # суббота с перебором дня вошла в баланс → остался один день, завтра
+    "суббота вошла": week_ctx([2000] * 5 + [2600, None], 5),
+    # AC-224
+    "понедельник": week_ctx([1500, None, None, None, None, None, None], 0),
+    # AC-225: ниже пола (пт / сб) / перебор с числом
+    "перебор ниже пола": week_ctx([2176] * 4 + [9000, None, None], 4, bmr=1925),
+    "пол в субботу": week_ctx([2176] * 5 + [7000, None], 5, bmr=1925),
+    "перебор с числом": week_ctx([2600, 2700, 2500, None, None, None, None], 2),
+    # AC-226
+    "мало записей": week_ctx([1500, None, None, 900, None, None, None], 3, prev=0.0),
+    "пусто": week_ctx([None] * 7, 3, prev=0.0),
+    "только сегодня": week_ctx([None, None, 400, None, None, None, None], 2, prev=0.0),
+    # AC-228: утро среды
+    "утро среды": week_ctx([2000, 2100, 400, None, None, None, None], 2),
+    # AC-229: цель сменили в среду 2500 → 2000; сегодня четверг
+    "смена цели": week_ctx([2300, 2300, 2300, 1000, None, None, None], 3,
+                           goals=[2500, 2500] + [2000] * 5),
+    # AC-230: регистрация в среду, сегодня пятница
+    "регистрация в среду": week_ctx([None, None, 2000, 2100, 900, None, None], 4,
+                                    first_day=_SEP + timedelta(days=2)),
+    # AC-231: баланс ровно 0
+    "ровно ноль": week_ctx([2176, 2176, 1000, None, None, None, None], 2),
+    # AC-227: пятизначный перебор в герое; неделя через границу месяца
+    "пятизначный перебор": week_ctx([2176] * 4 + [30000, None, None], 4),
+    "через месяц": week_ctx([2100, 1900, 2300, None, None, None, None], 2, mon=date(2026, 10, 26)),
+}
+
+# Заголовки крупнее основного шрифта. Скриншота-калибровки нет — запас взят с избытком
+# (дизайнер прикидывал h2 × 1.4); поэтому и герой короткий. Откалибруем — поправить здесь.
+_HEAD_K = {"h2": 1.5, "h3": 1.25}
+
+
+def _week_lines(html: str) -> list[tuple[str, float]]:
+    """(строка, ширина) с поправкой на кегль заголовка."""
+    out = [(body, text_width(body) * _HEAD_K[tag])
+           for tag, body in re.findall(r"<(h[23])>(.*?)</\1>", html, re.S)]
+    rest = re.sub(r"<(h[23])>.*?</\1>", "", html, flags=re.S)
+    return out + [(ln, text_width(ln)) for ln in lines_of(rest)]
+
+
+@pytest.mark.parametrize("scenario", sorted(WEEK) + sorted(CTXS))
+def test_week_every_line_fits(scenario: str) -> None:
+    """Текст тоже ≤ SAFE: прежний подвал «Недели» был 970 у.е. и рвался посередине (FR-48)."""
+    html = screens.week(WEEK.get(scenario) or CTXS[scenario])
+    lines = _week_lines(html)
+    assert lines
+    for line, width in lines:
+        assert width <= SAFE, f"{scenario}: {width:.0f} у.е. > {SAFE}\n{line}"
+    assert "<td" not in html  # таблицу дней сняли; бар в ячейке тем более (ПРАВИЛО 1)

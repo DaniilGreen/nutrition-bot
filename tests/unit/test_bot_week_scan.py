@@ -84,7 +84,7 @@ def _ctx(kcal, today_idx, goal=2176):
 def test_неделя_в_итоге_дня():
     d = _ctx([1800, 1800, 1800, 1800, 2556, None, None], 4)
     text = blocks.week_balance(d)
-    assert "в запасе 1124 ккал" in text and "по 2738" in text
+    assert "в запасе 1\u202f124 ккал" in text and "по 2\u202f738" in text
     # Понедельник — молчим.
     assert blocks.week_balance(_ctx([1800] + [None] * 6, 0)) == ""
     # Ниже пола — «не догнать».
@@ -96,12 +96,9 @@ def test_воскресная_сводка_по_записанным_дням():
     d = _ctx([2000, 2000, None, 2000, 2000, 2000, 2300], 6)
     text = blocks.week_balance(d)
     assert "Цель за 6 дн." in text and "Записано 6 из 7" in text
-    assert "в запасе 756 ккал" in text
+    assert "в запасе 756 ккал" in text  # тысячи — kit.k (FR-48)
     assert "Итог" not in blocks.week_balance(d, sunday_summary=False)
-    # /week в воскресенье показывает тот же итог, что вечернее сообщение (§6.23).
-    from app.bot.ui import screens
-    assert "Итог" in blocks.week_balance(d)
-    del screens
+    # /week воскресного итога больше не показывает — у него свой экран (FR-48, D-39).
 
 
 def _callback(data: str) -> CallbackQuery:

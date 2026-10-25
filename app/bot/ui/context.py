@@ -1,7 +1,7 @@
 """Дневной контекст: один сбор данных для всех «сегодняшних» экранов + производные метрики.
 
 Один `gather()` кормит «Сегодня», карточку приёма и вечерний итог: у них общий костяк (остаток
-дня, недельный якорь, погрешность, добор). Производные метрики (EMA веса, доля оценок, средняя за
+дня, недельный якорь, погрешность, добор). Производные метрики (доля оценок, средняя за
 7 дней) считаются ЗДЕСЬ и только здесь — чтобы одно и то же число не разъезжалось между экранами.
 
 ДВЕ ЛОВУШКИ КОДОВОЙ БАЗЫ, которые тут обойдены:
@@ -14,15 +14,18 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 from app.application.assistant import Assistant
-from app.application.entities import MealItem, Product, User, WeightLog
+from app.application.entities import MealItem, Product, User
 from app.application.results import DailyStats, MonthReport, WeightTrend
 from app.bot.ui.kit import sigma_kcal
 from app.domain.goals import Goal, in_goal
+from app.domain.prefs import day_start
+from app.domain.timeframe import local_date
+from app.domain.value_objects import Macros
 from app.domain.week import WeekBalance
 
 
@@ -38,10 +41,13 @@ class DayContext:
 
     # --- производные ---
     weight_kg: float | None  # последнее взвешивание — для белка на кг
-    trend_kg: float | None  # EMA веса: дневной вес скачет на воде, тренд — сигнал
     local_hour: int  # час у пользователя: «недобор» и советы имеют смысл только к концу дня
     est_kcal_share: int  # % калорий за сегодня, посчитанных ОЦЕНКОЙ, а не по точному весу
     week_bal: WeekBalance | None = None  # недельный баланс (§6.23); None — не считали
+    # КБЖУ по дням за те же 7 дней, что `days` (старые → новые): средние «Недели» (FR-48) берут
+    # только вошедшие дни, а `week7` делит на все дни с записями, включая неполный сегодня.
+    macros7: list[tuple[date, Macros]] = field(default_factory=list)
+    first_day: date | None = None  # день регистрации у человека: «из M прошедших» — с него
 
     @property
     def items(self) -> list[MealItem]:
@@ -85,26 +91,16 @@ class DayContext:
 
     @property
     def days_since_weigh_in(self) -> int | None:
-        """Сколько дней назад последнее взвешивание. Тренд без этого числа читать нельзя."""
+        """Сколько дней назад последнее взвешивание: «85,2 кг» без даты читать нельзя."""
         if not self.weight.logs:
             return None
         last = self.weight.logs[0].measured_at
         return max(0, (datetime.now(UTC) - last).days)
 
     @property
-    def trend_ok(self) -> bool:
-        """Можно ли ПОКАЗЫВАТЬ тренд.
-
-        Нельзя, если замеров мало или последний протух: линия, построенная по четырём точкам
-        месячной давности, — не сглаживание, а выдумка. Честнее сказать «встань на весы».
-        """
-        stale = self.days_since_weigh_in
-        return (
-            len(self.weight.logs) >= MIN_LOGS
-            and stale is not None
-            and stale <= STALE_DAYS
-            and self.trend_kg is not None
-        )
+    def weight_points(self) -> list[tuple[datetime, float]]:
+        """Замеры (время, кг), старые → новые — один вход для текста «⚖️ Вес» и PNG (FR-8, D-40)."""
+        return [(x.measured_at, x.weight_kg) for x in reversed(self.weight.logs)]
 
     @property
     def protein_per_kg(self) -> float | None:
@@ -113,37 +109,6 @@ class DayContext:
         if not self.weight_kg:
             return None
         return round(self.today.remaining.consumed.protein / self.weight_kg, 2)
-
-
-ALPHA_PER_DAY = 0.12  # эффективное окно ≈ 16 дней
-STALE_DAYS = 10  # последний замер старше — тренд протух; показывать его нельзя
-MIN_LOGS = 4  # замеров меньше — линии просто нет, и врать об этом не надо
-
-
-def _ema(logs: list[WeightLog]) -> float | None:
-    """Сглаживание веса, зависящее ОТ ВРЕМЕНИ, а не от числа замеров.
-
-    Наивная EMA (α на каждый замер) на нерегулярных взвешиваниях ВРЁТ. У владельца 4 замера:
-    86.8, 86.6, 86.2 подряд в июне и 83.6 через неделю — наивная формула выдавала «тренд 85.9 кг»
-    при последнем реальном взвешивании 83.6. Расхождение 2.3 кг: три старые точки весили столько
-    же, сколько одна свежая. Это не сглаживание, это ложь.
-
-    Правильно: α_eff = 1 − (1 − α)^Δd — не вставал на весы неделю, значит новое измерение весит
-    больше. Δd < 1 дня (два взвешивания за утро) считаем как день, иначе второе просто исчезает.
-
-    Зачем сглаживать вообще: дневной вес — шум (вода, гликоген, содержимое ЖКТ: ±1–1.5 кг за
-    сутки). По линии решают «дефицит работает или нет», а не по «вчера 80.2, сегодня 81.1».
-    """
-    if not logs:
-        return None
-    acc = logs[0].weight_kg
-    prev = logs[0].measured_at
-    for log in logs[1:]:
-        days = max(1.0, (log.measured_at - prev).total_seconds() / 86400)
-        alpha = 1 - (1 - ALPHA_PER_DAY) ** days
-        acc = alpha * log.weight_kg + (1 - alpha) * acc
-        prev = log.measured_at
-    return round(acc, 1)
 
 
 def _est_share(today: DailyStats) -> int:
@@ -167,11 +132,14 @@ async def gather(assistant: Assistant, user: User, scans: object | None = None) 
     days, goal = await assistant.day_calories(user, 7)
     week7 = await assistant.month_report(user, days=7)
     month = await assistant.month_report(user, days=30)
-    weight = await assistant.weight_trend(user, limit=14)
+    # 60 замеров: «за 4 недели» (FR-8) должно доставать месяц назад и при ежедневных весах.
+    weight = await assistant.weight_trend(user, limit=60)
     products = await assistant.fixable_products(limit=6)
-
-    # logs идут newest-first → для EMA нужен хронологический порядок
-    chron = list(reversed(weight.logs))
+    rows, _ = await assistant.daily_series(user, 7)
+    first_day = (
+        local_date(user.created_at, user.timezone, day_start(user.ui_prefs))
+        if user.created_at else None
+    )
 
     return DayContext(
         today=today,
@@ -181,13 +149,14 @@ async def gather(assistant: Assistant, user: User, scans: object | None = None) 
         month=month,
         weight=weight,
         products=products,
-        weight_kg=chron[-1].weight_kg if chron else None,
-        trend_kg=_ema(chron),
+        weight_kg=weight.logs[0].weight_kg if weight.logs else None,  # logs — новые первыми
         est_kcal_share=_est_share(today),
         local_hour=datetime.now(ZoneInfo(today.timezone)).hour,
         week_bal=await assistant.week_balance(
             user, 0, bmr_kcal=await scans.bmr(user) if scans is not None else None
         ),
+        macros7=[(d, m) for d, m, _ in rows],
+        first_day=first_day,
     )
 
 

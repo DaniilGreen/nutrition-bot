@@ -19,6 +19,7 @@ class WeekDay:
     day: date
     kcal: float | None      # None — записей не было (MA-INV-48)
     over: bool              # выше дневной цели
+    goal_kcal: float = 0.0  # цель ЭТОГО дня (goal_history) — полоса «Недели» красит по ней (FR-48)
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ class WeekBalance:
     logged_days: int         # дни с записями по сегодня включительно
     counted_days: int        # из них вошли в баланс
     past_logged_days: int    # записанные дни ДО сегодня
+    past_days: int           # прошедшие дни недели до сегодня, с регистрации (FR-48 «N из M»)
     days: list[WeekDay]
     remaining_days: int
     per_day_kcal: float | None   # None — не показываем (нет дней или ниже пола)
@@ -112,8 +114,9 @@ def balance(
         logged_days=len(logged_set),
         counted_days=len(counted),
         past_logged_days=past_logged,
+        past_days=elapsed,
         days=[WeekDay(d, round(k, 1) if d in logged_set else None,  # type: ignore[arg-type]
-                      bool(d in logged_set and k > g))  # type: ignore[operator]
+                      bool(d in logged_set and k > g), g)  # type: ignore[operator]
               for d, k, g in days],
         remaining_days=remaining,
         per_day_kcal=per_day,
@@ -137,6 +140,7 @@ def demo() -> None:
     assert b.balance_kcal == -1124, b.balance_kcal
     assert b.remaining_days == 2 and b.per_day_kcal == 2738, b
     assert b.logged_days == 5 and b.verdict == "on_track"
+    assert b.past_logged_days == 4 and b.past_days == 4
     assert [d.over for d in b.days] == [False] * 4 + [True, False, False]
     assert round(b.average_kcal) == 1951
     assert b.week_goal_kcal == 2176 * 5
@@ -187,6 +191,7 @@ def demo() -> None:
     r = balance(mk([None, None, 2000, 2000, None, None, None]), today=week[3],
                 first_day=week[2])
     assert r.verdict == "on_track" and r.logged_days == 2
+    assert r.past_days == 1              # среда; пн, вт до регистрации — не «прошедшие»
 
     # Пустая неделя.
     z = balance(mk([None] * 7), today=week[0])

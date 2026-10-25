@@ -1,128 +1,242 @@
-"""Единственный уцелевший PNG — линия тренда веса.
+"""Единственный уцелевший PNG — график веса (FR-8, D-40).
 
-Всё остальное (бары/дашборды/хитмап) переехало на Rich-текст (D-31, SPEC §14). Линию текстом
-нарисовать нельзя, поэтому вес остаётся картинкой — и то шлётся, только когда тренд можно честно
-показать (см. `DayContext.trend_ok`). Рисуется ЛОКАЛЬНО (Pillow), без OpenAI — ~мс, ~десятки КБ.
+Всё остальное (бары/дашборды/хитмап) переехало на Rich-текст (D-31, SPEC §14). Линию через замеры
+текстом не нарисовать, поэтому вес — картинкой. Рисуется ЛОКАЛЬНО (Pillow), без OpenAI.
 
-КАЧЕСТВО (D-33; техника из finance_bot, где владелец и диагностировал причину мыла):
-* PNG отдаётся в 2× (1440×720). Telegram на retina растягивает 720px до ~1100+ физических, и
-  картинка мылится. Текст рисуем сразу в 2× — он чёткий, а не растянутый.
-* Линия и точки — со СУПЕРСЭМПЛИНГОМ ×_SS и ужатием LANCZOS: Pillow не сглаживает line/ellipse,
-  а линия веса диагональная и без этого идёт ступеньками. Ось X сглаживать не надо — у
-  горизонтали нет косых краёв, она рисуется прямо в 2×.
+ЧТО НА ГРАФИКЕ (D-40, выбор владельца — «карточка»; «как записал, так и показывай»):
+* линия через САМИ замеры, точка на каждом, мягкая заливка под линией — без сглаживания;
+* ось X — НАСТОЯЩЕЕ время: старый PNG ставил точки равным шагом, и неделя без весов занимала
+  столько же места, сколько два замера в одно утро — наклон врал там, где взвешивания неровные;
+* ось Y — сетка в кг; подписи мин/макс; последняя точка выделена;
+* шапка: «Вес», последний замер, плашка Δ за период; внизу три числа из `weight_change`.
+
+КАЧЕСТВО: всё рисуется в ×6 и ужимается LANCZOS до ×2 (1440 px). ×2 — иначе retina растягивает
+720 px и мылит; ×3 сверху — суперсэмплинг: Pillow не сглаживает диагонали и края кругов.
+Палитра — токены аппки (web/app.css, тёмная тема). Кириллица — DejaVu (в образе), Arial на маке.
 """
 from __future__ import annotations
 
-from datetime import datetime
+import math
+from collections.abc import Sequence
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from io import BytesIO
+from zoneinfo import ZoneInfo
 
 from PIL import Image, ImageDraw, ImageFont
 
-# тёмная тема, палитра «Минимал»: линия — василёк; ось — приглушённая; дельта — зелёная/красная.
-_LINE = (124, 156, 224)
-_OK, _OVER = (92, 184, 122), (232, 115, 111)  # снижение / рост веса
-_MUTED, _BG = (52, 57, 66), (28, 31, 38)
-_INK, _GREY = (237, 239, 243), (151, 157, 166)
+from app.domain.weight_change import kg, weight_change
 
-_SCALE = 2  # выход в 2× — иначе retina растягивает 720px и мылит
-_SS = 3  # суперсэмплинг слоя линии: Pillow не сглаживает диагонали
+# --- палитра: токены аппки (web/app.css) ---
+_BG = (26, 28, 32)          # --surface: карточка
+_GRID = (50, 54, 61)        # --surface-3
+_AXIS = (110, 116, 127)     # --border
+_INK = (255, 255, 255)
+_MUTED = (167, 171, 178)    # --text-muted
+_FAINT = (140, 144, 149)    # --text-faint
+_LINE = (94, 154, 193)      # --accent
+_PILL = (38, 41, 47)        # --surface-2
+_OK, _BAD = (52, 199, 89), (255, 69, 58)  # --ok / --danger
 
-_W, _H = 720, 360  # логическая сетка; реальный PNG в _SCALE раз крупнее
-_ML, _MT, _MB, _MR = 24, 70, 64, 70
-_INSET = 6  # чтобы точки на краях не срезало границей слоя
+_OUT, _SS = 2, 3
+_K = _OUT * _SS
+_W, _H = 720, 540            # логическая сетка; шрифты ≥ 15 — иначе на телефоне не прочесть
+_X0, _X1, _Y0, _Y1 = 70.0, _W - 34.0, 124.0, _H - 156.0  # поле графика
 
-# Кириллица обязана рисоваться: DejaVu (Linux/Docker) → Arial (macOS-dev) → дефолт Pillow.
-_FONTS = ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/Library/Fonts/Arial.ttf")
-_FONTS_BOLD = (
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "/Library/Fonts/Arial Bold.ttf",
-)
+_MON = ("янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
+
+_FONTS = ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+          "/System/Library/Fonts/Supplemental/Arial.ttf", "/Library/Fonts/Arial.ttf")
+_FONTS_BOLD = ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+               "/System/Library/Fonts/Supplemental/Arial Bold.ttf", "/Library/Fonts/Arial Bold.ttf")
+
+Point = tuple[datetime, float]
 
 
-@lru_cache(maxsize=16)
+@lru_cache(maxsize=32)
 def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Шрифт логического кегля: сам домножает на _SCALE — вызывающий про 2× не думает."""
-    size *= _SCALE
+    """Шрифт логического кегля: сам домножает на _K — вызывающий про масштаб не думает."""
     for path in _FONTS_BOLD if bold else _FONTS:
         try:
-            return ImageFont.truetype(path, size)
+            return ImageFont.truetype(path, size * _K)
         except OSError:
             continue
     try:  # Pillow ≥10 понимает размер у дефолтного шрифта
-        return ImageFont.load_default(size)
+        return ImageFont.load_default(size * _K)
     except TypeError:
         return ImageFont.load_default()
 
 
-def _png(img: Image.Image) -> bytes:
-    buf = BytesIO()
-    img.save(buf, format="PNG", optimize=True)
-    return buf.getvalue()
+# ---------- чистая геометрия и подписи (тестируются без картинки) ----------
 
 
-def _delta_str(delta: float | None) -> str:
-    if delta is None:
-        return "—"
-    return f"{'+' if delta > 0 else ''}{delta:g} кг"
+def x_positions(times: Sequence[datetime], x0: float = _X0, x1: float = _X1) -> list[float]:
+    """x по НАСТОЯЩЕМУ времени, с отступом в полдня по краям (крайние точки не режет рамкой)."""
+    t0, t1 = times[0] - timedelta(hours=12), times[-1] + timedelta(hours=12)
+    span = (t1 - t0).total_seconds()
+    return [x0 + (x1 - x0) * (t - t0).total_seconds() / span for t in times]
 
 
-def _plot_layer(xs: list[float], ys: list[float], w: int, h: int) -> Image.Image:
-    """Слой линии и точек: рисуем в ×_SS крупнее и ужимаем LANCZOS.
+def kg_axis(lo: float, hi: float) -> tuple[float, float, float]:
+    """Круглые границы и шаг сетки, ≤ 5 делений. Ровный вес — коридор в 1 кг, без деления на 0."""
+    span = max(hi - lo, 1.0) + 0.6
+    step = next((s for s in (0.2, 0.5, 1, 2, 5, 10, 20) if span / s <= 5), 50)
+    return math.floor((lo - 0.3) / step) * step, math.ceil((hi + 0.3) / step) * step, step
 
-    Только так у диагонали пропадают ступеньки — Pillow line/ellipse не сглаживает.
+
+def stats(points: Sequence[Point]) -> list[tuple[str, str, float | None]]:
+    """Нижний ряд: (подпись, текст, Δ для цвета). «За 4 недели» — только если есть с чем (FR-8)."""
+    ch = weight_change(list(points))
+    if ch is None:
+        return []
+    out: list[tuple[str, str, float | None]] = [
+        ("последний замер", f"{kg(ch.last_kg)} кг", None),
+        ("за период", f"{kg(ch.period_kg, sign=True)} кг", ch.period_kg),
+    ]
+    if ch.month_kg is not None:
+        out.append(("за 4 недели", f"{kg(ch.month_kg, sign=True)} кг", ch.month_kg))
+    return out
+
+
+def _good(delta: float, target: str) -> tuple[int, int, int]:
+    """Цвет = статус (как в боте): к цели — зелёный, от неё — красный, на поддержании — серый."""
+    if target == "maintain" or abs(delta) < 0.05:
+        return _MUTED
+    return _OK if (delta < 0) == (target != "bulk") else _BAD
+
+
+def _dshort(d: date) -> str:
+    return f"{d.day} {_MON[d.month - 1]}"
+
+
+def _plural(n: int) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return "замер"
+    return "замера" if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else "замеров"
+
+
+# ---------- холст ----------
+
+
+class _Canvas:
+    def __init__(self) -> None:
+        self.img = Image.new("RGB", (_W * _K, _H * _K), _BG)
+        self.d = ImageDraw.Draw(self.img, "RGBA")  # RGBA поверх RGB — полупрозрачные заливки
+
+    def text(self, x: float, y: float, s: str, size: int, fill: tuple, bold: bool = False,
+             anchor: str = "la") -> None:
+        self.d.text((x * _K, y * _K), s, font=_font(size, bold), fill=fill, anchor=anchor)
+
+    def line(self, pts: list[tuple[float, float]], fill: tuple, width: float) -> None:
+        self.d.line([(x * _K, y * _K) for x, y in pts], fill=fill, width=round(width * _K),
+                    joint="curve")
+
+    def dot(self, x: float, y: float, r: float, fill: tuple, ring: tuple | None = None) -> None:
+        for rad, col in ((r + 2.5, ring), (r, fill)):
+            if col is not None:
+                self.d.ellipse([(x - rad) * _K, (y - rad) * _K, (x + rad) * _K, (y + rad) * _K],
+                               fill=col)
+
+    def pill(self, x: float, y: float, s: str, fg: tuple, bg: tuple = _PILL, size: int = 17,
+             anchor: str = "center") -> None:
+        w = self.d.textlength(s, font=_font(size, True)) / _K + 16
+        h = size + 12
+        x0 = {"center": x - w / 2, "right": x - w, "left": x}[anchor]
+        self.d.rounded_rectangle([x0 * _K, (y - h / 2) * _K, (x0 + w) * _K, (y + h / 2) * _K],
+                                 radius=h / 2 * _K, fill=bg)
+        self.text(x0 + w / 2, y, s, size, fg, True, anchor="mm")
+
+    def png(self) -> bytes:
+        buf = BytesIO()
+        self.img.resize((_W * _OUT, _H * _OUT), Image.Resampling.LANCZOS).save(
+            buf, format="PNG", optimize=True)
+        return buf.getvalue()
+
+
+def render_weight_chart(
+    points: list[Point], *, tz: str | None = None, target: str = "maintain"
+) -> bytes:
+    """Карточка веса (FR-8, D-40). points — (время, кг), старые → новые, ≥ 1 точки.
+
+    tz — часовой пояс человека для дат на оси (замер в 01:00 по Москве — его день, а не вчерашний
+    по UTC); target — cut/maintain/bulk, чтобы покрасить Δ как статус.
     """
-    k = _SCALE * _SS
-    layer = Image.new("RGB", (w * k, h * k), _BG)
-    d = ImageDraw.Draw(layer)
-    pts = [(x * k, y * k) for x, y in zip(xs, ys, strict=True)]
-    if len(pts) > 1:
-        d.line(pts, fill=_LINE, width=3 * k, joint="curve")
-    r = 4 * k
-    for x, y in pts:
-        d.ellipse([x - r, y - r, x + r, y + r], fill=_LINE)
-    return layer.resize((w * _SCALE, h * _SCALE), Image.Resampling.LANCZOS)
-
-
-def render_weight_chart(points: list[tuple[datetime, float]]) -> bytes:
-    """Линия тренда веса: точки, ДАТЫ по оси X, значения концов и дельта за период."""
-    img = Image.new("RGB", (_W * _SCALE, _H * _SCALE), _BG)
-    d = ImageDraw.Draw(img)
-    d.text((_ML * _SCALE, 18 * _SCALE), "Вес", font=_font(24, True), fill=_INK, anchor="lt")
-
-    plot_w, plot_h = _W - _ML - _MR, _H - _MT - _MB
+    zone = ZoneInfo(tz) if tz else None
+    times = [t.astimezone(zone) if zone and t.tzinfo else t for t, _ in points]
     ws = [w for _, w in points]
-    lo, hi = min(ws), max(ws)
-    span = (hi - lo) or 1.0
-    n = len(points)
-    # Логические координаты внутри слоя. Отступ по ОБЕИМ осям: без него крайние точки
-    # упираются в границу слоя и срезаются ровно пополам (первая и последняя).
-    xs = [_INSET + (plot_w - 2 * _INSET) * i / max(1, n - 1) for i in range(n)]
-    ys = [_INSET + (plot_h - 2 * _INSET) * (1 - (w - lo) / span) for w in ws]
+    c = _Canvas()
 
-    img.paste(_plot_layer(xs, ys, plot_w, plot_h), (_ML * _SCALE, _MT * _SCALE))
-
-    base_y = (_MT + plot_h) * _SCALE
-    d.line(
-        [(_ML * _SCALE, base_y), ((_ML + plot_w) * _SCALE, base_y)], fill=_MUTED, width=2 * _SCALE
-    )
-
-    # Подписи концов — поверх слоя, сразу в 2× (чёткие).
-    for i in (0, n - 1):
-        d.text(
-            ((_ML + xs[i]) * _SCALE, (_MT + ys[i]) * _SCALE - 12 * _SCALE),
-            f"{ws[i]:g}", font=_font(16, True), fill=_INK, anchor="mb",
-        )
-    step = 1 if n <= 8 else (n + 6) // 7  # не чаще ~7 подписей дат, чтобы не слипались
-    for i, (dt, _w) in enumerate(points):
-        if i % step == 0 or i == n - 1:
-            d.text(
-                ((_ML + xs[i]) * _SCALE, base_y + 10 * _SCALE),
-                f"{dt.day}.{dt.month:02d}", font=_font(14), fill=_GREY, anchor="ma",
-            )
+    # шапка
     delta = round(ws[-1] - ws[0], 1)
-    d.text(
-        ((_W - _MR) * _SCALE, 24 * _SCALE), _delta_str(delta), font=_font(20, True),
-        fill=_OVER if delta > 0 else _OK, anchor="rt",
-    )
-    return _png(img)
+    c.text(24, 22, "Вес", 28, _INK, bold=True)
+    sub = f"{_dshort(times[0].date())} – {_dshort(times[-1].date())} · {len(ws)} {_plural(len(ws))}"
+    c.text(24, 64, sub, 18, _MUTED)
+    c.text(_W - 24, 20, f"{kg(ws[-1])} кг", 30, _INK, bold=True, anchor="ra")
+    col = _good(delta, target)
+    c.pill(_W - 24, 78, f"{kg(delta, sign=True)} кг", col, bg=(*col, 46), anchor="right")
+
+    # ось кг
+    lo, hi, step = kg_axis(min(ws), max(ws))
+
+    def y(v: float) -> float:
+        return _Y1 - (_Y1 - _Y0) * (v - lo) / (hi - lo)
+
+    v = lo
+    while v <= hi + 1e-9:
+        c.line([(_X0, y(v)), (_X1, y(v))], _GRID, 1.2)
+        c.text(_X0 - 10, y(v), f"{v:g}".replace(".", ","), 18, _FAINT, anchor="rm")
+        v += step
+    c.text(_X0 - 10, _Y0 - 22, "кг", 16, _FAINT, anchor="rm")
+    c.line([(_X0, _Y1), (_X1, _Y1)], _AXIS, 1.5)
+
+    # ось времени: метки по дням, при шаге от недели — по понедельникам (их глаз узнаёт)
+    t0, t1 = times[0] - timedelta(hours=12), times[-1] + timedelta(hours=12)
+    days = max(1, (t1 - t0).days)
+    sd = next((s for s in (1, 2, 3, 7, 14, 28, 56) if days / s <= 5), 112)
+    d = t0.date() + timedelta(days=1)
+    if sd >= 7:
+        d += timedelta(days=(7 - d.weekday()) % 7)
+    while (tick := datetime(d.year, d.month, d.day, tzinfo=times[0].tzinfo)) <= t1:
+        x = x_positions([t0 + timedelta(hours=12), tick, t1 - timedelta(hours=12)])[1]
+        if _X0 + 10 < x < _X1 - 10:
+            c.line([(x, _Y1), (x, _Y1 + 6)], _AXIS, 1.5)
+            c.text(x, _Y1 + 12, _dshort(d), 17, _FAINT, anchor="ma")
+        d += timedelta(days=sd)
+
+    # заливка, линия, точки — по САМИМ замерам
+    xy = [(x, y(w)) for x, w in zip(x_positions(times), ws, strict=True)]
+    c.d.polygon([(px * _K, py * _K) for px, py in [*xy, (xy[-1][0], _Y1), (xy[0][0], _Y1)]],
+                fill=(*_LINE, 30))
+    if len(xy) > 1:
+        c.line(xy, _LINE, 3)
+    for px, py in xy:
+        c.dot(px, py, 4, _LINE, ring=_BG)
+
+    # мин/макс — не у самой последней точки: там подпись налезла бы на неё. Макс — над точкой,
+    # мин — под ней; не влезает в поле (точка у края) — сбоку, а не поверх линии.
+    i_max, i_min = ws.index(max(ws)), ws.index(min(ws))
+    if i_max != i_min:
+        for i, word, dy in ((i_max, "макс", -28), (i_min, "мин", 28)):
+            px, py = xy[i]
+            if xy[-1][0] - px < 130:
+                continue
+            text = f"{word} {kg(ws[i])}"
+            if _Y0 <= py + dy <= _Y1 - 16:
+                left = px < _X0 + 40
+                c.pill(px - 6 if left else px, py + dy, text, _MUTED,
+                       anchor="left" if left else "center")
+            elif px < _X1 - 170:
+                c.pill(px + 14, py, text, _MUTED, anchor="left")
+            else:
+                c.pill(px - 14, py, text, _MUTED, anchor="right")
+    c.dot(*xy[-1], 7, _INK, ring=_LINE)
+
+    # нижний ряд — ровно те же числа, что в тексте экрана (weight_change)
+    y0 = _H - 90
+    c.line([(24, y0 - 16), (_W - 24, y0 - 16)], _GRID, 1.2)
+    colw = (_W - 48) / 3
+    for i, (lab, val, dlt) in enumerate(stats(points)):
+        c.text(24 + colw * i, y0, lab, 17, _FAINT)
+        c.text(24 + colw * i, y0 + 26, val, 26, _INK if dlt is None else _good(dlt, target),
+               bold=True)
+    return c.png()

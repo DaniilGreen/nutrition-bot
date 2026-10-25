@@ -73,7 +73,7 @@ from app.application.results import (
     WeightTrend,
 )
 from app.bot import coach_chat
-from app.bot.dashboard_image import render_weight_chart  # единственный уцелевший PNG — линия веса
+from app.bot.dashboard_image import render_weight_chart  # единственный уцелевший PNG — график веса
 from app.bot.formatters import (  # текстовые подсказки внутри диалога (не экраны)
     SCAN_REFUSAL,
     format_goal_proposal,
@@ -3101,10 +3101,11 @@ async def _show_week(
 async def _show_weight(message: Message, app_user: User, assistant: Assistant) -> None:
     ctx = await gather(assistant, app_user)
     await _rich(message, screens.weight(ctx))
-    if ctx.trend_ok:  # линию рисуем PNG, только когда тренд честно есть из чего строить
-        await message.answer_photo(
-            BufferedInputFile(render_weight_chart(_weight_points(ctx.weight)), "weight.png")
+    if len(ctx.weight_points) >= 2:  # FR-8, D-40: линия через сами замеры — нужно хотя бы два
+        png = render_weight_chart(
+            ctx.weight_points, tz=ctx.weight.timezone, target=ctx.goal.target
         )
+        await message.answer_photo(BufferedInputFile(png, "weight.png"))
 
 
 async def _show_history(message: Message, app_user: User, assistant: Assistant) -> None:
@@ -3403,14 +3404,14 @@ async def _send_goal_card(
 async def _maybe_weight_chart(
     message: Message, app_user: User, assistant: Assistant, result: Result
 ) -> None:
-    """После записи веса — бонусом график тренда (если есть ≥2 замеров)."""
+    """После записи веса — бонусом тот же график, что на «⚖️ Вес» (FR-7, FR-8), если замеров ≥ 2."""
     if not isinstance(result, WeightLogged):
         return
-    trend = await assistant.weight_trend(app_user)
+    trend = await assistant.weight_trend(app_user, limit=60)  # глубина — как у экрана (gather)
     if len(trend.logs) >= 2:
-        await message.answer_photo(
-            BufferedInputFile(render_weight_chart(_weight_points(trend)), "weight.png")
-        )
+        goal = await assistant.current_goal(app_user)
+        png = render_weight_chart(_weight_points(trend), tz=trend.timezone, target=goal.target)
+        await message.answer_photo(BufferedInputFile(png, "weight.png"))
 
 
 async def _safe_edit(message: Message, text: str, markup: object = None) -> None:

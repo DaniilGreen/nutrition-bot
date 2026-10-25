@@ -173,6 +173,7 @@ def week_json(w: WeekBalance) -> dict[str, Any]:
         "logged_days": w.logged_days,
         "counted_days": w.counted_days,
         "past_logged_days": w.past_logged_days,
+        "past_days": w.past_days,  # прошедшие с регистрации — то же «из M», что у бота (FR-48)
         "average_kcal": round(w.average_kcal),
         "days": [
             {"date": d.day.isoformat(), "kcal": None if d.kcal is None else round(d.kcal),

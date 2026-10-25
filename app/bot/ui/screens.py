@@ -15,6 +15,7 @@ rich — там, где есть бары/таблицы; plain — коротк
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -32,6 +33,7 @@ from app.bot.ui.context import DayContext, day_status
 from app.bot.ui.kit import e, em, n, pct, tg_time, verdict
 from app.domain.goals import Goal, Remaining
 from app.domain.value_objects import Macros
+from app.domain.week import WeekBalance
 
 
 def _short(name: str, limit: int = 16) -> str:
@@ -165,21 +167,143 @@ def evening(d: DayContext) -> str:
 
 
 def week(d: DayContext) -> str:
-    w = d.week7
-    if not w.days_logged:
-        return (
-            "<h3>📈 Неделя</h3><p>За 7 дней записей нет. Запиши еду пару дней — покажу среднее.</p>"
-        )
-    a, g = w.avg_macros, d.goal
+    """«📈 Неделя» (FR-48, D-39): число недели героем → полоса дней → Ккал и Белок барами.
+
+    ОДНО ПРАВИЛО ДНЯ НА ВЕСЬ ЭКРАН — правило баланса (§6.23): прошедший записанный день с
+    регистрации входит; сегодня — только если цель дня уже превышена. Полоса, «в цели K из M» и
+    средние считают ровно эти дни. Иначе экран спорил сам с собой: герой «перебор», а под ним
+    зелёный день на 105% по коридору /streak.
+
+    Есть число недели — окно календарное (Пн → Вс, как «Итоги» аппки), нет (понедельник, «мало
+    записей») — скользящие 7 дней, с теми же правилами дня.
+    """
+    w = d.week_bal
+    shown = w is not None and blocks.week_shown(w)
+    if w is not None and shown and w.verdict != "few_logs":
+        return _week_calendar(d, w)
+    return _week_rolling(d, few=w if shown else None)
+
+
+def _week_calendar(d: DayContext, w: WeekBalance) -> str:
+    # Сегодня, не вошедшее в баланс, не судим (D-29): утром оно «недобор» по определению.
+    cells = [
+        "none" if x.day > w.today or (x.day == w.today and not x.over)
+        else _cell(x.kcal, x.goal_kcal, over=x.over)
+        for x in w.days
+    ]
+    counted = [x.day for x in w.days if x.kcal is not None and (x.day < w.today or x.over)]
+    a = _avg(d, counted)
+    a = Macros(w.average_kcal, a.protein, a.fat, a.carb)  # ккал — число аппки (average_kcal)
+    # Слово вместо знака (как в аппке): минус рядом с «в плане» читается как плохо.
+    if not w.balance_kcal:
+        word, badge = "ровно по плану", ""
+    else:
+        word = (f"{kit.k(-w.balance_kcal)} ккал в запасе" if w.balance_kcal < 0
+                else f"перебор {kit.k(w.balance_kcal)} ккал")
+        badge = "в плане ✅ · " if w.verdict == "on_track" else ""  # перебор — уже в числе
+    m = w.past_days  # с регистрации — то же число у аппки (AC-230)
+    days_word = kit.plural(m, "прошедшего дня", "прошедших дней", "прошедших дней")
+    hero = (f"<h2>{word}</h2>"
+            f"<p>{badge}<i>записано {w.past_logged_days} из {m} {days_word}</i></p>")
+    # Цель ккал — средняя цель ТЕХ ЖЕ дней (goal_history): сменил цель в среду — понедельник
+    # сравнивается со своей, а не с сегодняшней. Тогда % бара = съедено / цель за N дн.
+    g = replace(d.goal, daily_kcal=w.week_goal_kcal / w.counted_days)
+    return _week_body(_span(w.start, w.end), hero, cells, "Пн → Вс",
+                      f"В среднем за {w.counted_days} дн.", a, g, _week_tail(w))
+
+
+def _week_rolling(d: DayContext, *, few: WeekBalance | None) -> str:
+    g = d.goal.daily_kcal
+    if not any(kc > 0 for _, kc in d.days):
+        return ("<h3>📈 Неделя</h3>"
+                "<p>За 7 дней записей нет.<br>Запиши еду пару дней — покажу среднее.</p>")
+    *before, (today, kc_today) = d.days
+    today_in = g > 0 and kc_today > g  # то же правило сегодня, что у баланса
+    past = [(day, kc) for day, kc in before if d.first_day is None or day >= d.first_day]
+    used = [day for day, kc in past if kc > 0] + ([today] if today_in else [])
+    if not used:
+        return ("<h3>📈 Неделя</h3>"
+                "<p>За прошлые дни записей нет.<br>Среднее появится завтра.</p>")
+    # ponytail: цель — текущая; истории целей за прошлую неделю тут нет (D-39 «чем плохо»).
+    cells = [_cell(kc, g, over=g > 0 and kc > g) if (day, kc) in past else "none"
+             for day, kc in before] + ["over" if today_in else "none"]
+    a = _avg(d, used)
+    logged, m = sum(1 for _, kc in past if kc > 0), len(past)
+    hero = (f"<h2>{kit.k(a.kcal)} ккал в день</h2>"
+            f"<p>цель {kit.k(g)} · <i>записано {logged} из {m} "
+            f"{kit.plural(m, 'дня', 'дней', 'дней')}</i></p>")
+    tail = (f"Баланс за {_span(few.start, few.end)}: мало записей."  # MA-INV-21: и почему
+            if few is not None else "Один день — шум. Управляй средней.")
+    return _week_body(_span(d.days[0][0], today), hero, cells,
+                      f"{kit.WD[d.days[0][0].weekday()]} → сегодня",
+                      f"В среднем за {len(used)} дн. · {_span(used[0], used[-1])}", a, d.goal, tail)
+
+
+def _week_body(title: str, hero: str, cells: list[str], cap: str, avg_label: str,
+               a: Macros, g: Goal, tail: str) -> str:
+    # Счёт — по ТЕМ ЖЕ клеткам, что нарисованы: иначе полоса и «в цели K из M» спорят.
+    hit, logged = sum(c == "ok" for c in cells), sum(c != "none" for c in cells)
     return (
-        blocks.week_balance(d)
-        + "<h3>📈 Неделя · в среднем за день</h3>"
-        f"<p><i>{verdict(a, g, final=True)}</i></p>"
-        + _bars(a, g)
-        + f"<p>Дней в цели: <b>{w.days_in_goal}</b> из {w.days_logged} записанных</p>"
-        + blocks.week_table(d)
-        + "<footer>Один день — шум. Управляй этой средней, а не вчерашним ужином.</footer>"
+        f"<h3>📈 Неделя · {title}</h3>"
+        + hero
+        + "<p>" + "".join(em(*_seg_for(c)) for c in cells) + "</p>"
+        + f"<p><i>{cap} · в цели {hit} из {logged}</i></p>"
+        + f"<hr/><p><b>{avg_label}</b></p>"
+        + blocks.macro_block("Ккал", a.kcal, g.daily_kcal)
+        + blocks.macro_block("Белок", a.protein, g.protein_g)
+        # Жир и углеводы — кружком без бара (D-39): на неделе важно «в коридоре ли», а не длина.
+        # Двумя строками: одной на 320 px Telegram порвал бы её посередине.
+        + f"<p>{_dot('Жир', a.fat, g.fat_g)}<br>{_dot('Углеводы', a.carb, g.carb_g)}</p>"
+        + f"<footer>{tail}</footer>"
     )
+
+
+def _cell(kcal: float | None, goal: float, *, over: bool) -> str:
+    """Клетка полосы — правила баланса и столбиков аппки, НЕ коридор /streak (FR-48):
+    красный — выше СВОЕЙ цели дня, жёлтый — ниже половины, иначе зелёный; пусто — нет записей."""
+    if not kcal:
+        return "none"
+    if over:
+        return "over"
+    return "low" if kcal < 0.5 * goal else "ok"
+
+
+def _avg(d: DayContext, days: list[date]) -> Macros:
+    """Среднее КБЖУ по дням `days` — только вошедшим (FR-48), а не по всем с записями."""
+    rows = dict(d.macros7)
+    ms = [rows.get(day, Macros(0, 0, 0, 0)) for day in days]
+    k = len(ms) or 1
+    return Macros(sum(m.kcal for m in ms) / k, sum(m.protein for m in ms) / k,
+                  sum(m.fat for m in ms) / k, sum(m.carb for m in ms) / k)
+
+
+def _week_tail(w: WeekBalance) -> str:
+    """Подвал недели — что делать до воскресенья (FR-35). Каждая строка ≤ SAFE (тест ширины)."""
+    if w.floor_hit:
+        return "Неделю не догнать — ешь по обычной цели."  # MA-INV-49: числа ниже пола нет
+    if w.per_day_kcal is not None:
+        if w.remaining_days == 1:
+            who = "Сегодня" if w.today == w.end else "Завтра"
+            return f"{who} можно до {kit.k(w.per_day_kcal)} — неделя сойдётся."
+        return f"До воскресенья по {kit.k(w.per_day_kcal)} — неделя сойдётся."
+    return "Неделя закрыта — с понедельника новая."  # воскресенье уже вошло в баланс
+
+
+_DOT = {"ok": "🟢", "low": "🟡", "over": "🔴"}
+
+
+def _dot(label: str, cons: float, goal: float) -> str:
+    """«🟢 Жир 70 / 61» — статус кружком, пороги те же, что у бара (kit.status)."""
+    return f"{_DOT[kit.status(cons, goal, label)]} {label} {n(cons)} / {n(goal)}"
+
+
+def _span(d0: date, d1: date) -> str:
+    """«19–25 окт»; через границу месяца — «27 окт – 2 ноя»; один день — «14 сен»."""
+    if d0 == d1:
+        return f"{d0.day} {kit.MON[d0.month - 1]}"
+    if d0.month == d1.month:
+        return f"{d0.day}–{d1.day} {kit.MON[d1.month - 1]}"
+    return f"{d0.day} {kit.MON[d0.month - 1]} – {d1.day} {kit.MON[d1.month - 1]}"
 
 
 def month(d: DayContext) -> str:
@@ -220,12 +344,14 @@ def streak(days: Sequence[tuple[date, float]], goal_kcal: float) -> str:
 
 
 def weight(d: DayContext) -> str:
-    """Экран веса. Тренд — только когда его честно есть из чего считать (иначе «встань на весы»)."""
+    """Экран веса: только записанные замеры (FR-8, D-40). PNG-график хендлер шлёт следом."""
     logs = d.weight.logs
     body = blocks.weight_block(d)
     if len(logs) >= 2:
-        lis = "".join(
-            f"<li>{log.measured_at.strftime('%d.%m')} · <b>{log.weight_kg:.1f}</b> кг</li>"
+        tz = ZoneInfo(d.weight.timezone)  # дата замера — по дню человека, а не по UTC
+        lis = "".join(  # «85,2» — запятая, как в аппке и в шапке экрана (FR-8)
+            f"<li>{log.measured_at.astimezone(tz):%d.%m} · "
+            f"<b>{f'{log.weight_kg:.1f}'.replace('.', ',')}</b> кг</li>"
             for log in logs[:8]
         )
         body += f"<details><summary>📋 Замеры</summary><ul>{lis}</ul></details>"
