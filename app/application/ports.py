@@ -264,6 +264,18 @@ class MealRepo(Protocol):
         """Самый свежий приём с этим именем — источник для повтора."""
         ...
 
+    async def merge_into(
+        self, user_id: int, target_id: int, source_ids: list[int], *,
+        raw_input: str, input_type: str, source_confidence: float, template_name: str,
+    ) -> Meal | None:
+        """FR-47: позиции записей `source_ids` переезжают в `target_id` со своими id и снапшотами
+        (INV-3), источники удаляются, итоги цели — сумма позиций, поля цели — переданные.
+
+        Всё в транзакции вызывающего; строки записей блокируются до её конца. None — какой-то
+        записи нет (или она чужая, или параллельный запрос её уже слил): тогда НИЧЕГО не меняется.
+        """
+        ...
+
     async def template_names(self, user_id: int) -> list[str]: ...
 
     async def delete_last(self, user_id: int) -> Meal | None: ...

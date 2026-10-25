@@ -134,6 +134,6 @@ async def test_чужой_токен_не_возвращает(client, fake_cont
     async with client as c:
         uid = await _login(c)
         meal = await fake_container.meals.add(_meal(uid + 999, ("чужое", 100, 100)))
-        token = routes._to_trash(meal)
+        token = routes._to_trash(meal, None)
         r = await c.post("/api/meals/restore", json={"undo": token}, headers=_hdr())
     assert r.status_code == 404

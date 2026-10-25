@@ -692,6 +692,48 @@ class SqlMealRepo:
         await self._s.flush()
         return _meal_to_domain(orm)
 
+    async def merge_into(
+        self, user_id: int, target_id: int, source_ids: list[int], *,
+        raw_input: str, input_type: str, source_confidence: float, template_name: str,
+    ) -> Meal | None:
+        """FR-47: слить записи приёма пищи в одну. Позиции перепривязываются (UPDATE meal_id),
+        а не копируются: id и снапшоты те же (INV-3).
+
+        `FOR UPDATE` — защита от двойного слияния: второй параллельный запрос ждёт первого и
+        после его фиксации записей-источников уже не находит → None до любой записи.
+        `populate_existing` — объекты в сессии могли быть прочитаны до блокировки.
+        """
+        ids = [target_id, *source_ids]
+        res = await self._s.execute(
+            select(MealORM)
+            .where(MealORM.id.in_(ids), MealORM.user_id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        found = {o.id: o for o in res.scalars().all()}
+        if len(set(ids)) != len(ids) or set(found) != set(ids):
+            return None
+        target = found[target_id]
+        for sid in source_ids:
+            src = found[sid]
+            # Явно из коллекции в коллекцию, а не `item.meal = target`: обратная связь не убрала
+            # бы позицию из незагруженной стороны, и каскад удаления источника снёс бы её. Позиция
+            # с новым родителем — не сирота, delete-orphan её не трогает.
+            moved = list(src.items)
+            src.items.clear()
+            target.items.extend(moved)
+            await self._s.delete(src)
+        target.raw_input = raw_input
+        target.input_type = input_type
+        target.source_confidence = source_confidence
+        target.template_name = template_name
+        target.total_kcal = round(sum(i.kcal for i in target.items), 1)
+        target.total_protein = round(sum(i.protein for i in target.items), 1)
+        target.total_fat = round(sum(i.fat for i in target.items), 1)
+        target.total_carb = round(sum(i.carb for i in target.items), 1)
+        await self._s.flush()
+        return _meal_to_domain(target)
+
     async def latest_by_template(self, user_id: int, name: str) -> Meal | None:
         """Самый свежий приём с этим именем: поменял состав и сохранил заново — идёт новый."""
         res = await self._s.execute(

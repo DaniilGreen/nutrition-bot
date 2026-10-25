@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 
 from app.application.dto import ParsedMessage, PlateReading, ScanReading
 from app.application.entities import Meal, MealItem, Product, WeightLog
 from app.domain.goals import Goal, Remaining
-from app.domain.value_objects import Macros
+from app.domain.sessions import group
+from app.domain.value_objects import Macros, sum_macros
 
 
 @dataclass
@@ -109,6 +110,40 @@ class DailyStats:
 
 
 @dataclass
+class MealSession:
+    """«Приём пищи» (FR-47): записи одного дня подряд. Не хранится — собирается при чтении."""
+
+    meals: list[Meal]  # по времени; хотя бы одна
+    totals: Macros  # сумма записей — те же числа, что в итогах дня (INV-1, INV-3)
+
+    @property
+    def start(self) -> datetime:
+        return self.meals[0].eaten_at
+
+    @property
+    def end(self) -> datetime:
+        return self.meals[-1].eaten_at
+
+    @property
+    def meal_ids(self) -> list[int]:
+        return [m.id for m in self.meals if m.id is not None]
+
+    @property
+    def estimated(self) -> bool:
+        return any(i.is_estimate for m in self.meals for i in m.items)
+
+    @staticmethod
+    def group(meals: list[Meal]) -> list[MealSession]:
+        """Записи ОДНОГО дня → приёмы пищи по времени. День режет вызывающий (граница дня
+        человека), правило разрыва — домен (`domain.sessions`). Равное время — по id."""
+        ordered = sorted(meals, key=lambda m: (m.eaten_at, m.id or 0))
+        return [
+            MealSession([ordered[i] for i in idx], sum_macros(ordered[i].totals for i in idx))
+            for idx in group([m.eaten_at for m in ordered])
+        ]
+
+
+@dataclass
 class DayView:
     """Вар. A: приёмы за один день + навигация ← / → по дням."""
 
@@ -116,6 +151,7 @@ class DayView:
     timezone: str
     days_ago: int  # 0 = сегодня
     day: date  # дата дня в TZ юзера (для заголовка)
+    sessions: list[MealSession] = field(default_factory=list)  # те же записи приёмами пищи (FR-47)
 
 
 @dataclass

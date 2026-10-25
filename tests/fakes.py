@@ -417,6 +417,23 @@ class InMemoryMealRepo:
             meal.template_name = name
         return meal
 
+    async def merge_into(
+        self, user_id: int, target_id: int, source_ids: list[int], *,
+        raw_input: str, input_type: str, source_confidence: float, template_name: str,
+    ) -> Meal | None:
+        ids = [target_id, *source_ids]
+        found = {m.id: m for m in self._meals if m.id in ids and m.user_id == user_id}
+        if len(set(ids)) != len(ids) or set(found) != set(ids):
+            return None  # как SQL: чего-то нет — ничего не меняем
+        target = found[target_id]
+        for sid in source_ids:
+            target.items.extend(found[sid].items)  # те же объекты позиций: id и снапшоты целы
+            self._meals.remove(found[sid])
+        target.raw_input, target.input_type = raw_input, input_type
+        target.source_confidence, target.template_name = source_confidence, template_name
+        target.totals = sum_macros(i.macros for i in target.items)
+        return target
+
     async def latest_by_template(self, user_id: int, name: str) -> Meal | None:
         hits = [
             m for m in self._meals

@@ -60,6 +60,7 @@ from app.application.results import (
     MealCorrected,
     MealDeleted,
     MealLogged,
+    MealSession,
     MonthReport,
     PlateRead,
     Result,
@@ -474,7 +475,23 @@ class Assistant:
     async def day_view(self, user: User, days_ago: int = 0) -> DayView:
         """Просмотр одного дня (вар. A): приёмы хронологически + дата, для навигации ← / →."""
         meals, day = await self._stats.day_view(user, days_ago)
-        return DayView(meals=meals, timezone=user.timezone, days_ago=days_ago, day=day)
+        return DayView(meals=meals, timezone=user.timezone, days_ago=days_ago, day=day,
+                       sessions=MealSession.group(meals))
+
+    async def session_of(self, user: User, meal_id: int) -> MealSession | None:
+        """FR-47: приём пищи, в который входит запись, — записи и сумма. Для строки карточки
+        «✅ Записал»; день — день самой записи (бэкдейт — со своим днём). None — записи нет."""
+        return await self._meals.session_of(user, meal_id)
+
+    async def save_session_as_set(
+        self, user: User, meal_ids: list[int], name: str
+    ) -> MealLogged:
+        """FR-47: «📌 Сохранить приём пищи набором». Записи сливаются в самую раннюю с именем
+        набора; одна запись — обычный «Сохранить набор». Отказ — `SessionRejected(code)`,
+        ничего не записано. Остаток — того дня, где набор (итоги дня слияние не двигает)."""
+        meal = await self._meals.save_session_as_set(user, meal_ids, name)
+        stats = await self._stats.daily(user, days_ago=self._stats.days_ago(user, meal.eaten_at))
+        return MealLogged(meal=meal, remaining=stats.remaining)
 
     async def day_calories(self, user: User, n: int) -> tuple[list[tuple[date, float]], Goal]:
         """(дни с ккал, цель) за n дней — для графика недели и хитмапа (картинки)."""

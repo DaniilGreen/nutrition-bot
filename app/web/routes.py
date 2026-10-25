@@ -36,7 +36,7 @@ from app.application.coach import (
 )
 from app.application.dto import SetPick, Unit
 from app.application.entities import Meal, Recipe, RecipeItem, StatedUse, User
-from app.application.meal_service import RecipeRejected
+from app.application.meal_service import RecipeRejected, SessionRejected, meal_fingerprint
 from app.application.results import (
     BodyScanRead,
     ClarificationNeeded,
@@ -63,6 +63,7 @@ from app.domain.plate import MAX_COMPONENTS
 from app.domain.plausibility import MAX_BATCH_G, MAX_YIELD_G, gate_density, is_alcoholic
 from app.domain.prefs import day_start, sanitize
 from app.domain.prefs import merge as merge_prefs
+from app.domain.sessions import GAP
 from app.domain.timeframe import local_date
 from app.domain.value_objects import Density
 from app.web.deps import CurrentAssistant, CurrentScans, CurrentUser, current_user, get_session
@@ -79,6 +80,7 @@ from app.web.schemas import (
     proposal_json,
     remaining_json,
     scan_json,
+    session_json,
     user_json,
     week_json,
 )
@@ -132,6 +134,7 @@ async def day(
     if days_ago < 0 or days_ago > 365:
         raise bad_request("bad_days_ago", "День вне диапазона.")
     remaining, view = await assistant.day_card(user, days_ago)
+    where = {mid: i for i, s in enumerate(view.sessions) for mid in s.meal_ids}
     goal = await assistant.current_goal(user)
     # Вес нужен ради «г/кг» под белком (§6.2): именно в этих единицах цель
     # ставит нутрициолог, и именно они не устаревают при изменении массы.
@@ -143,7 +146,12 @@ async def day(
         "days_ago": days_ago,
         "goal": goal_json(goal),
         "totals": remaining_json(remaining),
-        "meals": [meal_json(m, user.timezone) for m in view.meals],
+        "meals": [
+            {**meal_json(m, user.timezone), "session": where.get(m.id)} for m in view.meals
+        ],
+        # FR-47, MA-INV-79: приёмы пищи — группы записей подряд; поля выше не тронуты.
+        "session_gap_min": int(GAP.total_seconds() // 60),
+        "sessions": [session_json(i, s, user.timezone) for i, s in enumerate(view.sessions)],
         # §6.20: полем здесь, а не отдельным эндпоинтом — экран «День» сведён
         # к одному запросу на старте, и второй вернул бы мигание (MA-INV-32).
         "pace": await _pace_json(user, assistant) if days_ago == 0 else None,
@@ -657,17 +665,18 @@ async def apply_scan_goal(
 # MA-INV-69: снимок удалённого приёма на 10 минут — под «Вернуть». ponytail: память процесса API,
 # перезапуск теряет «Вернуть» (удалённое удалено осознанно); потолок — мягкое удаление колонкой.
 UNDO_TTL_S = 600
-_TRASH: dict[str, tuple[float, Meal]] = {}
+# токен → (когда, снимок, отпечаток записи ПОСЛЕ удаления — MA-INV-80)
+_TRASH: dict[str, tuple[float, Meal, object]] = {}
 
 
-def _to_trash(meal: Meal) -> str:
+def _to_trash(meal: Meal, after: Meal | None) -> str:
     now = time.monotonic()
-    for k in [k for k, (at, _) in _TRASH.items() if now - at > UNDO_TTL_S]:
+    for k in [k for k, e in _TRASH.items() if now - e[0] > UNDO_TTL_S]:
         del _TRASH[k]
     token = secrets.token_urlsafe(12)
     # Копия, а не ссылка: удаление позиции правит тот же объект приёма, и «Вернуть» вернуло бы
     # уже обрезанный приём (поймано тестом 21.10.2026).
-    _TRASH[token] = (now, copy.deepcopy(meal))
+    _TRASH[token] = (now, copy.deepcopy(meal), meal_fingerprint(after))
     return token
 
 
@@ -679,7 +688,7 @@ async def delete_meal(
     if deleted is None or getattr(deleted, "meal", None) is None:
         raise not_found("meal_not_found", "Приём не найден.")
     stats = await assistant.today(user)
-    return {"deleted": True, "undo": _to_trash(deleted.meal),
+    return {"deleted": True, "undo": _to_trash(deleted.meal, None),
             "totals": remaining_json(stats.remaining)}
 
 
@@ -692,7 +701,13 @@ async def restore_meal(
     if entry is None or time.monotonic() - entry[0] > UNDO_TTL_S or entry[1].user_id != user.id:
         raise not_found("undo_expired", "Вернуть уже нельзя — прошло слишком много времени.")
     _TRASH.pop(str(body["undo"]), None)
-    result = await assistant.restore_meal(user, entry[1])
+    snap = entry[1]
+    now = await assistant.get_meal(user, snap.id) if snap.id is not None else None
+    if meal_fingerprint(now) != entry[2]:
+        # MA-INV-80: запись с тех пор поправили или слили набором (FR-47) — снимок вернул бы
+        # поверх правки или задвоил бы позиции, уже лежащие в наборе.
+        raise ApiError(409, "undo_stale", "Приём уже поправили — вернуть нельзя.")
+    result = await assistant.restore_meal(user, snap)
     if result is None:
         raise not_found("undo_expired", "Вернуть уже нельзя.")
     return logged_json(result, user.timezone)
@@ -725,9 +740,11 @@ async def delete_item(
     meal = await assistant.get_meal(user, meal_id)
     if meal is None or not any(i.id == item_id for i in meal.items):
         raise not_found("item_not_found", "Позиция не найдена.")
-    # Снимок ДО удаления: «Вернуть» возвращает приём, каким он был (MA-INV-69).
-    undo = _to_trash(meal)
+    # Снимок ДО удаления: «Вернуть» возвращает приём, каким он был (MA-INV-69); отпечаток —
+    # каким стал ПОСЛЕ (MA-INV-80), поэтому в корзину кладём уже после удаления.
+    before = copy.deepcopy(meal)
     result = await assistant.remove_item(user, meal_id, item_id)
+    undo = _to_trash(before, result.meal if result else None)
     stats = await assistant.today(user)
     # None означает «позиций не осталось, приём удалён целиком» — это успех,
     # а не 404. Отдавать ошибку на успешное действие значит врать интерфейсу.
@@ -1249,6 +1266,49 @@ async def save_set(
     if meal is None:
         raise bad_request("bad_set", "Нужно хотя бы две позиции, и у каждой — вес.")
     return {"name": meal.template_name}
+
+
+@router.post("/sessions/template")
+async def save_session_set(
+    body: dict[str, Any], user: CurrentUser, assistant: CurrentAssistant, request: Request,
+    idem: CurrentIdem,
+) -> dict[str, Any]:
+    """FR-47: «📌 Сохранить приём пищи набором» — записи приёма пищи сливаются в одну с именем.
+
+    Группировке клиента не верим (MA-INV-79): id обязаны совпасть ровно с приёмом пищи, который
+    сервер соберёт сам. Слияние необратимо одной кнопкой — поэтому ключ идемпотентности.
+    """
+    _throttle(request, user, "meals", limit=20, window=60)
+    name = str(body.get("name") or "").strip()
+    if not name or len(name) > 64:
+        raise bad_request("bad_name", "Имя набора — от 1 до 64 символов.")
+    raw = body.get("meal_ids")
+    try:
+        if not isinstance(raw, list) or not 1 <= len(raw) <= 50:
+            raise ValueError("список записей пуст или слишком длинный")
+        ids = [_id(v) for v in raw]
+        if len(set(ids)) != len(ids):
+            raise ValueError("повтор записи")
+    except (TypeError, ValueError) as exc:
+        raise bad_request("bad_meal_ids", "Список записей не разобрать.") from exc
+    if idem.replay is not None:
+        return idem.replay
+    try:
+        result = await assistant.save_session_as_set(user, ids, name)
+    except SessionRejected as exc:
+        if exc.code == "not_a_session":
+            raise ApiError(409, "not_a_session", "Приём пищи изменился — обнови экран.") from exc
+        if exc.code == "bad_name":
+            raise bad_request("bad_name", "Имя набора — от 1 до 64 символов.") from exc
+        raise bad_request("bad_set", "Нужно хотя бы две позиции, и у каждой — вес.") from exc
+    # Успех = id совпали с приёмом пищи; всё, кроме выжившей самой ранней, слито и удалено.
+    gone = [i for i in ids if i != result.meal.id]
+    return idem.remember({
+        "kind": "set_saved",
+        "name": result.meal.template_name,
+        "meal": meal_json(result.meal, user.timezone),
+        "merged_ids": gone,
+    })
 
 
 @router.post("/sets/log")

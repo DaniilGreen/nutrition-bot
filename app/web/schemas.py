@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from app.application.body_scans import GoalProposal, Overview
 from app.application.entities import Meal, MealItem, User
+from app.application.results import MealSession
 from app.domain import energy
 from app.domain.body_scan import SEGMENTS, BodyScan, Change
 from app.domain.goals import ACTIVITY_FACTORS, TARGET_FACTORS, Goal, Remaining
@@ -71,6 +72,27 @@ def meal_json(meal: Meal, tz: str) -> dict[str, Any]:
         "estimated": any(i.is_estimate for i in meal.items),
         "template_name": meal.template_name,  # FR-39.2: набор — бейдж в карточке, кнопка скрыта
         "items": [item_json(i) for i in meal.items],
+    }
+
+
+def session_json(index: int, s: MealSession, tz: str) -> dict[str, Any]:
+    """«Приём пищи» (FR-47, MA-INV-79): какие записи и их сумма. Группу считает сервер."""
+    zone = ZoneInfo(tz)
+    start, end = s.start.astimezone(zone), s.end.astimezone(zone)
+    return {
+        "index": index,
+        "start": start.strftime("%H:%M"),
+        "end": end.strftime("%H:%M"),
+        "start_iso": start.isoformat(),
+        "end_iso": end.isoformat(),
+        "meal_ids": s.meal_ids,
+        "records": len(s.meals),
+        "kcal": round(s.totals.kcal, 1),
+        "protein_g": round(s.totals.protein, 1),
+        "fat_g": round(s.totals.fat, 1),
+        "carb_g": round(s.totals.carb, 1),
+        "estimated": s.estimated,
+        "template_name": s.meals[0].template_name if len(s.meals) == 1 else None,
     }
 
 

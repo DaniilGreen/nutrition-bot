@@ -424,3 +424,66 @@ async def test_ничья_по_частоте_свежее_выше(session):
     rows = [r for r in await SqlMealRepo(session).frequent_items(u.id, days=30, limit=10)
             if r[1].startswith("СКЛ")]
     assert [r[0] for r in rows] == [new.id, old.id]
+
+
+def _yesterday_noon(minutes: int) -> datetime:
+    """Вчера 12:00 + minutes по Москве (пояс `_user`): приём пищи режется днём человека."""
+    z = ZoneInfo("Europe/Moscow")
+    d = datetime.now(z).date() - timedelta(days=1)
+    return (datetime(d.year, d.month, d.day, 12, tzinfo=z) + timedelta(minutes=minutes)
+            ).astimezone(UTC)
+
+
+async def _rec(session, user: User, minutes: int, name: str, grams: float) -> Meal:
+    m = Macros(kcal=grams * 2, protein=grams * 0.1, fat=grams * 0.05, carb=grams * 0.3)
+    return await SqlMealRepo(session).add(Meal(
+        user_id=user.id, eaten_at=_yesterday_noon(minutes), input_type="text",
+        raw_input=f"{name} {grams:g}", items=[MealItem(name_snapshot=name, grams=grams, macros=m)],
+        source_confidence=0.9, totals=m,
+    ))
+
+
+async def test_приём_пищи_набором_переносит_позиции(session):
+    """FR-47, AC-181: позиции переезжают в самую раннюю запись со своими id и снапшотами,
+    остальные записи удалены, итоги — сумма позиций. Через сервис: `session_of` грузит записи в
+    сессию ДО блокировки — `populate_existing` обязан это пережить."""
+    from app.application.meal_service import MealService
+
+    me = await _user(session, 9701)
+    recs = [await _rec(session, me, 10 * k, n, g)
+            for k, (n, g) in enumerate([("сыр", 20), ("лаваш", 50), ("курица", 120)])]
+    item_ids = [r.items[0].id for r in recs]
+    svc = MealService(SqlProductRepo(session), SqlMealRepo(session))
+
+    out = await svc.save_session_as_set(me, [r.id for r in recs], "бургер")
+    session.expire_all()
+    repo = SqlMealRepo(session)
+    again = await repo.get(me.id, recs[0].id)
+
+    assert out.id == recs[0].id and again.template_name == "бургер"
+    assert sorted(i.id for i in again.items) == sorted(item_ids)
+    assert again.totals.kcal == pytest.approx(380) and again.totals.carb == pytest.approx(57)
+    assert again.raw_input == "сыр 20, лаваш 50, курица 120"
+    assert again.eaten_at == recs[0].eaten_at
+    assert await repo.get(me.id, recs[1].id) is None and await repo.get(me.id, recs[2].id) is None
+    assert (await repo.latest_by_template(me.id, "бургер")).id == recs[0].id
+
+
+async def test_слияние_без_источника_ничего_не_меняет(session):
+    """FR-47: пропала запись (слили параллельно, удалили) или она чужая — None до любой записи."""
+    me = await _user(session, 9702)
+    other = await _user(session, 9703)
+    a = await _rec(session, me, 0, "сыр", 20)
+    b = await _rec(session, me, 10, "лаваш", 50)
+    alien = await _rec(session, other, 5, "чужое", 100)
+    repo = SqlMealRepo(session)
+    kw = dict(raw_input="x", input_type="text", source_confidence=1.0, template_name="бургер")
+
+    assert await repo.merge_into(me.id, a.id, [b.id, 2**31 - 2], **kw) is None
+    assert await repo.merge_into(me.id, a.id, [alien.id], **kw) is None
+    assert await repo.merge_into(me.id, a.id, [a.id], **kw) is None  # сам в себя — тоже нет
+    session.expire_all()
+    left = await repo.get(me.id, a.id)
+    assert left.template_name is None and len(left.items) == 1
+    assert await repo.get(me.id, b.id) is not None
+    assert await repo.get(other.id, alien.id) is not None
