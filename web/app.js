@@ -13,7 +13,7 @@
     .match(/[?&]v=([^&]+)/) || [])[1] || '';
   var root = document.getElementById('screen');
   var nav = document.getElementById('tabs');
-  var state = { tab: 'day', daysAgo: 0, open: {}, sessOpen: {}, prefs: null,
+  var state = { tab: 'day', daysAgo: 0, open: {}, prefs: null,
                 cat: { q: '', offset: 0, view: 'list', product: null, dup: null } };
 
   // Проверка идёт ДО регистрации слушателей: иначе на экране «открой из
@@ -1164,16 +1164,18 @@
   }
 
   /* MA-INV-81, §6.28: шапка приёма пищи — сумма читается первой, записи под ней живые, как
-     обычные строки (тап — раскрыть, позиция — шторка, «Удалить» с «Вернуть»). Тап по шапке
-     открывает её действие — «📌 Сохранить набором»: редкое и необратимое, держать его на виду у
-     каждой группы — шум. Шеврон под суммой говорит, что за шапкой что-то есть. */
+     обычные строки (тап — раскрыть, позиция — шторка, «Удалить» с «Вернуть»). Шапка — только
+     подпись, не кнопка: действие группы — видимая кнопка последней строкой на рельсе (вариант Б,
+     26.10.2026 — строка действия за тапом по шапке владелец отверг). Тап по кнопке сразу ставит
+     на её место форму имени. Порядок записей «сначала новое» кнопку не двигает: она про всю
+     группу, а не про одну запись. */
   function sessionBlock(b) {
-    var g = b.group, open = !!state.sessOpen[g.key];
+    var g = b.group;
+    var label = 'Приём пищи ' + g.range + ': ' + (g.approx ? 'примерно ' : '') + n(g.kcal) +
+      ' ккал, белки ' + n(g.p) + ', жиры ' + n(g.f) + ', углеводы ' + n(g.c) + ' г, ' + g.count;
+    /* Подпись группы читает скринридер из aria-label блока — шапку прячем, чтобы не дважды. */
     var head =
-      '<button class="sess-h" data-sess="' + g.key + '" aria-expanded="' + open + '" ' +
-        'aria-label="Приём пищи ' + esc(g.range) + ': ' + (g.approx ? 'примерно ' : '') +
-          n(g.kcal) + ' ккал, белки ' + n(g.p) + ', жиры ' + n(g.f) + ', углеводы ' + n(g.c) +
-          ' г, ' + esc(g.count) + '. Действия">' +
+      '<div class="sess-h" aria-hidden="true">' +
         '<span class="st">Приём пищи<span class="num rng">' + esc(g.range) + '</span></span>' +
         '<span class="num sk">' + (g.approx ? '<span class="ap">≈</span>' : '') + n(g.kcal) +
         '</span>' +
@@ -1181,13 +1183,15 @@
           '<span style="color:var(--fat)">Ж ' + n(g.f) + '</span> · ' +
           '<span style="color:var(--carb)">У ' + n(g.c) + '</span>' +
           '<span class="cnt"> · ' + esc(g.count) + '</span></span>' +
-        '<svg class="more" width="16" height="16" viewBox="0 0 24 24" fill="none" ' +
-          'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
-          'aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>' +
-      '</button>';
-    var acts = '';
-    if (open && state.sessNaming === g.key) {
-      acts = '<div class="naming sess-a">' +
+      '</div>';
+    var act;
+    if (g.noWeight !== null) {
+      /* FR-39.2: у набора каждая позиция с весом. «Свои цифры» без веса — объясняем сразу
+         и вместо кнопки, а не отказом сервера после ввода имени. */
+      act = '<div class="mic sess-a sess-no">Набором не сохранить: у «' + esc(g.noWeight) +
+        '» свои цифры без веса.</div>';
+    } else if (state.sessNaming === g.key) {
+      act = '<div class="naming sess-a">' +
         '<label class="mic" for="sessname">Как назвать набор? ' + esc(g.count) +
           (g.one ? ' станет' : ' станут') + ' одной записью, дальше это слово запишет весь ' +
           'состав</label>' +
@@ -1195,20 +1199,15 @@
           '<input id="sessname" type="text" maxlength="64" autocomplete="off" enterkeyhint="done" ' +
             'value="' + esc(state.sessName || '') + '">' +
           '<button class="primary" data-sesssave="' + g.key + '">Готово</button></div>' +
-        '<button class="link" data-sesscancel="1" style="align-self:flex-start">Отмена</button>' +
+        '<button class="link" data-sesscancel="' + g.key + '" style="align-self:flex-start">Отмена</button>' +
       '</div>';
-    } else if (open) {
-      /* FR-39.2: у набора каждая позиция с весом. «Свои цифры» без веса — объясняем сразу,
-         а не отказом сервера после ввода имени. */
-      acts = '<div class="sess-a">' + (g.noWeight !== null
-        ? '<div class="mic" style="padding:var(--s-1) 0 var(--s-2)">Набором не сохранить: у «' +
-          esc(g.noWeight) + '» свои цифры без веса.</div>'
-        : '<button class="link" data-sessname="' + g.key + '">📌 Сохранить набором</button>') +
-      '</div>';
+    } else {
+      act = '<div class="actions sess-a"><button data-sessname="' + g.key + '">' +
+        '📌 Сохранить как набор</button></div>';
     }
-    return '<div class="sess" role="group" aria-label="Приём пищи ' + esc(g.range) + '">' +
-      head + acts + '<div class="sess-b">' +
-      b.meals.map(function (m) { return mealBlock(m, true); }).join('') + '</div></div>';
+    return '<div class="sess" role="group" aria-label="' + esc(label) + '">' +
+      head + '<div class="sess-b">' +
+      b.meals.map(function (m) { return mealBlock(m, true); }).join('') + act + '</div></div>';
   }
 
   /* FR-47: «📌 Сохранить набором» — записи приёма пищи сливаются в одну с именем. Id шлём те,
@@ -1235,7 +1234,6 @@
     }).then(function (r) {
       dropKey(key);
       state.sessNaming = null; state.sessName = '';
-      delete state.sessOpen[gkey];
       b.group.ids.concat(r.merged_ids || []).forEach(function (id) {
         delete state.open[id];
         if (state.fresh === id) state.fresh = null;
@@ -4228,14 +4226,8 @@
       return;
     }
     if (b.dataset.setcancel) { state.naming = null; return repaintDay(); }
-    /* FR-47, §6.28: шапка приёма пищи открывает его действие; закрыл — и имя забыто. */
-    if (b.dataset.sess) {
-      var sk = b.dataset.sess;
-      state.sessOpen[sk] = !state.sessOpen[sk];
-      /* Закрыл — имя забыто: оно не должно всплыть в поле другой группы. */
-      if (!state.sessOpen[sk] && state.sessNaming === sk) { state.sessNaming = null; state.sessName = ''; }
-      return repaintDay();
-    }
+    /* FR-47, §6.28: кнопка группы сразу ставит на своё место форму имени. Имя другой группы
+       сюда не переезжает: сменилась группа — поле пустое. */
     if (b.dataset.sessname) {
       if (state.sessNaming !== b.dataset.sessname) state.sessName = '';
       state.sessNaming = b.dataset.sessname;
@@ -4245,7 +4237,14 @@
       if (si) si.focus();
       return;
     }
-    if (b.dataset.sesscancel) { state.sessNaming = null; state.sessName = ''; return repaintDay(); }
+    if (b.dataset.sesscancel) {
+      /* «Отмена» — имя забыто, на месте формы снова кнопка; фокус на неё, а не в начало страницы. */
+      state.sessNaming = null; state.sessName = '';
+      repaintDay();
+      var back = document.querySelector('[data-sessname="' + b.dataset.sesscancel + '"]');
+      if (back) back.focus();
+      return;
+    }
     if (b.dataset.sesssave) return saveSession(b.dataset.sesssave);
     if (b.dataset.setsave) {
       var mid = b.dataset.setsave;

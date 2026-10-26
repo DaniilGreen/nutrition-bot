@@ -115,8 +115,8 @@ header h1{font-size:var(--f-t2);font-weight:700;letter-spacing:-.4px;margin:0}
 .sess{border-top:1px solid var(--separator)}
 .feedhead + .sess{border-top:0}
 .sess + .meal{border-top:1px solid var(--separator)}
-.sess-h{width:100%;text-align:left;background:none;border:0;color:inherit;font:inherit;
-  cursor:pointer;padding:11px 0 6px;display:grid;grid-template-columns:minmax(0,1fr) auto;
+/* Шапка — подпись группы, не кнопка (§6.28, вариант Б): действие — кнопкой под записями. */
+.sess-h{padding:11px 0 6px;display:grid;grid-template-columns:minmax(0,1fr) auto;
   column-gap:var(--s-3);row-gap:2px;align-items:baseline}
 .sess-h .st{font-size:var(--f-body-s);font-weight:600;min-width:0;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
@@ -126,13 +126,14 @@ header h1{font-size:var(--f-t2);font-weight:700;letter-spacing:-.4px;margin:0}
 .sess-h .ap{font-weight:400;color:var(--text-faint);margin-right:3px}
 .sess-h .pfc{min-width:0}
 .sess-h .cnt{color:var(--text-faint)}
-/* Шеврон: за шапкой есть действие; раскрыто — смотрит вверх. */
-.sess-h .more{color:var(--text-muted);justify-self:end;align-self:center;transition:transform .15s}
-.sess-h[aria-expanded="true"] .more{transform:rotate(180deg)}
-@media (prefers-reduced-motion:reduce){.sess-h .more{transition:none}}
-.sess-h:active{opacity:.55}
-.sess-a{display:flex;flex-direction:column;margin:0 0 var(--s-1)}
+/* Кнопка группы — последняя строка на рельсе, кромка = кромке записей; стиль .actions
+   (вторичная пилюля ≥ 44px), ширина по тексту. Форма имени на её месте — с потолком в
+   пикселях: на 1100 поле тянулось бы на всю карточку (responsive.md). */
+/* .sess-b впереди — перебить отступы .actions и .naming, объявленные ниже по файлу. */
+.sess-b .sess-a{margin:var(--s-1) 0}
+.sess-a.naming{max-width:520px}
 .sess-a .link{align-self:flex-start;padding:0}
+.sess-no{color:var(--text-faint);padding:var(--s-2) 0}
 .sess-b{margin:0 0 var(--s-2) 1px;padding-left:10px;border-left:2px solid var(--surface-3)}
 /* Внутри группы записи плотнее и без линий: их держит рельс, а не разделители. */
 /* Цель пальца ≥ 44px и в группе: плотность — от отсутствия линий, а не от высоты строки. */

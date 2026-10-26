@@ -373,6 +373,38 @@ if (!fm) {
   }
   const same = feedModel(one(2, '09:00', '09:00'), false)[0].group.range;
   if (same !== '09:00') problems.push(`Две записи в одну минуту: диапазон «${same}», а не «09:00».`);
+
+  /* §6.28, вариант Б (AC-233): шапка — подпись, не кнопка; действие группы — кнопка последней
+     строкой на рельсе, после записей и при «сначала новое» тоже; форма имени и пояснение «без
+     веса» встают на её место, а не рядом. Владелец отверг строку действия за тапом по шапке. */
+  const sb = src.match(/function sessionBlock\([\s\S]*?\n  \}/);
+  if (!sb) problems.push('Не нашёл function sessionBlock — на нём держится кнопка приёма пищи.');
+  else {
+    const st = { sessNaming: null, sessName: '' };
+    const block = new Function('state', 'esc', 'n', 'mealBlock', 'return ' + sb[0])(
+      st, (x) => String(x), (x) => String(Math.round(x)), (x) => '<i data-meal="' + x.id + '"></i>');
+    const g5 = feedModel(burger, true)[1];
+    const html = block(g5), rail = html.slice(html.indexOf('class="sess-b"'));
+    const lastMeal = rail.lastIndexOf('data-meal='), btn = rail.indexOf('data-sessname="g4"');
+    if (/<button[^>]*class="sess-h|data-sess="/.test(html) || /class="more"/.test(html)) {
+      problems.push('Шапка приёма пищи снова кнопка с шевроном — действие группы только кнопкой под записями.');
+    }
+    if (btn < 0 || btn < lastMeal) {
+      problems.push('Кнопка «Сохранить как набор» не последней строкой на рельсе (и при «сначала новое»).');
+    }
+    st.sessNaming = 'g4';
+    const form = block(g5);
+    if (!/id="sessname"/.test(form) || /data-sessname=/.test(form)) {
+      problems.push('Форма имени не встала на место кнопки «Сохранить как набор».');
+    }
+    st.sessNaming = null;
+    const nw = feedModel({ meals: [{ ...m(1, 0), items: [it('капучино', 0)] }, { ...m(2, 0), items: [] }],
+      sessions: [s(0, [1, 2], '19:02', '19:15')] }, false)[0];
+    const nwh = block(nw);
+    if (/data-sessname=/.test(nwh) || !/свои цифры без веса/.test(nwh)) {
+      problems.push('Позиция без веса: на месте кнопки должно быть пояснение, а кнопки — нет.');
+    }
+  }
 }
 
 /* ── Верхний вырез ────────────────────────────────────────────────────────
