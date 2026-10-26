@@ -390,12 +390,12 @@ if (!fm) {
       problems.push('Шапка приёма пищи снова кнопка с шевроном — действие группы только кнопкой под записями.');
     }
     if (btn < 0 || btn < lastMeal) {
-      problems.push('Кнопка «Сохранить как набор» не последней строкой на рельсе (и при «сначала новое»).');
+      problems.push('Чип «📌 В набор» не последней строкой на рельсе (и при «сначала новое»).');
     }
     st.sessNaming = 'g4';
     const form = block(g5);
     if (!/id="sessname"/.test(form) || /data-sessname=/.test(form)) {
-      problems.push('Форма имени не встала на место кнопки «Сохранить как набор».');
+      problems.push('Форма имени не встала на место чипа «📌 В набор».');
     }
     st.sessNaming = null;
     const nw = feedModel({ meals: [{ ...m(1, 0), items: [it('капучино', 0)] }, { ...m(2, 0), items: [] }],

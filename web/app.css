@@ -126,12 +126,20 @@ header h1{font-size:var(--f-t2);font-weight:700;letter-spacing:-.4px;margin:0}
 .sess-h .ap{font-weight:400;color:var(--text-faint);margin-right:3px}
 .sess-h .pfc{min-width:0}
 .sess-h .cnt{color:var(--text-faint)}
-/* Кнопка группы — последняя строка на рельсе, кромка = кромке записей; стиль .actions
-   (вторичная пилюля ≥ 44px), ширина по тексту. Форма имени на её месте — с потолком в
-   пикселях: на 1100 поле тянулось бы на всю карточку (responsive.md). */
-/* .sess-b впереди — перебить отступы .actions и .naming, объявленные ниже по файлу. */
-.sess-b .sess-a{margin:var(--s-1) 0}
-.sess-a.naming{max-width:520px}
+/* Чип группы — последняя строка на рельсе, кромка = кромке записей. Видимая пилюля 30px и
+   кегль меты (13px): тише записей и суммы. Цель пальца — сама кнопка, 44px в высоту, прозрачная
+   (§6.28). Форма имени на его месте — с потолком в пикселях: на 1100 поле тянулось бы на всю
+   карточку (responsive.md); поле и «Готово» — кеглем строки записи, высота цели та же 44px.
+   .sess-b впереди — перебить отступы .naming, объявленные ниже по файлу. */
+.sess-b .sess-a{margin:2px 0 var(--s-1)}
+.sess-chip{display:flex;align-items:center;min-height:44px;padding:0;background:none;border:0;
+  font:inherit;cursor:pointer;color:var(--text-muted)}
+.sess-chip span{display:inline-flex;align-items:center;height:30px;padding:0 var(--s-3);
+  border:1px solid var(--border);border-radius:var(--r-pill);font-size:var(--f-caption)}
+.sess-chip:active span{background:var(--surface-2);color:var(--text)}
+.sess-a.naming{max-width:520px;gap:6px}
+.sess-a.naming input,.sess-a.naming .primary{font-size:var(--f-body-s)}
+.sess-a.naming .primary{padding:0 var(--s-3)}
 .sess-a .link{align-self:flex-start;padding:0}
 .sess-no{color:var(--text-faint);padding:var(--s-2) 0}
 .sess-b{margin:0 0 var(--s-2) 1px;padding-left:10px;border-left:2px solid var(--surface-3)}

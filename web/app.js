@@ -1165,8 +1165,8 @@
 
   /* MA-INV-81, §6.28: шапка приёма пищи — сумма читается первой, записи под ней живые, как
      обычные строки (тап — раскрыть, позиция — шторка, «Удалить» с «Вернуть»). Шапка — только
-     подпись, не кнопка: действие группы — видимая кнопка последней строкой на рельсе (вариант Б,
-     26.10.2026 — строка действия за тапом по шапке владелец отверг). Тап по кнопке сразу ставит
+     подпись, не кнопка: действие группы — тихий чип «📌 В набор» последней строкой на рельсе
+     (вариант Б, 26.10.2026 — строка действия за тапом по шапке владелец отверг). Тап по кнопке сразу ставит
      на её место форму имени. Порядок записей «сначала новое» кнопку не двигает: она про всю
      группу, а не про одну запись. */
   function sessionBlock(b) {
@@ -1192,9 +1192,8 @@
         '» свои цифры без веса.</div>';
     } else if (state.sessNaming === g.key) {
       act = '<div class="naming sess-a">' +
-        '<label class="mic" for="sessname">Как назвать набор? ' + esc(g.count) +
-          (g.one ? ' станет' : ' станут') + ' одной записью, дальше это слово запишет весь ' +
-          'состав</label>' +
+        '<label class="mic" for="sessname">Имя набора · ' + esc(g.count) +
+          (g.one ? ' станет' : ' станут') + ' одной</label>' +
         '<div class="naming-row">' +
           '<input id="sessname" type="text" maxlength="64" autocomplete="off" enterkeyhint="done" ' +
             'value="' + esc(state.sessName || '') + '">' +
@@ -1202,8 +1201,10 @@
         '<button class="link" data-sesscancel="' + g.key + '" style="align-self:flex-start">Отмена</button>' +
       '</div>';
     } else {
-      act = '<div class="actions sess-a"><button data-sessname="' + g.key + '">' +
-        '📌 Сохранить как набор</button></div>';
+      /* Чип, а не кнопка в рост записи (владелец 26.10: «дюже большая»): видно ~30px, а цель
+         пальца — вся строка 44px; видимую пилюлю рисует вложенный span. */
+      act = '<div class="sess-a"><button class="sess-chip" data-sessname="' + g.key + '">' +
+        '<span>📌 В набор</span></button></div>';
     }
     return '<div class="sess" role="group" aria-label="' + esc(label) + '">' +
       head + '<div class="sess-b">' +
