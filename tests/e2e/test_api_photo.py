@@ -435,3 +435,25 @@ async def test_после_карточки_нет_уточнений_и_кост
     names = [i["name"] for i in out["meal"]["items"]]
     assert "съедобное из 300 г" in names[0]
     assert not any("кост" in n for n in names[1:]), names
+
+
+async def test_креветки_в_панцире_доля_в_ответе_и_запись_равна_шторке(client, fake_container):
+    """AC-244 (FR-34.2): шторка видит долю съедобного, запись — ровно round(341 × 0,6)."""
+    comps = [Component("креветки отварные в панцире", 0.9, 341), Component("лимон", 0.1, 20)]
+    fake_container.vision = StubVision(None, _plate(components=comps))
+    nlu = EchoNlu()
+    fake_container.nlu = nlu
+    async with client as c:
+        d = (await c.post("/api/meals/photo", content=JPEG, headers=_hdr())).json()
+        assert [x["edible_ratio"] for x in d["components"]] == [0.6, None]
+        r = await c.post("/api/meals/photo/commit", headers=_hdr(), json={
+            "draft_id": d["draft_id"], "components": _all(d), "weighed": True,
+        })
+    meal = r.json()["meal"]
+    items = meal["items"]
+    # В разбор — уже съедобное: модели вычитать нечего, имени с панцирем в каталоге нет.
+    assert nlu.texts == ["креветки отварные без панциря 205 г, лимон 20 г"]
+    assert items[0]["grams"] == 205
+    assert items[0]["name"].startswith("креветки отварные без панциря")
+    assert "съедобное из 341 г в панцире" in items[0]["name"]
+    assert items[1]["grams"] == 20

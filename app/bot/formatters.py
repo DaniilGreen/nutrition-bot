@@ -28,6 +28,7 @@ from app.application.results import (
     WeightTrend,
 )
 from app.domain.goals import Remaining
+from app.domain.inedible import edible_grams
 
 _LOW_CONFIDENCE = 0.6  # ниже — помечаем разбор как сомнительный
 _SPARK = "▁▂▃▄▅▆▇█"
@@ -369,23 +370,39 @@ def format_set_saved(meal: object, name: str) -> str:
     )
 
 
+PHOTO_EDIT_HINT = ("Поправь словами — «курица 150», «без риса», «это булгур, а не рис», "
+                   "«добавь соус 30 г» — или ✖ ниже.")
+
+
 def format_photo_card(
     plate: object, grams: list[float], *, weighed: bool, off: list[int] | None = None,
+    guessed: list[bool] | None = None,
 ) -> str:
     """FR-34: что увидели на фото и чего ждём. Калорий нет — их посчитает разбор
-    после «Записать», и цифра до записи разошлась бы с цифрой после (INV-1)."""
-    lines = [f"📷 <b>{escape(plate.dish or 'Блюдо')}</b> · "
-             + ("взвешено" if weighed else "вес на глаз")]
+    после «Записать», и цифра до записи разошлась бы с цифрой после (INV-1).
+
+    Граммы — есть: съедобная часть позиции с несъедобным («→ съедобно ≈205 г») считается
+    тем же `edible_grams`, что заменит граммы после разбора (FR-34.2). `guessed[i]` — вес
+    i-й позиции на глаз (FR-34.3); нет списка — по `weighed` всей карточки."""
     off = off or []
-    for i, (c, g) in enumerate(zip(plate.components, grams, strict=True)):
+    comps = plate.components  # type: ignore[attr-defined]
+    guessed = guessed if guessed is not None else [not weighed] * len(comps)
+    kept = [guessed[i] for i in range(len(comps)) if i not in off]
+    mark = ("вес на глаз" if kept and all(kept)
+            else "вес частично на глаз" if any(kept) else "взвешено")
+    lines = [f"📷 <b>{escape(plate.dish or 'Блюдо')}</b> · {mark}"]  # type: ignore[attr-defined]
+    for i, (c, g) in enumerate(zip(comps, grams, strict=True)):
         note = f" · {escape(c.note)}" if getattr(c, "note", "") else ""
-        line = f"{escape(c.name)} — {g:g} г{note}"
+        edible = edible_grams(c.name, g)
+        eat = (f" → съедобно ≈{edible:g} г"
+               if edible is not None and edible < g and i not in off else "")
+        line = f"{escape(c.name)} — {g:g} г{eat}{note}"
         lines.append(f"• <s>{line}</s>" if i in off else f"• {line}")
     lines.append(f"Всего {sum(g for i, g in enumerate(grams) if i not in off):g} г")
     if not weighed:
         lines.append("\nВзвешивал? Пришли вес тарелки числом — пересчитаю, "
                      "так точнее.")
-    lines.append("\nНе ел что-то из списка — убери кнопкой ✖ ниже.")
+    lines.append("\n" + PHOTO_EDIT_HINT)
     return "\n".join(lines)
 
 

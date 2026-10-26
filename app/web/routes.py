@@ -63,6 +63,7 @@ from app.domain.body_scan import BodyScan, with_fields
 from app.domain.duplicates import SAFE_SPREAD, Candidate, spread, winner
 from app.domain.goals import Goal
 from app.domain.goals import edit_goal as consistent_goal
+from app.domain.inedible import edible_ratio
 from app.domain.label_portion import label_grams
 from app.domain.plate import MAX_COMPONENTS
 from app.domain.plausibility import MAX_BATCH_G, MAX_YIELD_G, gate_density, is_alcoholic
@@ -463,6 +464,8 @@ async def commit_photo(
     grams = [picked.get(i) for i in range(len(reading.components))]
     try:
         text = assistant.photo_text(reading, grams)
+        # FR-34.2: в разбор — съедобное; в `raw_input` — фраза человека (пояснение INV-7.1).
+        said = assistant.photo_text(reading, grams, edible=False)
     except ValueError as exc:
         # MA-INV-44: черновик не тронут — человек поправит и нажмёт снова.
         if not any(g is not None for g in grams):
@@ -475,13 +478,14 @@ async def commit_photo(
         raise bad_request("draft_gone", "Карточка устарела. Сними блюдо ещё раз.")
     try:
         result = await assistant.log_photo(
-            user, text, weighed=bool(body.get("weighed")), day_offset=draft.day_offset
+            user, text, weighed=bool(body.get("weighed")), day_offset=draft.day_offset,
+            raw=said if said != text else None,
         )
     except Exception:
         # Разбор упал — запись не состоялась; карточка должна пережить повтор.
         drafts.restore(token, taken)
         raise
-    out = _result_json(result, user, request, raw_input=text, day_offset=draft.day_offset)
+    out = _result_json(result, user, request, raw_input=said, day_offset=draft.day_offset)
     return idem.remember(out)
 
 
@@ -532,7 +536,10 @@ def _plate_json(result: PlateRead, token: str) -> dict[str, Any]:
         "weighed": result.weighed,
         "total_g": result.total_g,
         "components": [
-            {"i": i, "name": c.name, "grams": g, "fixed": c.fixed, "note": c.note}
+            # FR-34.2: доля съедобного («в панцире» → 0.6) — шторка пишет «→ съедобно ≈N г»,
+            # запись после разбора получит ровно `edible_grams` этих граммов.
+            {"i": i, "name": c.name, "grams": g, "fixed": c.fixed, "note": c.note,
+             "edible_ratio": edible_ratio(c.name)}
             for i, (c, g) in enumerate(zip(r.components, result.grams, strict=True))
         ],
         "liquid": r.liquid,

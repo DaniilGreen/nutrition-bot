@@ -54,6 +54,8 @@ class ParsedItem:
     from_label: bool = False  # FR-27: КБЖУ прочитаны с фото этикетки → точные, пин source="label"
     serving_g: float | None = None  # FR-27: вес одной порции с этикетки (кнопка «1 порция»)
     label_photo_id: str | None = None  # FR-27: Telegram file_id фото этикетки (храним у продукта)
+    # FR-34.3: вес ЭТОЙ позиции фото на глаз — человек не назвал ни тарелку, ни её саму.
+    weight_guessed: bool = False
 
 
 @dataclass

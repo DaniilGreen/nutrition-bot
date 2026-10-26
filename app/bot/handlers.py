@@ -17,6 +17,7 @@ import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from dataclasses import replace as dc_replace
 from datetime import date, datetime
 from html import escape
 from typing import TYPE_CHECKING, Literal, TypeVar
@@ -42,7 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.assistant import BODY_WEIGHT_RE, Assistant
 from app.application.body_scans import BodyScanService, from_reading
 from app.application.coach import LimitReached
-from app.application.dto import Unit
+from app.application.dto import PlateReading, Unit
 from app.application.entities import Meal, MealItem, User
 from app.application.meal_service import (
     SessionRejected,
@@ -127,6 +128,8 @@ from app.bot.keyboards import (
     onboarding_intro_keyboard,
     open_in_app,
     photo_keyboard,
+    photo_pick_keyboard,
+    photo_weight_keyboard,
     portion_keyboard,
     prod_edit_keyboard,
     products_fix_keyboard,
@@ -150,9 +153,14 @@ from app.domain.goals import (
     rebalance,
     set_macro,
 )
+from app.domain.inedible import edible_ratio, peeled_name
 from app.domain.label_portion import label_grams
-from app.domain.plate import Component
-from app.domain.plate import split as plate_split
+from app.domain.plate import MAX_COMPONENTS, MAX_ITEM_G, MAX_PLATE_G, MIN_ITEM_G
+from app.domain.plate_edit import Edit as PlateEdit
+from app.domain.plate_edit import apply as apply_plate_edit
+from app.domain.plate_edit import find as find_on_plate
+from app.domain.plate_edit import parse as parse_plate_edit
+from app.domain.plate_edit import similar as similar_on_plate
 from app.domain.plausibility import MAX_PORTION_G, MIN_PORTION_G
 from app.domain.portion_answer import parse as parse_portion
 from app.domain.timeframe import tz_from_longitude, tz_from_utc_offset
@@ -1221,8 +1229,11 @@ async def on_photo(
     if isinstance(result, PlateRead):
         await state.set_state(MealStates.awaiting_photo)
         data = {
-            "plate": result.reading, "grams": result.grams, "weighed": result.weighed,
+            "plate": result.reading, "grams": result.grams,
+            # FR-34.3: «взвешено» — вес ТАРЕЛКИ; вес позиции из подписи держит её `fixed`.
+            "weighed": result.total_g is not None, "total": result.total_g,
             "off": [],  # D-MA-20: убранные позиции — до записи, а не правкой после
+            "peeled": [],  # FR-34.2: «Без вычета — уже чищено»
         }
         await state.update_data(**data)
         sent = await message.answer(
@@ -1260,14 +1271,33 @@ async def on_photo(
         await message.answer(format_result(result))
 
 
+def _named_plate(data: dict) -> PlateReading:
+    """Карточка как её видит человек: «уже чищеные» — под именем без панциря (FR-34.2)."""
+    plate, peeled = data["plate"], data.get("peeled") or []
+    return dc_replace(plate, components=[
+        dc_replace(c, name=peeled_name(c.name)) if i in peeled else c
+        for i, c in enumerate(plate.components)
+    ])
+
+
+def _photo_guessed(data: dict) -> list[bool]:
+    """FR-34.3: вес позиции на глаз — человек не назвал ни тарелку, ни её саму. Масло «на
+    готовку» — `fixed` (делёж его не трогает), но вес ему дала модель: тоже на глаз."""
+    weighed = bool(data.get("weighed"))
+    return [not weighed and not (c.fixed and not c.note) for c in data["plate"].components]
+
+
 def _photo_text(data: dict) -> str:
     return format_photo_card(
-        data["plate"], data["grams"], weighed=data["weighed"], off=data.get("off") or []
+        _named_plate(data), data["grams"], weighed=bool(data.get("weighed")),
+        off=data.get("off") or [], guessed=_photo_guessed(data),
     )
 
 
 def _photo_kb(data: dict) -> InlineKeyboardMarkup:
-    return photo_keyboard(data["plate"].components, data.get("off") or [])
+    return photo_keyboard(
+        data["plate"].components, data.get("off") or [], data.get("peeled") or []
+    )
 
 
 @router.callback_query(F.data.startswith(f"{SCAN_PREFIX}:"))
@@ -1331,26 +1361,245 @@ async def on_scan_btn(
     )
 
 
+_PHOTO_HINT = ("Поправь словами: «курица 150», «без риса», «не рис, а булгур», "
+               "«добавь соус 30 г» — или вес тарелки числом.")
+_PHOTO_KEPT = "📷 Карточка фото выше ждёт «✅ Записать» — этот текст её не менял."
+_PHOTO_GONE = "📷 Карточка фото снята — пришли фото снова."
+_PHOTO_BUSY = "⏳ Уже записываю…"
+_PHOTO_MAX = MAX_COMPONENTS + 2  # + масло и заправка «на готовку», как у аппки
+_ADD_WINDOW = 60.0  # с: повтор того же «добавь соус 30 г» — повторная отправка, не вторая порция
+_BODY_ASK = re.compile(r"^\s*вес\b", re.IGNORECASE)
+
+
 @router.message(MealStates.awaiting_photo, F.text)
-async def on_photo_weight(message: Message, bot: Bot, state: FSMContext) -> None:
-    """FR-34: вес тарелки числом, пока открыта карточка → пересчёт граммов на месте."""
+async def on_photo_weight(
+    message: Message, bot: Bot, state: FSMContext, app_user: User | None = None,
+    assistant: Assistant | None = None, session: AsyncSession | None = None,
+    container: Container | None = None,
+) -> None:
+    """FR-34.1: текст при открытой карточке фото — правка карточки, без модели: вес тарелки,
+    «курица 150», «без риса», «не рис, а булгур», «добавь соус 30 г». Не правка — обычный
+    путь, а карточка остаётся открытой: еду не теряем ни в тексте, ни на фото."""
     data = await state.get_data()
     if data.get("plate") is None:
         await state.clear()
         await message.answer("⏳ Карточка устарела — пришли фото заново.")
         return
-    total = label_grams(message.text or "", None)
-    if total is None or not 1 <= total <= 5000:
-        await message.answer(
-            "Пришли вес тарелки числом (например 420) или нажми «✅ Записать» под карточкой."
-        )
+    pick = data.get("pick") or {}
+    if pick.get("edit") is not None and not data.get("committing"):
+        # Ответ текстом на «Чей вес…» — сперва среди кандидатов вопроса, без модели.
+        hit = _pick_by_text(data, pick, message.text or "")
+        if hit is not None:
+            await state.update_data(pick=None, pick_id=None)
+            pick_id = data.pop("pick_id", None)
+            data.pop("pick", None)
+            trace = _apply_photo_edits(data, [(pick["edit"], hit)])
+            await _store_photo(state, data)
+            await _redraw_photo(message, bot, state, data)
+            if pick_id is not None:
+                with suppress(TelegramBadRequest):
+                    await bot.edit_message_text(trace, chat_id=message.chat.id,
+                                                message_id=pick_id)
+            else:
+                await message.answer(trace)
+            return
+    await _drop_photo_pick(bot, message.chat.id, state, data)
+    if _replied_meal(message) is not None:  # ответ на карточку ЗАПИСИ — её правка (FR-44)
+        await _photo_pass(message, bot, state, data, app_user, assistant, session, container)
         return
-    # Вес позиции, названный человеком в подписи (`fixed`), при пересчёте не двигается.
-    current = [Component(c.name, c.share, g, c.fixed) for c, g in zip(
-        data["plate"].components, data["grams"], strict=True)]
-    data["grams"] = plate_split(current, total)
-    data["weighed"] = True
-    await state.update_data(grams=data["grams"], weighed=True)
+    reply = message.reply_to_message
+    to_card = reply is not None and reply.message_id == data.get("card_id")
+    text = message.text or ""
+    edits = parse_plate_edit(text)
+    kind, payload = (_plan_photo_edits(data, edits, strict=to_card, text=text)
+                     if edits else ("new", None))
+    if data.get("committing") and kind != "new":  # правка, а карточка уже пишется
+        await message.answer(_PHOTO_BUSY)
+        return
+    if kind == "new":
+        if to_card and not edits:  # ответ на саму карточку — правка; не поняли — так и говорим
+            await message.answer("Не понял, что поправить. " + _PHOTO_HINT)
+            return
+        await _photo_pass(message, bot, state, data, app_user, assistant, session, container)
+        return
+    if kind == "say":
+        await message.answer(str(payload))
+        return
+    if kind == "body":  # «вес 72,4» — тарелка или вес тела?
+        grams = float(payload)  # type: ignore[arg-type]
+        n = f"{grams:g}".replace(".", ",")
+        sent = await message.answer(f"✏️ {n} — это тарелка или твой вес?",
+                                    reply_markup=photo_weight_keyboard(grams))
+        await state.update_data(pick={"wq": grams}, pick_id=sent.message_id)
+        return
+    if kind == "ask":
+        edit, cands, separate = payload  # type: ignore[misc]
+        names = [c.name for c in _named_plate(data).components]
+        sent = await message.answer(
+            _photo_ask(edit, separate),
+            reply_markup=photo_pick_keyboard(names, cands, separate=separate),
+        )
+        await state.update_data(pick={"edit": edit, "cands": cands, "text": text},
+                                pick_id=sent.message_id)
+        return
+    plan = payload  # type: ignore[assignment]
+    if _repeated_add(data, plan):  # type: ignore[arg-type]
+        e = plan[0][0]  # type: ignore[index]
+        await message.answer(f"✏️ Уже добавил: {escape(e.new, quote=False)} {e.grams:g} г.")
+        return
+    trace = _apply_photo_edits(data, plan)  # type: ignore[arg-type]
+    await _store_photo(state, data)
+    await _redraw_photo(message, bot, state, data)
+    await message.answer(trace)
+
+
+def _plan_photo_edits(
+    data: dict, edits: list[PlateEdit], *, strict: bool, text: str = ""
+) -> tuple[str, object]:
+    """Что делать с правками: ("apply", [(правка, позиция)]) / ("ask", (правка, кандидаты,
+    «записать отдельно»)) / ("body", граммы) / ("say", отказ) / ("new", None) — не правка.
+    Атомарно: хоть одна не сходится — ничего."""
+    comps = data["plate"].components
+    names = [c.name for c in _named_plate(data).components]
+    off = data.get("off") or []
+    kept = [i for i in range(len(comps)) if i not in off]
+    total = data.get("total") if data.get("weighed") else None
+    plan: list[tuple[PlateEdit, int | None]] = []
+    added = 0
+    for e in edits:
+        if e.op == "total":
+            if (len(edits) == 1 and e.grams and not e.unit and 20 <= e.grams < 150
+                    and _BODY_ASK.match(text)):
+                return "body", e.grams  # «вес 72,4» под карточкой — скорее вес тела
+            if e.grams is None or not 1 <= e.grams <= MAX_PLATE_G or (not e.unit and e.grams < 10):
+                return "say", ("Пришли вес тарелки числом (например 420) или нажми «✅ Записать» "
+                               "под карточкой.")
+            plan.append((e, None))
+            total = e.grams
+            continue
+        if e.op == "add":
+            if e.grams is None or not e.unit:
+                return "new", None  # «ещё кофе», «ещё 2 яйца» — вес знает разбор: обычный путь
+            if not MIN_ITEM_G <= e.grams <= MAX_ITEM_G:
+                return "say", "Вес позиции — от 1 до 3000 г."
+            added += 1
+            if len(comps) + added > _PHOTO_MAX:
+                return "say", (f"На карточке уже {_PHOTO_MAX} позиций — запиши её, "
+                               "остальное добавь отдельно.")
+            plan.append((e, None))
+            continue
+        if e.grams is not None:
+            if not e.unit and e.grams < 10:
+                who, g = e.name or e.new, f"{e.grams:g}"
+                return "say", f"«{g}» — это граммы? Пришли с единицей: «{who} {g} г»."
+            if not MIN_ITEM_G <= e.grams <= MAX_ITEM_G:
+                return "say", "Вес позиции — от 1 до 3000 г."
+            if total and e.grams > total:
+                return "say", (f"Это больше всей тарелки ({total:g} г) — поправь вес тарелки "
+                               "или позиции.")
+        if not e.name:  # «это булгур» без старого имени — всегда вопрос, не догадка
+            food = [i for i in kept if not comps[i].note] or kept
+            if len(edits) != 1 or not food:
+                return "say", f"Что заменить? Напиши: «не рис, а {escape(e.new, quote=False)}»."
+            return "ask", (e, food, False)
+        cands = find_on_plate(names, e.name)
+        if not cands:
+            if e.op == "grams" and len(edits) == 1:
+                # Имя не нашлось — не значит «новая еда»: «курица 150» при «куриное филе» —
+                # та же курица. Спрашиваем; похожие — первыми (ревью 26.10.2026).
+                near = [i for i in similar_on_plate(names, e.name) if i in kept]
+                return "ask", (e, near + [i for i in kept if i not in near], True)
+            return "say", f"На карточке нет «{escape(e.name, quote=False)}». {_PHOTO_HINT}"
+        if len(cands) > 1:
+            if len(edits) == 1:
+                return "ask", (e, cands, False)
+            return "say", (f"«{escape(e.name, quote=False)}» — на карточке несколько таких. "
+                           f"Поправь по одной: «{escape(names[cands[0]], quote=False)} 150».")
+        plan.append((e, cands[0]))
+    return "apply", plan
+
+
+def _repeated_add(data: dict, plan: list[tuple[PlateEdit, int | None]]) -> bool:
+    """«добавь соус 30 г», отправленное второй раз за минуту, — повтор, а не вторая порция."""
+    if len(plan) != 1 or plan[0][0].op != "add":
+        return False
+    e, last = plan[0][0], data.get("last_add") or {}
+    return (last.get("key") == (e.new.lower(), e.grams)
+            and time.monotonic() - float(last.get("at", 0)) < _ADD_WINDOW)
+
+
+def _apply_photo_edits(data: dict, plan: list[tuple[PlateEdit, int | None]]) -> str:
+    """Правки на карточке; вернёт след «✏️ Поправил: …» (правка старого сообщения беззвучна)."""
+    comps = data["plate"].components
+    grams = list(data["grams"])
+    off, peeled = list(data.get("off") or []), list(data.get("peeled") or [])
+    total = data.get("total")
+    if data.get("weighed") and not total:  # карточка открыта до D-MA-30 — веса тарелки нет
+        total = sum(grams)
+    done: list[str] = []
+    for edit, i in plan:
+        shown = _named_plate({**data, "peeled": peeled}).components
+        before = shown[i].name if i is not None else ""
+        if edit.op == "total":
+            total = edit.grams
+            data["weighed"] = True
+        apply_plate_edit(edit, i, comps, grams, off, total if data.get("weighed") else None)
+        if edit.op == "rename" and i in peeled:
+            peeled.remove(i)  # новое имя само решает, есть ли что вычитать
+        if edit.op == "add":
+            data["last_add"] = {"key": (edit.new.lower(), edit.grams), "at": time.monotonic()}
+        done.append(_did(edit, before, comps, grams, i))
+    data.update(grams=grams, off=off, peeled=peeled, total=total)
+    return "✏️ Поправил: " + escape("; ".join(done), quote=False)
+
+
+def _did(edit: PlateEdit, before: str, comps: list, grams: list[float], i: int | None) -> str:
+    if edit.op == "total":
+        return f"тарелка {edit.grams:g} г"
+    if edit.op == "add":
+        return f"добавил {comps[-1].name} {grams[-1]:g} г"
+    if edit.op == "off":
+        return f"убрал {before}"
+    if edit.op == "on":
+        return f"вернул {before}"
+    assert i is not None
+    if edit.op == "rename":
+        return f"{before} → {comps[i].name}" + (f" {grams[i]:g} г" if edit.grams else "")
+    return f"{comps[i].name} {grams[i]:g} г"
+
+
+async def _store_photo(state: FSMContext, data: dict) -> None:
+    await state.update_data(
+        plate=data["plate"], grams=data["grams"], off=data.get("off") or [],
+        peeled=data.get("peeled") or [], weighed=bool(data.get("weighed")),
+        total=data.get("total"), last_add=data.get("last_add"),
+    )
+
+
+def _photo_ask(edit: PlateEdit, separate: bool = False) -> str:
+    if edit.op == "rename":
+        return f"✏️ Что заменить на «{escape(edit.new, quote=False)}»?"
+    if edit.op in ("off", "on"):
+        verb = "убрать" if edit.op == "off" else "вернуть"
+        return f"✏️ Что {verb} — «{escape(edit.name, quote=False)}»?"
+    tail = " или запиши отдельно" if separate else ""
+    return f"✏️ Чей вес «{edit.grams:g} г»? Выбери позицию{tail}."
+
+
+async def _drop_photo_pick(bot: Bot | None, chat_id: int, state: FSMContext, data: dict) -> None:
+    """Новый текст снимает висящий вопрос «чей вес» (FR-34.1), как у FR-44."""
+    pick_id = data.pop("pick_id", None)
+    data.pop("pick", None)
+    if pick_id is None:
+        return
+    await state.update_data(pick=None, pick_id=None)
+    if bot is not None:
+        with suppress(TelegramBadRequest):
+            await bot.edit_message_text("✏️ Вопрос снят.", chat_id=chat_id, message_id=pick_id)
+
+
+async def _redraw_photo(message: Message, bot: Bot, state: FSMContext, data: dict) -> None:
+    """Карточка правится на месте; не вышло (старая, удалена) — присылаем заново."""
     card_id = data.get("card_id")
     if card_id:
         with suppress(TelegramBadRequest):
@@ -1361,6 +1610,64 @@ async def on_photo_weight(message: Message, bot: Bot, state: FSMContext) -> None
             return
     sent = await message.answer(_photo_text(data), reply_markup=_photo_kb(data))
     await state.update_data(card_id=sent.message_id)
+
+
+async def _keep_card(
+    message: Message, bot: Bot, state: FSMContext, data: dict, run: Callable[[], Awaitable[None]]
+) -> None:
+    """Обычный путь при открытой карточке: состояние карточки не сбрасываем ни на миг (флаг
+    `passing`) — вторая правка в это окно ляжет на карточку, а не потеряется; падение пути
+    карточку не трогает.
+
+    Одно открытое состояние на чат: если обычный путь сам задал вопрос (порция, вариант,
+    «что заменить»), карточка уступает ему и говорит об этом сразу (D-MA-30)."""
+    photo = MealStates.awaiting_photo.state
+    await state.update_data(passing=True)
+    try:
+        await run()
+    finally:
+        current = await state.get_state()
+        if current == photo:
+            await state.update_data(passing=False)
+        elif current is not None:  # уступила вопросу обычного пути — её кнопки больше не пишут
+            await state.update_data(plate=None, passing=False)
+    if current == photo:
+        if not (await state.get_data()).get("committing"):
+            await message.answer(_PHOTO_KEPT)
+        return
+    if current is None:  # карточку за это время записали — говорить нечего
+        return
+    if data.get("card_id"):
+        with suppress(TelegramBadRequest):
+            await bot.edit_message_reply_markup(
+                chat_id=message.chat.id, message_id=data["card_id"], reply_markup=None
+            )
+    await message.answer(_PHOTO_GONE)
+
+
+def _pick_by_text(data: dict, pick: dict, text: str) -> int | None:
+    """Текст-ответ на «Чей вес…»: одна позиция из кандидатов вопроса — или None."""
+    if not text.strip() or re.search(r"\d", text):
+        return None
+    names = [c.name for c in _named_plate(data).components]
+    cands = [i for i in pick.get("cands") or [] if i < len(names)]
+    pool = [names[i] for i in cands]
+    hits = find_on_plate(pool, text) or similar_on_plate(pool, text)
+    return cands[hits[0]] if len(hits) == 1 else None
+
+
+async def _photo_pass(
+    message: Message, bot: Bot, state: FSMContext, data: dict, app_user: User | None,
+    assistant: Assistant | None, session: AsyncSession | None, container: Container | None,
+) -> None:
+    """Не правка карточки — обычный путь (запись, вопрос, правка записи), карточка остаётся."""
+    assert app_user is not None and assistant is not None and session is not None
+
+    async def run() -> None:
+        await on_text(message, bot, app_user, assistant, session, state, container,
+                      keep_state=True)
+
+    await _keep_card(message, bot, state, data, run)
 
 
 @router.callback_query(F.data.startswith(f"{PHOTO_PREFIX}:"))
@@ -1376,9 +1683,35 @@ async def on_photo_btn(
     if data.get("plate") is None or not isinstance(callback.message, Message):
         await callback.answer("Карточка устарела — пришли фото заново.")
         return
+    if data.get("committing"):  # «✅» уже нажата, разбор в пути — второй тап не пишет
+        await callback.answer(_PHOTO_BUSY)
+        return
+    if data.get("passing") and (callback.data or "").endswith(":ok"):
+        await callback.answer("⏳ Подожди секунду…")  # текст ещё идёт обычным путём
+        return
     parts = (callback.data or "").split(":")
     plate = data["plate"]
     off = list(data.get("off") or [])
+    if parts[1] in ("pick", "wq") and len(parts) == 3:
+        await _photo_pick(callback, callback.message, state, data, parts[1:],
+                          app_user, assistant, session)
+        return
+    if data.get("card_id") and callback.message.message_id != data.get("card_id"):
+        await callback.answer("Карточка устарела — пришли фото заново.")  # кнопки старой карточки
+        return
+    if parts[1] == "peel" and len(parts) == 3:
+        i = int(parts[2])
+        peeled = list(data.get("peeled") or [])
+        if 0 <= i < len(plate.components) and edible_ratio(plate.components[i].name) is not None:
+            peeled = [x for x in peeled if x != i] if i in peeled else peeled + [i]
+            data["peeled"] = peeled
+            await state.update_data(peeled=peeled)
+        await callback.answer()
+        await _safe_edit(callback.message, _photo_text(data), _photo_kb(data))
+        return
+    if parts[1] != "ok" and parts[1] != "off":
+        await callback.answer()
+        return
     if parts[1] == "off" and len(parts) == 3:
         i = int(parts[2])
         if 0 <= i < len(plate.components):
@@ -1394,16 +1727,84 @@ async def on_photo_btn(
     await callback.answer()
     grams = [None if i in off else g for i, g in enumerate(data["grams"])]
     try:
-        text = assistant.photo_text(plate, grams)
+        text = assistant.photo_text(_named_plate(data), grams)
+        said = assistant.photo_text(_named_plate(data), grams, edible=False)
     except ValueError:
         await callback.message.answer("Граммы вне границ — пришли вес тарелки числом.")
         return
+    guessed = [g for i, g in enumerate(_photo_guessed(data)) if i not in off]
     # Состояние чистим ПОСЛЕ записи: упал разбор (сеть, 429) — карточка остаётся,
-    # и «✅ Записать» можно нажать ещё раз, не переснимая блюдо.
-    result = await assistant.log_photo(app_user, text, weighed=bool(data.get("weighed")))
-    await session.commit()
-    await state.clear()
-    await _render_after_continue(callback.message, result, state, app_user, assistant, raw=text)
+    # и «✅ Записать» можно нажать ещё раз, не переснимая блюдо. Пока пишем — правки
+    # и второе «✅» отвечают «Уже записываю…».
+    await state.update_data(committing=True)
+    try:
+        result = await assistant.log_photo(
+            app_user, text, weighed=bool(data.get("weighed")), guessed=guessed,
+            raw=said if said != text else None,
+        )
+        await session.commit()
+    except BaseException:
+        await state.update_data(committing=False)
+        raise
+    if await state.get_state() in (MealStates.awaiting_photo.state, None):
+        await state.clear()
+    else:  # текст в окне записи открыл свой вопрос — его не стираем (AC-251)
+        await state.update_data(plate=None, committing=False)
+    await _render_after_continue(callback.message, result, state, app_user, assistant, raw=said)
+
+
+async def _photo_pick(
+    callback: CallbackQuery, question: Message, state: FSMContext, data: dict, parts: list[str],
+    app_user: User, assistant: Assistant, session: AsyncSession,
+) -> None:
+    """FR-34.1: ответ на вопрос карточки — позиция, «➕ Записать отдельно», «✖️ Отмена»;
+    или «тарелка / мой вес» на «вес 72,4»."""
+    bot = callback.bot
+    assert bot is not None
+    pick = data.get("pick")
+    kind, arg = parts
+    if not pick or question.message_id != data.get("pick_id") or (kind == "wq") != ("wq" in pick):
+        await callback.answer("Этот вопрос уже снят.")
+        with suppress(TelegramBadRequest):
+            await bot.edit_message_reply_markup(
+                chat_id=question.chat.id, message_id=question.message_id, reply_markup=None
+            )
+        return
+    # Снять вопрос ДО первого await с сетью: двойной тап не пройдёт второй раз (N4).
+    await state.update_data(pick=None, pick_id=None)
+    data.pop("pick", None)
+    data.pop("pick_id", None)
+    await callback.answer()
+    if kind == "wq":
+        grams = float(pick["wq"])
+        if arg == "body":
+            log, delta = await assistant.log_weight(app_user, grams)
+            await session.commit()
+            await _safe_edit(question, "⚖️ Это вес тела, а не тарелка.")
+            await _reply_screen(question, WeightLogged(log=log, delta_kg=delta), app_user,
+                                assistant)
+            await question.answer(_PHOTO_KEPT)
+            return
+        trace = _apply_photo_edits(data, [(PlateEdit("total", grams=grams), None)])
+    elif arg == "new":  # «➕ Записать отдельно» — обычный путь, карточка остаётся
+        await _safe_edit(question, "➕ Записываю отдельно.")
+        text = str(pick.get("text") or "")
+
+        async def run() -> None:
+            result = await assistant.process(app_user, text, input_type="text")
+            await session.commit()
+            await _reply_message(question, result, state, app_user, assistant, raw=text)
+
+        await _keep_card(question, bot, state, data, run)
+        return
+    elif arg == "x" or not arg.isdigit() or int(arg) not in pick["cands"]:
+        await _safe_edit(question, "✏️ Ок, не правлю.")
+        return
+    else:
+        trace = _apply_photo_edits(data, [(pick["edit"], int(arg))])
+    await _store_photo(state, data)
+    await _safe_edit(question, trace)
+    await _redraw_photo(question, bot, state, data)
 
 
 @router.message(MealStates.awaiting_label_grams, F.text)
@@ -1474,12 +1875,16 @@ async def on_text(
     session: AsyncSession,
     state: FSMContext,
     container: Container | None = None,
+    keep_state: bool = False,
 ) -> None:
+    """`keep_state` — текст при открытой карточке фото (FR-34.1): её состояние не сбрасываем,
+    пока идёт обычный путь (флаг `passing`); вопрос, который путь откроет, сменит его сам."""
     await _clear_intro_keyboard(message, bot, state)  # #7: гасим висящее интро-меню онбординга
     if await _answer_fix_question(message, app_user, assistant, session, state):
         return  # «гречка» в ответ на «что заменить» — выбор позиции, без модели (FR-44)
     await _drop_fix_question(bot, message.chat.id, state)
-    await state.clear()
+    if not keep_state:
+        await state.clear()
     await _send_typing(message)
     meal_id = _replied_meal(message)
     if meal_id is not None:  # FR-44: ответ на карточку приёма — правка ЭТОГО приёма

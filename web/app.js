@@ -3624,7 +3624,7 @@
       liquid: !!res.liquid,
       items: (res.components || []).map(function (c) {
         return { i: c.i, name: c.name, grams: String(Math.round(c.grams)), off: false,
-                 fixed: !!c.fixed, note: c.note || '' };
+                 fixed: !!c.fixed, note: c.note || '', ratio: c.edible_ratio || 0 };
       }),
       base: null
     };
@@ -3636,12 +3636,21 @@
     }, 0);
   }
 
+  /* FR-34.2: «в панцире» — съедобную часть сервер запишет как round(граммы × доля), половина
+     вверх; здесь та же арифметика, чтобы шторка и запись совпали до грамма. */
+  function photoEdible(it) {
+    var g = Number(it.grams) || 0;
+    return it.ratio && g > 0 && !it.off ? ' → съедобно ≈' + Math.round(g * it.ratio) + ' г' : '';
+  }
+
   function photoCard(p) {
     var rows = p.items.map(function (it, k) {
       return '<div class="prow' + (it.off ? ' off' : '') + '">' +
         /* D-MA-20: масло «на готовку» — строкой списка, без вопроса; лишнее убирается ✕. */
         '<span class="pname">' + esc(it.name) +
-          (it.note ? ' <span class="g">· ' + esc(it.note) + '</span>' : '') + '</span>' +
+          (it.note ? ' <span class="g">· ' + esc(it.note) + '</span>' : '') +
+          (it.ratio ? ' <span class="g" data-pe="' + k + '">' + esc(photoEdible(it)) +
+            '</span>' : '') + '</span>' +
         (it.off
           ? '<button class="px" data-pback="' + k + '" aria-label="Вернуть ' + esc(it.name) +
             '">Вернуть</button>'
@@ -3703,14 +3712,21 @@
         it.grams = String(Math.round(p.base[idx] * want / have));
         var f = root.querySelector('[data-pg="' + idx + '"]');
         if (f) f.value = it.grams;
+        photoEdibleAt(p, idx);
       });
       return;
     }
     p.base = null;
     p.items[Number(el.dataset.pg)].grams = el.value;
+    photoEdibleAt(p, Number(el.dataset.pg));
     p.items[Number(el.dataset.pg)].fixed = true;  // правил руками — общий вес её не двигает
     var t = document.getElementById('ptotal');
     if (t) t.value = photoTotal(p);
+  }
+
+  function photoEdibleAt(p, idx) {
+    var s = root.querySelector('[data-pe="' + idx + '"]');
+    if (s) s.textContent = photoEdible(p.items[idx]);
   }
 
   function commitPhoto() {

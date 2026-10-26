@@ -83,18 +83,20 @@ from app.domain.clarify import worth_asking_portion
 from app.domain.consensus import confidence_from_cv, median_cv
 from app.domain.duplicates import Candidate, group
 from app.domain.goals import Goal, Remaining, in_goal, remaining
+from app.domain.inedible import edible_grams, edible_name
 from app.domain.menu import MenuLine
 from app.domain.menu import misread as menu_misread
 from app.domain.menu import picked as menu_picked
 from app.domain.menu import title as menu_title
 from app.domain.menu import totals as menu_totals
-from app.domain.naming import looks_like_key, phrase_names
+from app.domain.naming import _coverage, looks_like_key, phrase_names
 from app.domain.nutrition import atwater_suspect
-from app.domain.plate import Component, caption_numbers, clean_name, said
+from app.domain.plate import MAX_PLATE_G, Component, caption_numbers, clean_name, snap
 from app.domain.plate import compose as plate_compose
 from app.domain.plate import extras as plate_extras
 from app.domain.plate import split as plate_split
 from app.domain.plate import valid_grams as plate_valid
+from app.domain.plate_edit import parse as parse_plate_edit
 from app.domain.plausibility import clamp_density, is_alcoholic
 from app.domain.portion_answer import parse as parse_portion
 from app.domain.question import looks_like_question
@@ -167,6 +169,7 @@ class Assistant:
     async def process(
         self, user: User, text: str, *, input_type: str = "text", day_offset: int = 0,
         photo: bool = False, weight_guessed: bool = False,
+        photo_guessed: list[bool] | None = None, raw_input: str | None = None,
     ) -> Result:
         """`day_offset` — день, на который смотрит человек, когда пишет (0 = сегодня,
         −1 = вчера). Это ДЕФОЛТ: слово «вчера» в самой фразе его перебивает."""
@@ -188,12 +191,15 @@ class Assistant:
         parsed.weight_guessed = weight_guessed
         if photo:
             _names_from_phrase(parsed, text)
+            _photo_guessed(parsed, text, photo_guessed)
             # Карточка фото уже была подтверждением: второй круг «с кожей?», «с маслом?»
             # переспрашивал то, что человек только что отметил, а ответ «с маслом» при
             # отдельной позиции масла считал его дважды (фото 17.09.2026).
             for item in parsed.items:
                 item.clarify_options = None
-        return await self._route(user, parsed, text, input_type=input_type, day_offset=day_offset)
+        return await self._route(
+            user, parsed, raw_input or text, input_type=input_type, day_offset=day_offset
+        )
 
     async def _parse(self, text: str) -> ParsedMessage:
         """Разбор фразы для записи — один на запись и на ответ карточке (FR-44)."""
@@ -308,9 +314,21 @@ class Assistant:
         if reading.kind != "dish" or not reading.components:
             return Unknown(reason="не вижу на снимке еды — сними тарелку сверху, при свете")
         numbers = caption_numbers(caption)
-        total = reading.caption_total_g if said(reading.caption_total_g, numbers) else None
+        # Подпись, целиком равная весу тарелки («340», «тарелка 340 г»), — число человека, и
+        # модель его не перебивает (FR-34.1). Иначе — число модели, если оно рядом с написанным:
+        # тогда берём написанное (25.10.2026: «340» вернулось 341 и ушло «на глаз», FR-34.3).
+        cap = parse_plate_edit(caption) if caption else None
+        if cap and len(cap) == 1 and cap[0].op == "total" and cap[0].grams:
+            total: float | None = cap[0].grams
+        else:
+            total = snap(reading.caption_total_g, numbers)
+        if total is not None and not 10 <= total <= MAX_PLATE_G:  # подпись «2» — не тарелка
+            total = None
         for c in reading.components:
-            c.fixed = bool(c.fixed and said(c.grams, numbers))
+            named = snap(c.grams, numbers) if c.fixed else None
+            c.fixed = named is not None
+            if named is not None:
+                c.grams = named
         grams = plate_split(reading.components, total)
         weighed = total is not None or any(c.fixed for c in reading.components)
         # D-MA-20: масло при готовке и невидимая заправка — строками карточки, без вопроса.
@@ -348,10 +366,17 @@ class Assistant:
         )
 
     @staticmethod
-    def photo_text(reading: PlateReading, grams: list[float | None]) -> str:
+    def photo_text(
+        reading: PlateReading, grams: list[float | None], *, edible: bool = True
+    ) -> str:
         """FR-34: карточка → фраза «имя N г, …». `grams[i]` — граммы i-й
         составляющей, None — человек её убрал. Имена берём из черновика, не от
-        клиента (MA-INV-43). ValueError — граммы вне границ (MA-INV-44)."""
+        клиента (MA-INV-43). ValueError — граммы вне границ (MA-INV-44).
+
+        FR-34.2: позиция с несъедобным уходит в разбор УЖЕ съедобной — «креветки отварные
+        без панциря 205 г»: число считается один раз, тем же `edible_grams`, что на карточке,
+        и модели вычитать нечего. `edible=False` — фраза человека («… в панцире 341 г») для
+        `raw_input`: из неё пояснение INV-7.1."""
         parts = [
             (c.name, float(g))
             for c, g in zip(reading.components, grams, strict=True)
@@ -359,18 +384,27 @@ class Assistant:
         ]
         if not parts or not plate_valid([g for _, g in parts]):
             raise ValueError("bad_plate")
+        if edible:
+            parts = [
+                (edible_name(n), e) if (e := edible_grams(n, g)) is not None else (n, g)
+                for n, g in parts
+            ]
         text = plate_compose(parts)
         if not text:
             raise ValueError("bad_plate")
         return text
 
     async def log_photo(
-        self, user: User, text: str, *, weighed: bool = False, day_offset: int = 0
+        self, user: User, text: str, *, weighed: bool = False, day_offset: int = 0,
+        guessed: list[bool] | None = None, raw: str | None = None,
     ) -> Result:
-        """Фраза из карточки → обычный разбор: каталог, INV-2, INV-7, сэмплы."""
+        """Фраза из карточки → обычный разбор: каталог, INV-2, INV-7, сэмплы.
+
+        `guessed[i]` — вес i-го куска фразы на глаз (FR-34.3: человек не назвал ни тарелку, ни
+        эту позицию). Нет списка — по флагу всей карточки `weighed` (аппка)."""
         return await self.process(
             user, text, input_type="photo", day_offset=day_offset,
-            photo=True, weight_guessed=not weighed,
+            photo=True, weight_guessed=not weighed, photo_guessed=guessed, raw_input=raw,
         )
 
     async def _becomes_new_product(self, parsed: ParsedMessage, known_keys: list[str]) -> bool:
@@ -1201,6 +1235,21 @@ def _names_from_phrase(parsed: ParsedMessage, text: str) -> None:
         if not looks_like_key(item.name) or not free:
             continue
         item.name = free.pop(0) if len(free) == 1 else free.pop(min(idx, len(free) - 1))
+
+
+def _photo_guessed(parsed: ParsedMessage, text: str, guessed: list[bool] | None) -> None:
+    """FR-34.3: «вес на глаз» — по позиции. Позиция разбора находит свой кусок фразы по ИМЕНИ
+    (разбор вправе переставить позиции); не нашла однозначно — «на глаз», если хоть что-то на
+    глаз. Граммы здесь не трогаем: съедобное уже во фразе (FR-34.2)."""
+    names = phrase_names(text)
+    if guessed is None or len(guessed) != len(names):
+        return
+    parsed.weight_guessed = False
+    for item in parsed.items:
+        scores = [max(_coverage(item.name, n), _coverage(n, item.name)) for n in names]
+        best = max(scores, default=0.0)
+        hits = [k for k, sc in enumerate(scores) if sc == best]
+        item.weight_guessed = guessed[hits[0]] if best > 0 and len(hits) == 1 else any(guessed)
 
 
 def _is_blank_item(i: ParsedItem) -> bool:

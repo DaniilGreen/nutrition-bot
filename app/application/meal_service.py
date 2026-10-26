@@ -36,11 +36,12 @@ from app.domain.inedible import explain
 from app.domain.naming import (
     _NAME_THRESHOLD,
     _coverage,
+    _name_matches,
     _names_compatible,
     _norm,
     _qualifiers,
-    _same_word,
-    _tokens,
+    _typo_matches,
+    match_names,
 )
 from app.domain.nutrition import macros_for_grams, reconcile_density, split_macros_from_kcal
 from app.domain.plausibility import (
@@ -105,7 +106,8 @@ class MealService:
     ) -> tuple[list[MealItem], bool]:
         """Позиции разбора → снапшоты записи: каталог (INV-2), граммовка (INV-7), сверки (INV-11,
         INV-14). Общее у записи и у «поправить словами» (§6.27)."""
-        # FR-34: фото без веса — каждая позиция оценка, и это видно в ленте.
+        # FR-34: фото без веса — каждая позиция оценка, и это видно в ленте. Флаг всей записи
+        # или позиции (FR-34.3: «курица 150» без веса тарелки — на глаз только остальное).
         guessed = parsed.weight_guessed
 
         items: list[MealItem] = []
@@ -182,7 +184,8 @@ class MealService:
             # идёт в СНАПШОТ позиции, а не в имя продукта: оно про одну запись, и
             # засорять им каталог нельзя (INV-3).
             note = explain(raw_input, display_name, grams)
-            if guessed:
+            item_guessed = guessed or parsed_item.weight_guessed
+            if item_guessed:
                 note = f"{note} · вес на глаз" if note else "вес на глаз"
             items.append(
                 MealItem(
@@ -191,10 +194,10 @@ class MealService:
                     macros=macros,
                     product_id=product.id,
                     # INV-13: метка «≈» на оценочной позиции; вес на глаз — тоже оценка
-                    is_estimate=product.is_estimate or guessed,
+                    is_estimate=product.is_estimate or item_guessed,
                 )
             )
-            estimated = estimated or guessed
+            estimated = estimated or item_guessed
 
         return items, estimated
 
@@ -1119,11 +1122,7 @@ def _looks_zero_calorie(name: str) -> bool:
 def items_named(items: list[MealItem], name: str) -> list[MealItem]:
     """Позиции, чьё имя совпало с названным (FR-44: «удали гречку» ответом — в одном приёме).
     Строгого совпадения нет — опечатка («гречику»), но только если она указывает на одно имя."""
-    hits = [i for i in items if _name_matches(name, i.name_snapshot)]
-    if hits:
-        return hits
-    typo = [i for i in items if _typo_matches(name, i.name_snapshot)]
-    return typo if len({_norm(i.name_snapshot) for i in typo}) == 1 else []
+    return [items[i] for i in match_names([i.name_snapshot for i in items], name)]
 
 
 def _freshest_named(
@@ -1137,45 +1136,6 @@ def _freshest_named(
         return hit
     typo = [(m, i) for m, i in pairs if _typo_matches(name, i.name_snapshot)]
     return typo[0] if len({_norm(i.name_snapshot) for _, i in typo}) == 1 else None
-
-
-def _name_matches(query: str, candidate: str) -> bool:
-    """Совпадение имени для «удали X» / «гречки было 150»: целыми словами со словоформами (ё=е,
-    `_coverage`) — все слова короткого имени нашлись в длинном. Подстрокой «рис» ⊂ «рисовая
-    лапша» и «ирис» склеивалась разная еда, и правка ответом попадала не в ту позицию (FR-44).
-    """
-    if not _norm(query):
-        return False
-    return _coverage(query, candidate) == 1.0 or _coverage(candidate, query) == 1.0
-
-
-_TYPO_RATIO = 0.8  # «гречика» ≈ «гречка» (0,92); «рис» ≈ «ирис» (0,86) отсекает длина ≥ 4
-_TYPO_MIN_LEN = 4  # короткое слово опечатку не опознать: три буквы — уже другое слово
-_ENDINGS = "аеёиоуыэюяйь"  # гласная/й/ь на конце — падеж, а не опечатка
-
-
-def _stem(word: str) -> str:
-    return word[:-1] if word[-1:] in _ENDINGS else word  # одна буква: «куриная» ≠ «курицу»
-
-
-def _typo_matches(query: str, candidate: str) -> bool:
-    """Второй проход после строгого (FR-14.1): опечатка ЦЕЛОГО слова — каждое слово короткого
-    имени нашло в длинном словоформу (`_same_word`) или слово с отличием в букву-две (difflib
-    ≥ 0,8, оба ≥ 4 букв). Не подстрока: «рис» не попадает ни в «рисовую лапшу», ни в «ирис»."""
-    def close(a: str, b: str) -> bool:
-        if _same_word(a, b):
-            return True
-        if min(len(a), len(b)) < _TYPO_MIN_LEN:
-            return False
-        # Без окончания: «гречику» — опечатка И падеж, по целому слову 0,77, по основе 0,91.
-        return any(difflib.SequenceMatcher(None, x, y).ratio() >= _TYPO_RATIO
-                   for x, y in ((a, b), (_stem(a), _stem(b))))
-
-    def covered(xs: tuple[str, ...], ys: tuple[str, ...]) -> bool:
-        return bool(xs) and all(any(close(x, y) for y in ys) for x in xs)
-
-    q, c = _tokens(query), _tokens(candidate)
-    return covered(q, c) or covered(c, q)
 
 
 def order_options_by_history(options: list[str], recent_names: list[str]) -> list[str]:

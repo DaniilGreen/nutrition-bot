@@ -21,6 +21,7 @@ from app.application.entities import Meal, MealItem, Product
 from app.application.results import MealSession
 from app.assets import asset_version
 from app.config import get_settings
+from app.domain.inedible import edible_ratio, peeled_name
 from app.domain.plausibility import MAX_PORTION_G, MIN_PORTION_G
 
 PORTION_CALLBACK_PREFIX = "portion"
@@ -40,7 +41,7 @@ PROD_RENAME_PREFIX = "prod_rename"  # переименовать продукт 
 DISH_SAVE_PREFIX = "dish_save"  # запомнить запись как блюдо своей сборки (FR-39)
 DISH_SESSION = "s"  # хвост `dish_save:<id>:s` — набором весь приём пищи записи (FR-47)
 ONBOARD_PREFIX = "onb"
-PHOTO_PREFIX = "ph"  # карточка фото блюда: ph:fat:<id> / ph:dr:<id> / ph:ok (FR-34)
+PHOTO_PREFIX = "ph"  # карточка фото: ph:off:<i> / ph:peel:<i> / ph:pick:<i|x> / ph:ok (FR-34)
 SCAN_PREFIX = "scan"  # карточка бланка InBody: scan:save / scan:confirm / scan:apply (FR-36)
 WIZ_CANCEL = "wiz_cancel"  # «✖️ Отмена» в любом визарде (профиль/вариант) — сброс FSM
 RESTORE_PREFIX = "rst"  # «⏪ Вернуть» после удаления: rst:<токен>:<c|p|d<ГГГГММДД>> (FR-41)
@@ -590,17 +591,56 @@ def _distinct(options: Sequence[str]) -> list[str]:
     return [" ".join(w[common:]) for w in words]
 
 
-def photo_keyboard(components: Sequence[object], off: Sequence[int]) -> InlineKeyboardMarkup:
+def photo_keyboard(
+    components: Sequence[object], off: Sequence[int], peeled: Sequence[int] = (),
+) -> InlineKeyboardMarkup:
     """FR-34, D-MA-20: на каждую позицию «✖ убрать» (убранная — «↩ вернуть»), затем
-    «Записать»/«Отмена». Вопросов про масло нет: его оценивает модель, оно — строкой в списке."""
+    «Записать»/«Отмена». Вопросов про масло нет: его оценивает модель, оно — строкой в списке.
+
+    FR-34.2: позиции с несъедобным («в панцире») — «Без вычета — уже чищено»; нажата —
+    «↩ Вычитать несъедобное». Имена в кнопках — как на карточке (чищеное — без панциря)."""
     builder = InlineKeyboardBuilder()
-    for i, c in enumerate(components):
+    names = [getattr(c, "name", "") for c in components]
+    for i, name in enumerate(names):
         mark = "↩ " if i in off else "✖ "
-        builder.button(text=mark + _short(getattr(c, "name", "")),
-                       callback_data=f"{PHOTO_PREFIX}:off:{i}")
+        shown = peeled_name(name) if i in peeled else name
+        builder.button(text=mark + _short(shown), callback_data=f"{PHOTO_PREFIX}:off:{i}")
+    peel = [i for i, n in enumerate(names) if i not in off and edible_ratio(n) is not None]
+    for i in peel:
+        if len(peel) == 1:
+            text = "↩ Вычитать несъедобное" if i in peeled else "Без вычета — уже чищено"
+        else:
+            short = _short(names[i], 18)
+            text = f"↩ Вычет: {short}" if i in peeled else f"Без вычета: {short}"
+        builder.button(text=text, callback_data=f"{PHOTO_PREFIX}:peel:{i}")
     builder.button(text="✅ Записать", callback_data=f"{PHOTO_PREFIX}:ok")
     builder.button(text="✖️ Отмена", callback_data=WIZ_CANCEL)
-    builder.adjust(*([2] * ((len(components) + 1) // 2)), 2)
+    builder.adjust(*([2] * ((len(components) + 1) // 2)), *([1] * len(peel)), 2)
+    return builder.as_markup()
+
+
+def photo_weight_keyboard(grams: float) -> InlineKeyboardMarkup:
+    """FR-34.1: «вес 72,4» при открытой карточке — тарелка или вес тела?"""
+    n = f"{grams:g}".replace(".", ",")
+    builder = InlineKeyboardBuilder()
+    builder.button(text=f"🍽 Тарелка {n} г", callback_data=f"{PHOTO_PREFIX}:wq:plate")
+    builder.button(text=f"⚖️ Мой вес {n} кг", callback_data=f"{PHOTO_PREFIX}:wq:body")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def photo_pick_keyboard(
+    names: Sequence[str], cands: Sequence[int], *, separate: bool = False
+) -> InlineKeyboardMarkup:
+    """FR-34.1: «Чей вес «150 г»?» — позиции и «✖️ Отмена»; имя не нашлось на карточке —
+    ещё «➕ Записать отдельно» (обычный путь, карточка остаётся)."""
+    builder = InlineKeyboardBuilder()
+    for i in cands:
+        builder.button(text=_short(names[i], 30), callback_data=f"{PHOTO_PREFIX}:pick:{i}")
+    if separate:
+        builder.button(text="➕ Записать отдельно", callback_data=f"{PHOTO_PREFIX}:pick:new")
+    builder.button(text="✖️ Отмена", callback_data=f"{PHOTO_PREFIX}:pick:x")
+    builder.adjust(1)
     return builder.as_markup()
 
 

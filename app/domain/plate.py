@@ -68,6 +68,18 @@ def said(value: float | None, numbers: set[float]) -> bool:
     return value is not None and any(abs(value - n) < 0.5 for n in numbers)
 
 
+def snap(value: float | None, numbers: set[float]) -> float | None:
+    """Число от модели → число, которое написал человек, если они рядом (≤ 2 г или ≤ 1%).
+
+    25.10.2026: подпись «340», модель вернула 341 — сверка `said` с допуском 0,5 г его
+    отбросила, и взвешенные креветки записались «на глаз» (FR-34.3). Близкое к написанному —
+    это написанное, и в карточку идёт ровно оно, а не цифра модели."""
+    if value is None:
+        return None
+    near = [n for n in numbers if abs(value - n) <= max(2.0, 0.01 * n)]
+    return min(near, key=lambda n: abs(value - n)) if near else None
+
+
 def split(components: list[Component], total_g: float | None) -> list[float]:
     """Граммы каждой позиции.
 
@@ -169,6 +181,9 @@ def demo() -> None:
     assert caption_numbers("тарелка 420 г, курица 150,5") == {420.0, 150.5}
     assert caption_numbers("") == set()
     assert said(150.0000001, {150.0}) and not said(151, {150.0}) and not said(None, {1.0})
+    assert snap(341, {340.0}) == 340 and snap(150.0000001, {150.0}) == 150
+    assert snap(345, {340.0}) is None and snap(None, {340.0}) is None
+    assert snap(1009, {1000.0}) == 1000 and snap(1011, {1000.0}) is None
 
     assert valid_grams([100, 200])
     assert not valid_grams([])

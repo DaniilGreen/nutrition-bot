@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import difflib
 import re
 from functools import lru_cache
 
@@ -130,6 +131,56 @@ def phrase_names(text: str) -> list[str]:
         if name:
             out.append(name)
     return out
+
+
+def _name_matches(query: str, candidate: str) -> bool:
+    """Совпадение имени для «удали X» / «гречки было 150»: целыми словами со словоформами (ё=е,
+    `_coverage`) — все слова короткого имени нашлись в длинном. Подстрокой «рис» ⊂ «рисовая
+    лапша» и «ирис» склеивалась разная еда, и правка ответом попадала не в ту позицию (FR-44).
+    """
+    if not _norm(query):
+        return False
+    return _coverage(query, candidate) == 1.0 or _coverage(candidate, query) == 1.0
+
+
+_TYPO_RATIO = 0.8  # «гречика» ≈ «гречка» (0,92); «рис» ≈ «ирис» (0,86) отсекает длина ≥ 4
+_TYPO_MIN_LEN = 4  # короткое слово опечатку не опознать: три буквы — уже другое слово
+_ENDINGS = "аеёиоуыэюяйь"  # гласная/й/ь на конце — падеж, а не опечатка
+
+
+def _stem(word: str) -> str:
+    return word[:-1] if word[-1:] in _ENDINGS else word  # одна буква: «куриная» ≠ «курицу»
+
+
+def _typo_matches(query: str, candidate: str) -> bool:
+    """Второй проход после строгого (FR-14.1): опечатка ЦЕЛОГО слова — каждое слово короткого
+    имени нашло в длинном словоформу (`_same_word`) или слово с отличием в букву-две (difflib
+    ≥ 0,8, оба ≥ 4 букв). Не подстрока: «рис» не попадает ни в «рисовую лапшу», ни в «ирис»."""
+    def close(a: str, b: str) -> bool:
+        if _same_word(a, b):
+            return True
+        if min(len(a), len(b)) < _TYPO_MIN_LEN:
+            return False
+        # Без окончания: «гречику» — опечатка И падеж, по целому слову 0,77, по основе 0,91.
+        return any(difflib.SequenceMatcher(None, x, y).ratio() >= _TYPO_RATIO
+                   for x, y in ((a, b), (_stem(a), _stem(b))))
+
+    def covered(xs: tuple[str, ...], ys: tuple[str, ...]) -> bool:
+        return bool(xs) and all(any(close(x, y) for y in ys) for x in xs)
+
+    q, c = _tokens(query), _tokens(candidate)
+    return covered(q, c) or covered(c, q)
+
+
+def match_names(names: list[str], query: str) -> list[int]:
+    """Индексы имён, совпавших с названным: строго (`_name_matches`), а нет строгих — опечатка
+    целого слова, если она указывает на одно имя. Общее у ответа на карточку приёма (FR-44)
+    и правки карточки фото (FR-34.1)."""
+    hits = [i for i, n in enumerate(names) if _name_matches(query, n)]
+    if hits:
+        return hits
+    typo = [i for i, n in enumerate(names) if _typo_matches(query, n)]
+    return typo if len({_norm(names[i]) for i in typo}) == 1 else []
 
 
 def demo() -> None:
