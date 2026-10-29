@@ -26,6 +26,8 @@ PRICES: dict[str, tuple[float, float]] = {
     "claude-opus-5-5": (4.00, 20.00),
     "claude-sonnet-5-5": (2.00, 10.00),
     "claude-haiku-5-5": (0.10, 0.50),
+    # Быстрый режим (D-42): 2× обычного на всё — вход, выход, кэш; длинный ключ найдёт префикс.
+    "claude-opus-5-5:fast": (8.00, 40.00),
 }
 
 # Неизвестная модель: считаем дороже, а не дешевле. И вход, и выход — выше любого известного:
@@ -45,6 +47,7 @@ CACHED_PRICES: dict[str, float] = {
     "claude-opus-5-5": 0.20,
     "claude-sonnet-5-5": 0.20,
     "claude-haiku-5-5": 0.01,
+    "claude-opus-5-5:fast": 0.40,
 }
 
 # $/1M токенов, ЗАПИСАННЫХ в часовой кэш. У OpenAI записи нет (кэш бесплатный и сам), у Claude
@@ -55,6 +58,7 @@ CACHE_WRITE_PRICES: dict[str, float] = {
     "claude-opus-5-5": 8.00,
     "claude-sonnet-5-5": 4.00,
     "claude-haiku-5-5": 0.20,
+    "claude-opus-5-5:fast": 16.00,
 }
 
 

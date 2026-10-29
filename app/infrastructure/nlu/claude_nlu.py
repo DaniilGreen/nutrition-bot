@@ -20,6 +20,7 @@ from typing import Any
 
 from app.application.dto import Intent, ParsedMessage
 from app.infrastructure.claude_compat import (
+    billed_model,
     cached_text,
     meter_fields,
     read_json,
@@ -47,12 +48,13 @@ class ClaudeNlu(OpenAiNlu):
         *,
         effort: str = "low",
         thinking_off: bool = False,
+        fast: bool = False,
     ) -> None:
         super().__init__(client, model, sample_k=sample_k, meter=meter, timeout=timeout)
         # Параметры семейства — один раз: effort и рассуждения не меняются между вызовами,
         # а их смена сбросила бы кэш сообщений.
         self._params = request_params(
-            model, effort, thinking_off=thinking_off, schema=NluResult
+            model, effort, thinking_off=thinking_off, schema=NluResult, fast=fast
         )
 
     async def _parse_once(
@@ -85,6 +87,8 @@ class ClaudeNlu(OpenAiNlu):
         if self._meter is None:
             return
         try:
-            await self._meter.note(model=self._model, **meter_fields(completion.usage))
+            await self._meter.note(
+                model=billed_model(self._model, completion.usage), **meter_fields(completion.usage)
+            )
         except Exception:  # noqa: BLE001 — недосчитать цент дешевле, чем потерять запись
             log.warning("не удалось записать расход разбора", exc_info=True)

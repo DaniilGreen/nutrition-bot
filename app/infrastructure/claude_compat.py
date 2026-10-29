@@ -48,6 +48,11 @@ _THINKING_OFF: dict[str, dict[str, str]] = {
 }
 # Выше high выключенные рассуждения — 400 у обоих семейств.
 _OFF_EFFORTS = ("low", "medium", "high")
+# Быстрый режим (D-42): тот же ответ ~2× быстрее за 2× цены, только Opus и только Claude API.
+# Бета — заголовком и полем тела: так он идёт тем же `messages.create`/`stream`, что и всё прочее.
+# ponytail: список по префиксу, как `_THINKING_OFF`; новое семейство с fast — дописать сюда.
+_FAST = ("claude-opus-5-5", "claude-opus-5", "claude-opus-4-8")
+FAST_BETA = "fast-mode-2026-02-01"
 # ponytail: `effort` шлём всегда — он есть у всех кандидатов (5.5) и у семейств с 4.6. Модели
 # старше (Haiku 4.5, Claude 3) на нём дадут 400 — их в маршруты не ставим.
 
@@ -59,12 +64,13 @@ def _by_prefix(table: dict[str, Any], model: str) -> Any:
 
 def request_params(
     model: str, effort: str, *, thinking_off: bool = False,
-    schema: type[BaseModel] | None = None,
+    schema: type[BaseModel] | None = None, fast: bool = False,
 ) -> dict[str, Any]:
-    """Поля запроса, зависящие от семейства: effort, схема ответа, рассуждения.
+    """Поля запроса, зависящие от семейства: effort, схема ответа, рассуждения, скорость.
 
     `thinking_off` — просьба, а не приказ: где семейство не позволяет (Opus 5.5, effort выше
-    high), рассуждения остаются адаптивными, а глубину держит effort.
+    high), рассуждения остаются адаптивными, а глубину держит effort. `fast` — так же: у
+    модели без быстрого режима (Sonnet, Haiku) запрос обычный.
     """
     if effort not in EFFORTS:
         raise ValueError(f"effort={effort!r}, ждём одно из {EFFORTS}")
@@ -75,7 +81,16 @@ def request_params(
     off = _by_prefix(_THINKING_OFF, model) if thinking_off and effort in _OFF_EFFORTS else None
     if off is not None:
         params["thinking"] = dict(off)
+    if fast and any(model.startswith(k) for k in _FAST):
+        params["extra_headers"] = {"anthropic-beta": FAST_BETA}
+        params["extra_body"] = {"speed": "fast"}
     return params
+
+
+def billed_model(model: str, usage: object) -> str:
+    """Под каким тарифом считать вызов: быстрый режим — 2× цены (`<модель>:fast` в spend).
+    Режим берём из ответа (`usage.speed`), а не из настройки: считаем то, что выставят в счёт."""
+    return f"{model}:fast" if getattr(usage, "speed", None) == "fast" else model
 
 
 @cache

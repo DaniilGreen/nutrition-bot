@@ -24,12 +24,13 @@ from tests.fakes import (
 
 def eval_settings(
     provider: str, *, nlu_model: str = "", vision_model: str = "", effort: str = "",
-    thinking_off: bool = False,
+    thinking_off: bool = False, fast: bool = False,
 ) -> Settings:
     """Настройки прогона поверх прод-настроек. Модель чужого провайдера — ошибка сразу,
     до первого платного вызова (та же проверка, что на старте прода)."""
     update: dict = {
         "llm_provider": provider, "use_fake_nlu": False, "claude_thinking_off": thinking_off,
+        "claude_fast": fast,
         # sample_k=1: eval мерит ТОЧНОСТЬ (within/MAPE), а не abstention — один вызов на позицию.
         # Сэмплинг/воздержание (D-15) проверяется юнит/e2e-тестами; k>1 в eval лишь множит
         # траты и уводит метрики от замороженного k=1-baseline. Прод — на settings.sample_k.

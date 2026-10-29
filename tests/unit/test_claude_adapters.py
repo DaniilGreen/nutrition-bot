@@ -235,6 +235,27 @@ async def test_расход_с_кэшем_по_трём_ценам():
     assert usd == pytest.approx((1000 * 4 + 9000 * 0.20 + 2000 * 8 + 300 * 20) / 1e6)
 
 
+async def test_быстрый_режим_только_у_opus_и_по_двойному_тарифу():
+    """AC-268: CLAUDE_FAST у Opus — `speed: fast` с бетой; у Sonnet запрос обычный. Тариф —
+    по `usage.speed` из ответа: вернулся обычный режим — обычная цена."""
+    opus = claude_compat.request_params("claude-opus-5-5", "low", fast=True)
+    assert opus["extra_body"] == {"speed": "fast"}
+    assert opus["extra_headers"] == {"anthropic-beta": claude_compat.FAST_BETA}
+    assert not {"extra_body", "extra_headers"} & set(
+        claude_compat.request_params("claude-sonnet-5-5", "low", fast=True))
+    assert "extra_body" not in claude_compat.request_params("claude-opus-5-5", "low")
+
+    meter = Meter()
+    fast_usage = SimpleNamespace(**vars(_usage(fresh=1000, out=300)), speed="fast")
+    client = Client(_msg(_meal_json(), usage=fast_usage))
+    await ClaudeNlu(client, "claude-opus-5-5", sample_k=1, meter=meter, fast=True).parse("x", [])
+    assert client.requests[0]["extra_body"] == {"speed": "fast"}
+    note = meter.notes[0]
+    assert note["model"] == "claude-opus-5-5:fast"
+    assert Usage(note["model"], 1000, 300).cost_usd == pytest.approx((1000 * 8 + 300 * 40) / 1e6)
+    assert claude_compat.billed_model("claude-opus-5-5", _usage()) == "claude-opus-5-5"
+
+
 def test_только_input_tokens_занизил_бы_счёт():
     f = claude_compat.meter_fields(_usage(1000, 9000, 2000, 300))
     assert (f["input_tokens"], f["cached_tokens"], f["cache_write_tokens"]) == (12000, 9000, 2000)

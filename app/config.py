@@ -68,6 +68,8 @@ class Settings(BaseSettings):
     # Выключить рассуждения на разборе и фото там, где семейство позволяет (Sonnet/Haiku 5.5).
     # По умолчанию нет: Anthropic советует сначала low с рассуждениями; флаг — для сравнения в eval.
     claude_thinking_off: bool = False
+    # Быстрый режим Opus (D-42) на маршрутах, чья модель его умеет; у Sonnet/Haiku не действует.
+    claude_fast: bool = False
 
     default_timezone: str = "Europe/Moscow"
     default_goal_kcal: float = 2000

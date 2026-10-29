@@ -116,6 +116,7 @@ def _args() -> argparse.Namespace:
     ap.add_argument("--effort", default="", help="Claude: low|medium|high|xhigh|max")
     ap.add_argument("--thinking-off", action="store_true",
                     help="Claude: выключить рассуждения, где семейство позволяет")
+    ap.add_argument("--fast", action="store_true", help="Claude: быстрый режим Opus (D-42)")
     ap.add_argument("--max-usd", type=float, default=2.0,
                     help="жёсткий потолок трат на ВСЕ прогоны вместе (по прод-ценам)")
     ap.add_argument("--baseline", type=Path, default=BASELINE)
@@ -130,7 +131,7 @@ def main() -> int:
     args = _args()
     settings = eval_settings(
         args.provider or get_settings().llm_provider, nlu_model=args.model,
-        effort=args.effort, thinking_off=args.thinking_off,
+        effort=args.effort, thinking_off=args.thinking_off, fast=args.fast,
     )
     per_run, spent = [], 0.0
     for _ in range(args.runs):

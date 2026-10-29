@@ -73,6 +73,7 @@ def build_nlu(settings: Settings, meter: object | None = None) -> NluPort:
         return ClaudeNlu(
             client, settings.model_for("nlu"), sample_k=settings.sample_k, meter=meter,
             effort=settings.nlu_effort, thinking_off=settings.claude_thinking_off,
+            fast=settings.claude_fast,
         )
 
     if settings.llm_provider == "openai":
@@ -126,6 +127,7 @@ def build_vision(settings: Settings, meter: object | None = None) -> VisionPort 
         return ClaudeVision(
             client, settings.model_for("vision"), meter,
             effort=settings.vision_effort, thinking_off=settings.claude_thinking_off,
+            fast=settings.claude_fast,
         )
     if not settings.openai_api_key:
         return None
@@ -153,7 +155,8 @@ def build_coach_port(settings: Settings, meter: object | None = None) -> CoachPo
         from app.infrastructure.nlu.claude_coach import ClaudeCoach
 
         return ClaudeCoach(
-            client, settings.model_for("coach"), meter, effort=settings.coach_effort
+            client, settings.model_for("coach"), meter, effort=settings.coach_effort,
+            fast=settings.claude_fast,
         )
     if not settings.openai_api_key:
         return None

@@ -27,6 +27,7 @@ from app.domain.spend import Usage
 from app.infrastructure.claude_compat import (
     CACHE_5M,
     answer_text,
+    billed_model,
     cached_text,
     meter_fields,
     request_params,
@@ -78,13 +79,14 @@ TOOLS_STREAM = _claude_tools(eager=True)
 class ClaudeCoach:
     def __init__(
         self, client: Any, model: str, meter: object | None = None, *, effort: str = "medium",
+        fast: bool = False,
     ) -> None:
         self._client = client
         self._model = model
         self._meter = meter
         # Рассуждения адаптивные: ассистент планирует вызовы инструментов, а у Opus 5.5 их и не
         # выключить — глубину держит effort.
-        self._params = request_params(model, effort)
+        self._params = request_params(model, effort, fast=fast)
 
     def _request(
         self, messages: list[dict[str, Any]], data: CoachData | None, last: bool, *, stream: bool,
@@ -111,7 +113,7 @@ class ClaudeCoach:
         fields = meter_fields(usage)
         if self._meter is not None:
             try:
-                await self._meter.note(model=self._model, **fields)
+                await self._meter.note(model=billed_model(self._model, usage), **fields)
             except Exception:  # noqa: BLE001
                 log.warning("не удалось записать расход ассистента", exc_info=True)
         return Counter(fields)
