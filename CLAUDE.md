@@ -61,8 +61,10 @@ bot (aiogram) / web (FastAPI)  →  application (use-cases + Protocol-порты
 мак закрыт → бот мёртв, вечерний итог не уходит). Мак — только dev.
 
 **Деплой = пуш в `main`.** GitHub Actions (`.github/workflows/deploy.yml`) сперва гоняет **тесты**
-(job `test` — гейт, красное = деплоя нет), затем идёт по ssh на сервер, делает
-`git reset --hard origin/main`, поднимает compose и проверяет, что бот вышел на polling.
+(job `test` — гейт, красное = деплоя нет), затем идёт по ssh под пользователем `deploy`:
+CI-ключ привязан к forced command `scripts/deploy.sh` (ставится один раз
+`scripts/setup-deploy-user.sh`), он делает `git reset --hard origin/main`, поднимает compose,
+а `verify` проверяет, что бот вышел на polling.
 Ручной прогон без коммита — кнопка **Run workflow** (`workflow_dispatch`). Красный прогон =
 НЕ задеплоено; причина — `gh run view --repo DaniilGreen/nutrition-bot --log-failed`.
 

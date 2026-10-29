@@ -84,11 +84,15 @@ passwords or sessions to manage.
   service container in CI.
 - GitHub Actions gates every deploy on the tests plus a front-end check (syntax and undeclared
   identifiers in the Mini App). Push to `main` deploys.
-- Deploy goes over SSH: `git reset --hard origin/main` and `docker compose up -d --build` on the
-  VPS, then the job waits for the bot to reach polling and probes the Mini App from outside:
-  TLS, `/health`, and a 401 on unsigned API calls.
+- Deploy goes over SSH as an unprivileged `deploy` user. Its key is pinned to a forced command
+  (`scripts/deploy.sh`, which only knows `deploy` and `verify`), and the host key is pinned in a
+  secret. After `docker compose up -d --build` the job waits for the bot to reach polling and
+  probes the Mini App from outside: TLS, `/health`, and a 401 on unsigned API calls.
 - On the server: nightly database backups kept for 14 days, a healthcheck every 10 minutes
   with Telegram alerts, and build-cache limits, because two bots share a 10 GB disk.
+
+One-time server setup: `sudo bash scripts/setup-deploy-user.sh "<CI public key>"`.
+Repository secrets: `SSH_PRIVATE_KEY`, `SSH_HOST`, `SSH_KNOWN_HOSTS`.
 
 ## Run locally
 

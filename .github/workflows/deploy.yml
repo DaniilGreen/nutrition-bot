@@ -67,45 +67,28 @@ jobs:
     if: github.event_name != 'pull_request'   # PR только проверяем, катит только main
     runs-on: ubuntu-latest
     steps:
+      # Не root: на сервере пользователь `deploy`, а CI-ключ привязан к forced command
+      # scripts/deploy.sh (scripts/setup-deploy-user.sh) — отсюда можно попросить только
+      # `deploy` или `verify`, shell этот ключ не даёт.
       - name: ssh deploy
         env:
           SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
+          # Ключ хоста закреплён в секрете: ssh-keyscan на каждом прогоне поверил бы
+          # любому, кто окажется по этому адресу.
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          ssh -o BatchMode=yes root@"$SSH_HOST" 'bash -s' <<'REMOTE'
-          set -euo pipefail
-          cd /opt/burnfat
-          git fetch --quiet origin main
-          git reset --hard --quiet origin/main   # деплой = точная копия main
-          docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
-          docker image prune -f >/dev/null       # 10 ГБ диска: старые слои иначе забьют его
-          # Кэш сборки `image prune` не трогает, а он растёт ~120 МБ за деплой:
-          # шесть деплоев за 05.09.2026 дали 739 МБ и загнали диск в 96%.
-          # Не чистим догола — на нём держится тридцатисекундный деплой; держим потолок.
-          docker builder prune -f --keep-storage=512MB >/dev/null 2>&1 || true
-          REMOTE
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -o BatchMode=yes deploy@"$SSH_HOST" deploy
 
       - name: verify
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
-        run: |
-          set -euo pipefail
-          # Ждём выхода бота на polling до 90 с, а не ровно 20: 21.10.2026 бот поднялся за 43 с
-          # (миграции + пересоздание контейнеров), и проверка покраснела на живом деплое.
-          ssh -o BatchMode=yes root@"$SSH_HOST" '
-            cd /opt/burnfat
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
-            for i in $(seq 1 18); do
-              docker compose logs --since 3m bot | grep -q "Run polling" && exit 0
-              sleep 5
-            done
-            echo "бот не вышел на polling за 90 с"; exit 1
-          '
+        run: ssh -o BatchMode=yes deploy@"$SSH_HOST" verify
 
       - name: verify miniapp
         env:
