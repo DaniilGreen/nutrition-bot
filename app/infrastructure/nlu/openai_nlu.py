@@ -15,10 +15,10 @@ from openai import AsyncOpenAI
 from app.application.dto import Intent, ParsedItem, ParsedMessage, Unit
 from app.domain.clarify import worth_asking_variant
 from app.domain.consensus import SAMPLE_TEMPERATURE
+from app.infrastructure.llm_errors import provider_down
 from app.infrastructure.nlu.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.infrastructure.nlu.schema import NluResult
 from app.infrastructure.openai_compat import (
-    out_of_credits,
     request_extras,
     temperature_for,
     token_counts,
@@ -64,8 +64,10 @@ class OpenAiNlu:
             try:
                 return await self._parse_once(text, known_keys, temperature)
             except Exception as exc:  # noqa: BLE001 — таймаут/сеть/429 ретраим одинаково
-                if out_of_credits(exc):
-                    raise  # пустой баланс — повтор не поможет (NFR-4)
+                if provider_down(exc):
+                    # пустой баланс или неверный ключ/модель — повтор не поможет (NFR-4,
+                    # NFR-6); проверка общая на оба провайдера: цикл наследует ClaudeNlu (D-41)
+                    raise
                 last = exc
                 log.warning("разбор не удался, попытка %d из %d: %s",
                             attempt + 1, 1 + RETRIES, exc)

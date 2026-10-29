@@ -31,7 +31,7 @@ def _container():
 
 
 async def test_владельцу_одно_сообщение_и_только_ему(monkeypatch):
-    monkeypatch.setattr(handlers, "_no_credits_alerted_at", None)
+    monkeypatch.setattr(handlers, "_no_credits_alerted_at", {})
     bot, c = _Bot(), _container()
     await handlers._alert_owner_no_credits(bot, c)
     await handlers._alert_owner_no_credits(bot, c)

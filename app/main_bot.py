@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import suppress
 
 from aiogram import Bot, Dispatcher
@@ -14,7 +15,7 @@ from app.bot.menu import setup_bot_commands, setup_miniapp_button
 from app.bot.middlewares import ServicesMiddleware
 from app.bot.reminders import run_reminder_loop
 from app.config import get_settings
-from app.container import Container
+from app.container import Container, check_provider
 from app.infrastructure.products.seed import seed_curated
 from app.logging import setup_logging
 
@@ -26,6 +27,15 @@ async def main() -> None:
         raise RuntimeError("BOT_TOKEN не задан")
 
     container = Container.create(settings)
+    try:
+        await check_provider(settings)
+    except Exception:
+        # AC-264: без polling деплой краснеет — чинить ключ/модель, а не ловить «недоступна».
+        logging.getLogger(__name__).exception(
+            "провайдер модели не принял ключ или модель — бот не стартует"
+        )
+        await container.db.dispose()
+        raise SystemExit(1) from None
     bot = Bot(
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),

@@ -233,3 +233,90 @@ def flaky_rows(run_metrics: list[dict]) -> list[str]:
         for r in m.get("rows", []):
             by_id.setdefault(r["id"], set()).add(r["within"])
     return sorted(i for i, verdicts in by_id.items() if len(verdicts) > 1)
+
+
+# --- деньги и время прогона (NFR-6: сравнение провайдеров) ---------------------------------
+
+
+class BudgetExceeded(BaseException):
+    """Потолок трат прогона достигнут. BaseException, а не Exception: цикл повторов разбора
+    ретраит любое Exception — потолок он ретраить не должен, иначе «жёсткий» потолок
+    превратится в три лишних вызова."""
+
+
+class EvalMeter:
+    """Счётчик трат прогона по прод-ценам (`app.domain.spend`) с жёстким потолком.
+
+    Тот же интерфейс `note`, что у `SpendMeter`, — адаптеры не знают, что они в eval. Потолок
+    проверяется ДО вызова (`check`): начатый вызов доплачивается, новый не начинается."""
+
+    def __init__(self, max_usd: float) -> None:
+        import logging
+        from collections import Counter
+
+        self.max_usd = max_usd
+        self.spent_usd = 0.0
+        self.calls = 0
+        self.latencies: list[float] = []
+        # Отказы (с категорией) и обрезки Claude адаптер превращает в «не понял» — для метрик
+        # точности это верно, но сравнивать модели надо и по ним отдельно. Ловим по метке в
+        # записи лога `claude_compat.stopped_early`, прод-код ради eval не меняется.
+        self.stopped_early: Counter[str] = Counter()
+        meter = self
+
+        class _Stops(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                tag = getattr(record, "stop_early", None)
+                if tag:
+                    meter.stopped_early[tag] += 1
+
+        self._handler = _Stops()
+        logging.getLogger("app.infrastructure.claude_compat").addHandler(self._handler)
+
+    async def note(
+        self, *, model: str, input_tokens: int, output_tokens: int, cached_tokens: int = 0,
+        cache_write_tokens: int = 0, cache_write_5m_tokens: int = 0,
+    ) -> None:
+        from app.domain.spend import Usage
+
+        self.calls += 1
+        self.spent_usd += Usage(
+            model, input_tokens, output_tokens, cached_tokens, cache_write_tokens,
+            cache_write_5m_tokens,
+        ).cost_usd
+
+    def check(self) -> None:
+        if self.spent_usd >= self.max_usd:
+            raise BudgetExceeded(f"потрачено ${self.spent_usd:.2f} ≥ потолка ${self.max_usd:.2f}")
+
+    def timed(self, obj: object, method: str) -> None:
+        """Обернуть один вызов модели адаптера: потолок до, задержка после.
+
+        Имена общие у провайдеров (`_parse_once` разбора, `_parse` фото) — адаптеры Claude
+        наследуют транспортный метод OpenAI и подменяют только его (D-41)."""
+        import time
+
+        orig = getattr(obj, method)
+
+        async def wrapper(*args, **kwargs):
+            self.check()
+            t0 = time.perf_counter()
+            try:
+                return await orig(*args, **kwargs)
+            finally:
+                self.latencies.append(time.perf_counter() - t0)
+
+        setattr(obj, method, wrapper)
+
+    def summary(self, records: int) -> dict:
+        import logging
+
+        logging.getLogger("app.infrastructure.claude_compat").removeHandler(self._handler)
+        lat = sorted(self.latencies)
+        return {
+            "stopped_early": dict(self.stopped_early),   # refusal:<категория> | max_tokens
+            "usd_total": round(self.spent_usd, 4),
+            "usd_per_record": round(self.spent_usd / records, 5) if records else None,
+            "calls": self.calls,
+            "latency_s": {"n": len(lat), "p50": _pct(lat, 0.5), "p90": _pct(lat, 0.9)},
+        }

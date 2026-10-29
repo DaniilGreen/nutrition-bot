@@ -21,11 +21,17 @@ PRICES: dict[str, tuple[float, float]] = {
     "gpt-4.1": (2.00, 8.00),
     "gpt-4.1-mini": (0.40, 1.60),
     "whisper-1": (0.006, 0.0),  # за минуту, не за токен — считается отдельно
+    # Claude (D-41), skill claude-api на 29.10.2026. Haiku 5.5 — тариф промпта до 100K токенов;
+    # ponytail: второй ($0.50/$2.50) не учтён, наш промпт ~15K. Длиннее — завести порог тут.
+    "claude-opus-5-5": (4.00, 20.00),
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "claude-haiku-5-5": (0.10, 0.50),
 }
 
-# Неизвестная модель: считаем дороже, а не дешевле. Выход — выше любого известного: у
-# gpt-5.x он $10, и прежние $8 занижали бы как раз главную статью.
-DEFAULT_PRICE = (2.00, 15.00)
+# Неизвестная модель: считаем дороже, а не дешевле. И вход, и выход — выше любого известного:
+# у gpt-5.x выход $10, у Claude Opus 5.5 — $20 и вход $4; прежние (2, 15) занижали бы как раз
+# соседнюю по имени модель (`claude-opus-5` без цены в словаре).
+DEFAULT_PRICE = (5.00, 25.00)
 
 # $/1M токенов входа, прочитанных из кэша промпта. У OpenAI кэш включается сам
 # на префиксе от 1024 токенов, и у разбора он срабатывает почти всегда: промпт
@@ -36,6 +42,19 @@ CACHED_PRICES: dict[str, float] = {
     "gpt-5.4-mini": 0.075,
     "gpt-4.1": 0.50,
     "gpt-4.1-mini": 0.10,
+    "claude-opus-5-5": 0.20,
+    "claude-sonnet-5-5": 0.20,
+    "claude-haiku-5-5": 0.01,
+}
+
+# $/1M токенов, ЗАПИСАННЫХ в часовой кэш. У OpenAI записи нет (кэш бесплатный и сам), у Claude
+# она платная: часовой TTL — 2× входа. Модели нет в словаре — 2× её входа: ошибаться в дорогую
+# сторону. Пятиминутная запись — 1.25× входа у любой модели Claude (разбор и фото пишут часовой,
+# ассистент — пятиминутный, D-41).
+CACHE_WRITE_PRICES: dict[str, float] = {
+    "claude-opus-5-5": 8.00,
+    "claude-sonnet-5-5": 4.00,
+    "claude-haiku-5-5": 0.20,
 }
 
 
@@ -55,14 +74,21 @@ class Usage:
     input_tokens: int
     output_tokens: int
     cached_tokens: int = 0  # часть input_tokens, прочитанная из кэша промпта
+    cache_write_tokens: int = 0  # часть input_tokens, записанная в часовой кэш (только Claude)
+    cache_write_5m_tokens: int = 0  # часть input_tokens, записанная в пятиминутный кэш
 
     @property
     def cost_usd(self) -> float:
         pin, pout = _by_prefix(PRICES, self.model, DEFAULT_PRICE)
         cached = min(max(self.cached_tokens, 0), self.input_tokens)
+        written = min(max(self.cache_write_tokens, 0), self.input_tokens - cached)
+        written_5m = min(max(self.cache_write_5m_tokens, 0), self.input_tokens - cached - written)
         pcached = _by_prefix(CACHED_PRICES, self.model, pin)
+        pwrite = _by_prefix(CACHE_WRITE_PRICES, self.model, 2 * pin)
+        plain = self.input_tokens - cached - written - written_5m
         return (
-            (self.input_tokens - cached) * pin + cached * pcached + self.output_tokens * pout
+            plain * pin + cached * pcached + written * pwrite + written_5m * 1.25 * pin
+            + self.output_tokens * pout
         ) / 1_000_000
 
 
@@ -95,6 +121,15 @@ def demo() -> None:
     assert Usage("gpt-4.1-mini", 1_000_000, 0).cost_usd == 0.40
     assert abs(Usage("gpt-5.4-mini", 1_000_000, 0, cached_tokens=1_000_000).cost_usd
                - 0.075) < 1e-9
+    # Claude: 1000 некэшированных + 9000 из кэша + 2000 записано, 300 выхода (AC-257).
+    cl = Usage("claude-opus-5-5", 12_000, 300, cached_tokens=9_000, cache_write_tokens=2_000)
+    assert abs(cl.cost_usd - (1000 * 4 + 9000 * 0.20 + 2000 * 8 + 300 * 20) / 1e6) < 1e-12
+    # Неизвестная модель Claude: запись — 2× входа по умолчанию, не дешевле входа.
+    unk = Usage("claude-x", 1_000_000, 0, cache_write_tokens=1_000_000)
+    assert abs(unk.cost_usd - 2 * DEFAULT_PRICE[0]) < 1e-9
+    # Пятиминутная запись — 1.25× входа (ассистент, D-41).
+    five = Usage("claude-opus-5-5", 1_000_000, 0, cache_write_5m_tokens=1_000_000)
+    assert abs(five.cost_usd - 5.0) < 1e-9
     assert not month_limit_reached(4.99, 5.0)
     assert month_limit_reached(5.0, 5.0)      # ровно лимит — уже стоп
     assert month_limit_reached(7.3, 5.0)

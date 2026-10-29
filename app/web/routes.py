@@ -1760,7 +1760,7 @@ async def settings(
         "prefs": sanitize(user.ui_prefs),
         # Траты и потолок видят все: иначе отказ ассистента по лимиту нечем объяснить.
         "coach": {
-            "model": container.settings.coach_model,
+            "model": container.settings.model_for("coach"),
             "limit_usd": limit,
             "spent_usd": round(spent, 4),
             "available": container.coach_port is not None,

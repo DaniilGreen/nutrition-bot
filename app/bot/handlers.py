@@ -37,7 +37,6 @@ from aiogram.types import (
     Message,
     ReplyKeyboardMarkup,
 )
-from openai import RateLimitError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.assistant import BODY_WEIGHT_RE, Assistant
@@ -165,7 +164,7 @@ from app.domain.plausibility import MAX_PORTION_G, MIN_PORTION_G
 from app.domain.portion_answer import parse as parse_portion
 from app.domain.timeframe import tz_from_longitude, tz_from_utc_offset
 from app.domain.value_objects import Density
-from app.infrastructure.openai_compat import out_of_credits
+from app.infrastructure.llm_errors import BILLING, KEYS, overloaded, provider_down
 
 if TYPE_CHECKING:
     from app.container import Container
@@ -179,32 +178,47 @@ _T = TypeVar("_T")
 
 
 NO_CREDITS_ALERT_EVERY_S = 6 * 3600
-_no_credits_alerted_at: float | None = None
+# Отметка — на пару «провайдер × причина» (AC-266): голос на OpenAI и текст на Anthropic
+# ломаются независимо, и алерт про одного не должен глушить алерт про другого.
+_no_credits_alerted_at: dict[tuple[str, str], float] = {}
 
 
-async def _alert_owner_no_credits(bot: Bot, container: object | None) -> None:
-    """Владельцу — одно сообщение о пустом балансе, не чаще раза в 6 часов (NFR-4).
+async def _alert_owner_no_credits(
+    bot: Bot, container: object | None, provider: str | None = None, kind: str = "credits",
+) -> None:
+    """Владельцу — одно сообщение о том, что нейронка встала, не чаще раза в 6 часов на пару
+    «провайдер × причина» (NFR-4, NFR-6). `kind`: `credits` — кончились деньги, `config` —
+    ключ не принят или модель недоступна.
+
+    `provider` — у кого сломалось (из исключения); не знаем — провайдер ассистента из
+    настроек. Голос на Whisper и при Claude, поэтому угадывать по настройке хуже.
 
     ponytail: отметка в памяти процесса — после рестарта бота придёт ещё одно. Потолок —
     лишнее сообщение на деплой, хранить отметку в базе ради этого не стоит."""
-    global _no_credits_alerted_at
-    now = time.monotonic()
-    if container is None or (
-        _no_credits_alerted_at is not None
-        and now - _no_credits_alerted_at < NO_CREDITS_ALERT_EVERY_S
-    ):
+    if container is None:
         return
-    _no_credits_alerted_at = now
+    settings = getattr(container, "settings", None)
+    provider = provider or getattr(settings, "llm_provider", "openai")
+    if provider not in BILLING:
+        provider = "openai"
+    now = time.monotonic()
+    last = _no_credits_alerted_at.get((provider, kind))
+    if last is not None and now - last < NO_CREDITS_ALERT_EVERY_S:
+        return
+    _no_credits_alerted_at[(provider, kind)] = now
+    name, billing = BILLING[provider]
+    if kind == "config":
+        text = (f"🔑 <b>Ключ {name} не принят или модель недоступна</b>\n\nНейронка не "
+                f"отвечает, пока не поправишь ключ или модель в .env: {KEYS[provider]}.")
+    else:
+        text = (f"🔌 <b>Закончился баланс {name}</b>\n\nРазбор еды, голос и фото не работают, "
+                f"пока не пополнишь: {billing}.")
     async with container.db.session_factory() as session:  # type: ignore[attr-defined]
         _, users = container.assistant_for(session)  # type: ignore[attr-defined]
         owners = [u for u in await users.list_active() if u.role == "owner"]
     for owner in owners:
         with suppress(Exception):
-            await bot.send_message(
-                owner.telegram_id,
-                "🔌 <b>Закончился баланс OpenAI</b>\n\nРазбор еды, голос и фото не работают, "
-                "пока не пополнишь: platform.openai.com → Settings → Billing.",
-            )
+            await bot.send_message(owner.telegram_id, text)
 
 
 @router.errors()
@@ -214,14 +228,15 @@ async def on_error(event: ErrorEvent, bot: Bot, container: object | None = None)
     if target is None and event.update.callback_query is not None:
         maybe = event.update.callback_query.message
         target = maybe if isinstance(maybe, Message) else None
-    if out_of_credits(event.exception):
+    down = provider_down(event.exception)   # кончились деньги или неверный ключ/модель
+    if down is not None:
         with suppress(Exception):
-            await _alert_owner_no_credits(bot, container)
+            await _alert_owner_no_credits(bot, container, *down)
     if target is not None:
-        if out_of_credits(event.exception):
+        if down is not None:
             text = ("🔌 Нейронка временно недоступна. Запиши чуть позже — "
                     "владелец уже знает.")
-        elif isinstance(event.exception, RateLimitError):  # баг #16: 429 от OpenAI (лимит TPM)
+        elif overloaded(event.exception):  # баг #16: 429 (TPM), у Anthropic ещё и 529
             text = "⏳ ИИ перегружен. Подожди ~10 секунд и повтори — данные не потеряны."
         else:
             text = "⚠️ Что-то пошло не так. Попробуй ещё раз через пару секунд."
@@ -490,9 +505,12 @@ async def cmd_ask(
                          on_no_credits=_no_credits_alert(bot, container))
 
 
-def _no_credits_alert(bot: Bot, container: object | None) -> Callable[[], Awaitable[None]]:
-    async def alert() -> None:
-        await _alert_owner_no_credits(bot, container)
+def _no_credits_alert(
+    bot: Bot, container: object | None
+) -> Callable[[BaseException], Awaitable[None]]:
+    async def alert(exc: BaseException) -> None:
+        provider, kind = provider_down(exc) or (None, "credits")
+        await _alert_owner_no_credits(bot, container, provider, kind)
     return alert
 
 

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import base64
 import logging
-from typing import Literal
+from typing import Literal, TypeVar
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
@@ -18,6 +18,8 @@ from app.domain.plate import FAT_KINDS, MAX_COMPONENTS, Component
 from app.infrastructure.openai_compat import temperature_for, token_counts
 
 log = logging.getLogger(__name__)
+
+_Out = TypeVar("_Out", bound=BaseModel)
 
 # ponytail: потолок позиций со скриншота меню (FR-38). Больше — скорее страница каталога, чем
 # заказ; обрезка лишь страхует от записи всего меню разом.
@@ -269,30 +271,43 @@ class OpenAiVision:
         except Exception:  # noqa: BLE001 — недосчитать цент дешевле, чем потерять фото
             log.warning("не удалось записать расход фото", exc_info=True)
 
-    async def read_photo(self, image: bytes, caption: str = "") -> PlateReading:
-        """FR-34: что на снимке и из чего блюдо. Считает приложение, модель только
-        раскладывает тарелку (INV-1)."""
+    async def _parse(
+        self, system: str, text: str, image: bytes, schema: type[_Out],
+        *, detail: str | None = None,
+    ) -> _Out | None:
+        """Один вызов чтения: промпт, подпись, снимок → объект схемы или None («не прочитал»).
+
+        Единственное место, где живёт транспорт: Claude подменяет только его (D-41), а
+        перевод ответа в доменные объекты остаётся общим."""
         b64 = base64.b64encode(image).decode()
-        text = f"Подпись человека: «{caption.strip()[:200]}»" if caption.strip() else "Подписи нет."
+        picture: dict[str, str] = {"url": f"data:image/jpeg;base64,{b64}"}
+        if detail:
+            picture["detail"] = detail
         completion = await self._client.beta.chat.completions.parse(
             model=self._model,
+            # gpt-5.x отвергает явную temperature (400) — там параметр не шлём вовсе
             temperature=temperature_for(self._model, 0.0),
             messages=[
-                {"role": "system", "content": PHOTO_PROMPT},
+                {"role": "system", "content": system},
                 {
                     "role": "user",
                     "content": [
                         {"type": "text", "text": text},
-                        # high: оценке порции нужны детали — ложка рядом, край тарелки.
-                        {"type": "image_url",
-                         "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"}},
+                        {"type": "image_url", "image_url": picture},
                     ],
                 },
             ],
-            response_format=PhotoReadingOut,
+            response_format=schema,
         )
         await self._meter_usage(completion)
-        r = completion.choices[0].message.parsed
+        return completion.choices[0].message.parsed
+
+    async def read_photo(self, image: bytes, caption: str = "") -> PlateReading:
+        """FR-34: что на снимке и из чего блюдо. Считает приложение, модель только
+        раскладывает тарелку (INV-1)."""
+        text = f"Подпись человека: «{caption.strip()[:200]}»" if caption.strip() else "Подписи нет."
+        # high: оценке порции нужны детали — ложка рядом, край тарелки.
+        r = await self._parse(PHOTO_PROMPT, text, image, PhotoReadingOut, detail="high")
         if r is None:
             return PlateReading(kind="none")
         return PlateReading(
@@ -318,25 +333,9 @@ class OpenAiVision:
     async def read_scan(self, image: bytes) -> ScanReading | None:
         """FR-36: числа с бланка состава тела как напечатаны. Сверку и выводы делает
         домен (`app/domain/body_scan.py`)."""
-        b64 = base64.b64encode(image).decode()
-        completion = await self._client.beta.chat.completions.parse(
-            model=self._model,
-            temperature=temperature_for(self._model, 0.0),
-            messages=[
-                {"role": "system", "content": SCAN_PROMPT},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Перепиши числа с этого бланка."},
-                        {"type": "image_url",
-                         "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"}},
-                    ],
-                },
-            ],
-            response_format=ScanReadingOut,
+        r = await self._parse(
+            SCAN_PROMPT, "Перепиши числа с этого бланка.", image, ScanReadingOut, detail="high"
         )
-        await self._meter_usage(completion)
-        r = completion.choices[0].message.parsed
         if r is None:
             return None
         data = r.model_dump()
@@ -346,26 +345,9 @@ class OpenAiVision:
         return ScanReading(**data)
 
     async def read_label(self, image: bytes) -> ParsedItem | None:
-        b64 = base64.b64encode(image).decode()
-        data_url = f"data:image/jpeg;base64,{b64}"
-        completion = await self._client.beta.chat.completions.parse(
-            model=self._model,
-            # gpt-5.x отвергает явную temperature (400) — там параметр не шлём вовсе
-            temperature=temperature_for(self._model, 0.0),
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Прочитай таблицу КБЖУ с этой этикетки."},
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ],
-                },
-            ],
-            response_format=LabelReading,
+        r = await self._parse(
+            SYSTEM_PROMPT, "Прочитай таблицу КБЖУ с этой этикетки.", image, LabelReading
         )
-        await self._meter_usage(completion)
-        r = completion.choices[0].message.parsed
         if r is None or not r.found:
             return None
         if r.kcal_per_100g == 0 and r.protein_per_100g == 0 and r.fat_per_100g == 0:

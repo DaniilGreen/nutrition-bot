@@ -30,11 +30,50 @@ from app.infrastructure.db.repositories import (
 )
 
 
+def _anthropic(settings: Settings, *, max_retries: int) -> object | None:
+    """Клиент Anthropic или None, если ключа нет. Таймаут явный — у SDK по умолчанию десять
+    минут (AI-PRINCIPLES §1); повторы — только там, где нет своего цикла."""
+    key = settings.anthropic_api_key.get_secret_value()
+    if not key:
+        return None
+    from anthropic import AsyncAnthropic
+
+    return AsyncAnthropic(api_key=key, max_retries=max_retries, timeout=settings.openai_timeout_s)
+
+
+async def check_provider(settings: Settings) -> None:
+    """AC-264: при Claude — до polling убедиться, что ключ принят и каждая модель маршрута
+    доступна аккаунту (`models.retrieve` бесплатен). Исключение — пусть процесс упадёт: деплой
+    покраснеет сразу, а не бот будет отвечать «недоступна» на каждое сообщение."""
+    if settings.llm_provider != "anthropic":
+        return
+    client = _anthropic(settings, max_retries=settings.openai_max_retries)
+    if client is None:
+        raise RuntimeError("ANTHROPIC_API_KEY не задан (LLM_PROVIDER=anthropic)")
+    try:
+        for model in sorted({settings.model_for(r) for r in ("nlu", "vision", "coach")}):
+            await client.models.retrieve(model)
+    finally:
+        await client.close()
+
+
 def build_nlu(settings: Settings, meter: object | None = None) -> NluPort:
     if settings.use_fake_nlu:
         from app.infrastructure.nlu.fake_nlu import FakeNlu
 
         return FakeNlu()
+
+    if settings.llm_provider == "anthropic":
+        # max_retries=0: у разбора свой цикл повторов (AI-PRINCIPLES §1), общий с OpenAI.
+        client = _anthropic(settings, max_retries=0)
+        if client is None:
+            raise RuntimeError("ANTHROPIC_API_KEY не задан (LLM_PROVIDER=anthropic)")
+        from app.infrastructure.nlu.claude_nlu import ClaudeNlu
+
+        return ClaudeNlu(
+            client, settings.model_for("nlu"), sample_k=settings.sample_k, meter=meter,
+            effort=settings.nlu_effort, thinking_off=settings.claude_thinking_off,
+        )
 
     if settings.llm_provider == "openai":
         if not settings.openai_api_key:
@@ -47,7 +86,7 @@ def build_nlu(settings: Settings, meter: object | None = None) -> NluPort:
             # max_retries=0: у разбора свой цикл повторов, вложенные повторы SDK превращали
             # одну попытку в 3 × 5 запросов (AI-PRINCIPLES §1).
             AsyncOpenAI(api_key=settings.openai_api_key, max_retries=0),
-            settings.openai_model,
+            settings.model_for("nlu"),
             sample_k=settings.sample_k,
             # AI-PRINCIPLES §2: разбор — основная статья трат, и до 08.09.2026
             # она не считалась вовсе.
@@ -58,7 +97,8 @@ def build_nlu(settings: Settings, meter: object | None = None) -> NluPort:
 
 
 def build_stt(settings: Settings, meter: object | None = None) -> SttPort | None:
-    """STT (голос) доступен только при наличии OpenAI-ключа; иначе None."""
+    """STT (голос) доступен только при наличии OpenAI-ключа; иначе None. Whisper — при любом
+    LLM_PROVIDER: у Claude распознавания речи нет (NFR-6)."""
     if not settings.openai_api_key:
         return None
     from openai import AsyncOpenAI
@@ -76,7 +116,17 @@ def build_stt(settings: Settings, meter: object | None = None) -> SttPort | None
 
 
 def build_vision(settings: Settings, meter: object | None = None) -> VisionPort | None:
-    """Vision (фото этикеток, FR-27) доступен только при наличии OpenAI-ключа; иначе None."""
+    """Vision (фото, этикетки, бланки) доступен только при ключе своего провайдера; иначе None."""
+    if settings.llm_provider == "anthropic":
+        client = _anthropic(settings, max_retries=settings.openai_max_retries)
+        if client is None:
+            return None
+        from app.infrastructure.vision.claude_vision import ClaudeVision
+
+        return ClaudeVision(
+            client, settings.model_for("vision"), meter,
+            effort=settings.vision_effort, thinking_off=settings.claude_thinking_off,
+        )
     if not settings.openai_api_key:
         return None
     from openai import AsyncOpenAI
@@ -88,7 +138,7 @@ def build_vision(settings: Settings, meter: object | None = None) -> VisionPort 
             api_key=settings.openai_api_key, max_retries=settings.openai_max_retries,
             timeout=settings.openai_timeout_s,
         ),
-        settings.vision_model,
+        settings.model_for("vision"),
         meter,
     )
 
@@ -96,6 +146,15 @@ def build_vision(settings: Settings, meter: object | None = None) -> VisionPort 
 def build_coach_port(settings: Settings, meter: object | None = None) -> CoachPort | None:
     """Ассистент вкладки AI доступен только при наличии ключа; иначе None —
     молча притворяться работающим хуже, чем честно сказать «недоступен»."""
+    if settings.llm_provider == "anthropic":
+        client = _anthropic(settings, max_retries=settings.openai_max_retries)
+        if client is None:
+            return None
+        from app.infrastructure.nlu.claude_coach import ClaudeCoach
+
+        return ClaudeCoach(
+            client, settings.model_for("coach"), meter, effort=settings.coach_effort
+        )
     if not settings.openai_api_key:
         return None
     from openai import AsyncOpenAI
@@ -107,7 +166,7 @@ def build_coach_port(settings: Settings, meter: object | None = None) -> CoachPo
             api_key=settings.openai_api_key, max_retries=settings.openai_max_retries,
             timeout=settings.openai_timeout_s,
         ),
-        settings.coach_model,
+        settings.model_for("coach"),
         meter,
     )
 
@@ -124,6 +183,10 @@ class Container:
 
     @classmethod
     def create(cls, settings: Settings) -> Container:
+        # NFR-6: модель чужого провайдера в любом маршруте — отказ на старте (деплой покраснеет),
+        # а не 404 на первом сообщении. Проверяем все три, даже если ключа маршрута нет.
+        for route in ("nlu", "vision", "coach"):
+            settings.model_for(route)  # type: ignore[arg-type]
         # БД собираем первой: счётчику трат нужна фабрика сессий, а он нужен
         # разбору и голосу (AI-PRINCIPLES §2).
         db = Database(settings.database_url, echo=settings.db_echo)

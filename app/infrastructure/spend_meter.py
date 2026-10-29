@@ -28,9 +28,14 @@ class SpendMeter:
         self._purpose = purpose
 
     async def note(
-        self, *, model: str, input_tokens: int, output_tokens: int, cached_tokens: int = 0
+        self, *, model: str, input_tokens: int, output_tokens: int, cached_tokens: int = 0,
+        cache_write_tokens: int = 0, cache_write_5m_tokens: int = 0,
     ) -> None:
-        await self._write(Usage(model, input_tokens, output_tokens, cached_tokens))
+        """`input_tokens` — весь промпт; кэш (прочитанный и записанный) — его части (NFR-6)."""
+        await self._write(Usage(
+            model, input_tokens, output_tokens, cached_tokens, cache_write_tokens,
+            cache_write_5m_tokens,
+        ))
 
     async def note_audio(self, *, model: str, seconds: float) -> None:
         """Whisper тарифицируется за МИНУТЫ, не за токены (AI-PRINCIPLES §2).

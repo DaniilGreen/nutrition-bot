@@ -20,7 +20,6 @@ from typing import Any
 
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from openai import RateLimitError
 
 from app.application.coach import (
     DISCLAIMER,
@@ -38,7 +37,7 @@ from app.application.rate_limit import RateLimiter
 from app.bot.keyboards import FREQ_NAME_MAX, FREQ_PREFIX
 from app.domain.mentions import Candidate
 from app.domain.question import has_amount, strong_question
-from app.infrastructure.openai_compat import out_of_credits
+from app.infrastructure.llm_errors import overloaded, provider_down
 
 log = logging.getLogger(__name__)
 
@@ -166,9 +165,9 @@ def actions_keyboard(actions: Sequence[Candidate]) -> InlineKeyboardMarkup | Non
 def _failure(exc: BaseException) -> str:
     if isinstance(exc, LimitReached):   # потолок достигнут между проверкой и потоком
         return LIMIT_MESSAGE
-    if out_of_credits(exc):
+    if provider_down(exc):          # кончились деньги или неверный ключ/модель (NFR-6)
         return NO_CREDITS
-    if isinstance(exc, RateLimitError):
+    if overloaded(exc):
         return OVERLOADED
     return BROKEN
 
@@ -179,7 +178,7 @@ async def ask(
     coach: Coach | None,
     question: str,
     *,
-    on_no_credits: Callable[[], Awaitable[None]] | None = None,
+    on_no_credits: Callable[[BaseException], Awaitable[None]] | None = None,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> None:
@@ -216,7 +215,7 @@ async def ask(
 
 async def _stream(
     message: Any, user: User, coach: Coach, question: str,
-    on_no_credits: Callable[[], Awaitable[None]] | None,
+    on_no_credits: Callable[[BaseException], Awaitable[None]] | None,
     clock: Callable[[], float], sleep: Callable[[float], Awaitable[None]],
 ) -> None:
     assert user.id is not None
@@ -250,9 +249,9 @@ async def _stream(
     except Exception as exc:  # noqa: BLE001 — отказ показываем на месте заглушки
         if not isinstance(exc, LimitReached):
             log.exception("ассистент в боте: поток оборвался")
-        if out_of_credits(exc) and on_no_credits is not None:
+        if provider_down(exc) and on_no_credits is not None:
             try:
-                await on_no_credits()
+                await on_no_credits(exc)
             except Exception:  # noqa: BLE001 — алерт владельцу не важнее ответа человеку
                 log.warning("не ушёл алерт о балансе", exc_info=True)
         await _settle(placeholder, message, _failure(exc), None, sleep)

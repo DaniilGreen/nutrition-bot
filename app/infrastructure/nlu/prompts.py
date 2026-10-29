@@ -215,7 +215,8 @@ SYSTEM_PROMPT = (
 )
 
 
-def build_user_prompt(text: str, known_keys: Sequence[str]) -> str:
+def catalog_prompt(known_keys: Sequence[str]) -> str:
+    """Каталог ключей — стабильная часть сообщения: у Claude на ней своя метка кэша (D-41)."""
     # Все ключи и в порядке добавления, без сортировки и обрезки. Обрезка по алфавиту до 400
     # к 28.09.2026 уже отрезала хвост каталога (428 продуктов): модель не видела знакомых
     # продуктов, выдумывала новые ключи и плодила дубли, а каждый «новый» шёл в семь сэмплов.
@@ -223,7 +224,12 @@ def build_user_prompt(text: str, known_keys: Sequence[str]) -> str:
     # ponytail: всё целиком — ~6 токенов на ключ; потолок ~1500 ключей (~9k токенов),
     # дальше отбирать по частоте употребления.
     keys = ", ".join(known_keys) if known_keys else "(пусто)"
-    return (
-        f"Известные canonical_key (переиспользуй, только если тот же продукт): {keys}\n\n"
-        f"Сообщение пользователя: {text!r}"
-    )
+    return f"Известные canonical_key (переиспользуй, только если тот же продукт): {keys}\n\n"
+
+
+def message_prompt(text: str) -> str:
+    return f"Сообщение пользователя: {text!r}"
+
+
+def build_user_prompt(text: str, known_keys: Sequence[str]) -> str:
+    return catalog_prompt(known_keys) + message_prompt(text)

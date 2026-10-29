@@ -9,10 +9,16 @@ Nutrition5k (Google) — блюда из столовой, взвешенные 
 - `photo` — только снимок, граммы на глаз модели;
 - `photo+mass` — снимок и истинный вес тарелки подписью.
 
-Масло: чип «без» в обоих режимах — в датасете масло уже среди ингредиентов, а
-угадывать ответ человека за него мы не берёмся. Бьёт реальный OpenAI (~$1).
+Масло: как в проде (D-MA-20) — приложение само добавляет строку «на готовку», её ккал входят
+в расчёт: в датасете масло тоже среди ингредиентов. В оценку МАССЫ тарелки она не входит —
+это не глаз модели, а добавка приложения.
+
+Бьёт реальную модель — деньги; провайдер и модель — флагами (NFR-6), потолок `--max-usd`
+жёсткий: новый вызов не начинается. На каждое блюдо — 2 режима × (фото + разбор).
 
     python -m tests.eval.run_photo_eval --data /data [--limit 10] [--save]
+    python -m tests.eval.run_photo_eval --data /data --provider anthropic \
+        --model claude-opus-5-5 --max-usd 3 --limit 20
 """
 from __future__ import annotations
 
@@ -24,7 +30,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.application.results import MealLogged, PlateRead, VariantClarificationNeeded
-from tests.eval.catalog import build_eval_assistant
+from tests.eval.catalog import build_eval_assistant, eval_settings
+from tests.eval.harness import BudgetExceeded, EvalMeter
 
 OUT = Path(__file__).resolve().parent / "baselines" / "photo.json"
 
@@ -48,7 +55,8 @@ async def _one(assistant, user, image: bytes, caption: str) -> tuple[float, floa
     read = await assistant.read_photo(user, image, caption=caption)
     if not isinstance(read, PlateRead):
         return f"не блюдо: {read!r}"[:200]
-    text = assistant.photo_text(read.reading, read.grams, fat="none")
+    # Строки «на готовку» (масло, заправка) — в фразе, как у человека, нажавшего «Записать».
+    text = assistant.photo_text(read.reading, read.grams)
     res = await assistant.log_photo(user, text, weighed=read.weighed)
     # Уточнение варианта человек закрыл бы тапом — берём первый предложенный,
     # как самый частый выбор (D-19 ставит его первым).
@@ -62,7 +70,10 @@ async def _one(assistant, user, image: bytes, caption: str) -> tuple[float, floa
         return f"не записалось: {type(res).__name__} на «{text}»"
     items = "; ".join(f"{i.name_snapshot.split(' · ')[0]} {i.grams:g}г={i.macros.kcal:.0f}"
                       for i in res.meal.items)
-    return res.meal.totals.kcal, sum(read.grams), items
+    # Масса тарелки — только то, что оценила модель: масло добавило приложение (D-MA-20), и с
+    # ним ошибка массы мерила бы чужую добавку, а не глаз.
+    eyed = sum(g for c, g in zip(read.reading.components, read.grams, strict=True) if not c.note)
+    return res.meal.totals.kcal, eyed, items
 
 
 async def main() -> None:
@@ -70,16 +81,24 @@ async def main() -> None:
     ap.add_argument("--data", default="/data")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--save", action="store_true")
+    ap.add_argument("--provider", choices=("openai", "anthropic"), default=None,
+                    help="по умолчанию — LLM_PROVIDER из окружения")
+    ap.add_argument("--model", default="", help="модель фото; пусто — умолчание провайдера")
+    ap.add_argument("--nlu-model", default="", help="модель разбора фразы с карточки")
+    ap.add_argument("--effort", default="", help="Claude: low|medium|high|xhigh|max")
+    ap.add_argument("--thinking-off", action="store_true")
+    ap.add_argument("--max-usd", type=float, default=3.0,
+                    help="жёсткий потолок трат прогона (по прод-ценам)")
     args = ap.parse_args()
 
-    from openai import AsyncOpenAI
-
     from app.config import get_settings
-    from app.infrastructure.vision.openai_vision import OpenAiVision
 
-    settings = get_settings()
-    vision = OpenAiVision(AsyncOpenAI(api_key=settings.openai_api_key), settings.openai_model)
-    assistant, user = await build_eval_assistant(vision=vision)
+    settings = eval_settings(
+        args.provider or get_settings().llm_provider, nlu_model=args.nlu_model,
+        vision_model=args.model, effort=args.effort, thinking_off=args.thinking_off,
+    )
+    meter = EvalMeter(args.max_usd)
+    assistant, user = await build_eval_assistant(settings, meter, with_vision=True)
 
     data = Path(args.data)
     rows = [line.split(",") for line in (data / "picked.txt").read_text().split()]
@@ -96,7 +115,11 @@ async def main() -> None:
         line = {"dish": dish, "kcal": true_kcal, "mass": true_mass}
         for mode, caption in (("photo", ""), ("photo+mass", f"{true_mass:g}")):
             try:
+                meter.check()
                 got = await _one(assistant, user, image, caption)
+            except BudgetExceeded as exc:
+                print(f"⛔ {exc} — дальше не идём, отчёт по сделанному")
+                break
             except Exception as exc:  # noqa: BLE001 — замер не должен падать на одном блюде
                 got = f"ошибка: {exc!r}"[:300]
             if not isinstance(got, tuple):
@@ -112,10 +135,17 @@ async def main() -> None:
                 line["mass_est"] = round(est_mass)
         detail.append(line)
         print(json.dumps(line, ensure_ascii=False))
+        if meter.spent_usd >= meter.max_usd:
+            break
 
+    records = sum(len(v) for v in kcal_err.values()) + sum(failed.values())
     report = {
         "date": datetime.now(UTC).strftime("%Y-%m-%d"),
-        "model": settings.openai_model,
+        "provider": settings.llm_provider,
+        "model": settings.model_for("vision"),
+        "nlu_model": settings.model_for("nlu"),
+        # Запись — одно блюдо в одном режиме: фото + разбор фразы с карточки.
+        "cost": meter.summary(records),
         "dataset": "Nutrition5k cafe1, overhead RGB, 150–700 г, ≥3 ингредиентов",
         "photo": {**_summary(kcal_err["photo"]), "failed": failed["photo"]},
         "photo+mass": {**_summary(kcal_err["photo+mass"]), "failed": failed["photo+mass"]},
