@@ -1,77 +1,86 @@
-# burnfat
+# Nutrition Bot
 
-Telegram-бот учёта питания с AI-разбором сообщений. Пишешь/наговариваешь, что съел —
-бот извлекает продукты, считает КБЖУ и показывает остаток на день.
+A Telegram bot that tracks what you eat. Type or say "chicken 250 g, two bananas", or send a
+photo of the plate, and it logs calories and macros against your daily target. It runs in
+production for a handful of users: [@Nutrition_calorie_bot](https://t.me/Nutrition_calorie_bot).
 
-## Главный архитектурный принцип
+## The LLM fills in, the database decides
 
-**LLM наполняет, БД фиксирует.** LLM (OpenAI) только извлекает сущности и даёт
-*первичную* оценку КБЖУ на 100 г. Финальные калории всегда считает приложение
-(`app/domain/nutrition.py`) из граммов и плотности продукта. При первом появлении
-продукта его плотность фиксируется в таблице `products` и больше не меняется
-автоматически — поэтому одна и та же «куриная грудка» всегда даёт одинаковые цифры.
-База продуктов наполняется по факту использования; на старте подгружается курируемый
-сид частых блюд (RU/Asian) как опора (`app/infrastructure/products/seed.py`).
+The LLM (OpenAI or Anthropic Claude, switched by `LLM_PROVIDER`) only extracts entities from a
+message and gives a first estimate of a
+product's nutrients per 100 g. The application does all the arithmetic
+(`app/domain/nutrition.py`). The first estimate is pinned in the `products` table and never
+changes on its own, so "chicken breast" gives the same numbers every time, and each meal stores
+a snapshot, so history doesn't drift when the catalog is edited.
 
-Инвариант проверяется тестом `tests/e2e/test_meal_flow.py::test_density_pinned_on_first_sight`.
+The invariant has a test: `tests/e2e/test_meal_flow.py::test_density_pinned_on_first_sight`.
 
-> **Спецификация (источник правды): [docs/SPEC.md](docs/SPEC.md).** Поведение и решения
-> фиксируются там; код отталкивается от спеки.
+## Features
 
-## Слои (clean architecture)
+- Text and voice logging (Whisper); portion clarification with S/M/L buttons.
+- Photo logging: the model reads the composition, the plate weight comes from the user, and the
+  app turns shares into grams.
+- Daily and weekly dashboards, history, undo, per-item deletion, product catalog corrections.
+- Calorie target from the user's profile (Mifflin-St Jeor), weight and body-composition tracking.
+- Evening summary, a Telegram Mini App dashboard, an AI assistant tab.
+- Monthly LLM spend cap: past the limit, photos and the assistant stop; text logging never does.
+
+## Measured accuracy
+
+| Eval | Data | Result |
+|---|---|---|
+| Text parsing (gpt-5.1, Aug 2026) | 150-row golden set | median calorie error per item 2.4%, p90 16.9%; daily totals within ±15% in 96% of cases |
+| Photo (gpt-5.1, Sep 2026) | 49 dishes from Nutrition5k | median calorie error 22% from the photo alone, 17% with plate weight |
+
+Raw numbers are in `tests/eval/baselines/`; the photo write-up is `docs/research/photo-weight.md`.
+Evals call the real OpenAI API and cost money, so they run on demand (`make eval`), not in CI.
+
+## Architecture
 
 ```
 bot (aiogram)  ─┐
-web (FastAPI)  ─┴─►  application (use-cases: Assistant, *Service)
-                          │ зависит от Protocol-портов (application/ports.py)
+web (FastAPI)  ─┴─►  application (use cases: Assistant, *Service)
+                          │ depends on Protocol ports (application/ports.py)
                           ▼
-                     domain (чистый: nutrition, portions, goals, timeframe)
+                     domain (pure: nutrition, portions, goals, timeframe)
                           ▲
-   infrastructure: db (SQLAlchemy) · nlu (OpenAI/Fake) — реализуют порты
+   infrastructure: db (SQLAlchemy) · nlu (OpenAI / fake) implement the ports
 ```
 
-Сервисы не знают про SQLAlchemy/OpenAI. В тестах порты подменяются in-memory
-фейками (`tests/fakes.py`) — тесты гоняются без БД и без вызовов LLM.
+Services know nothing about SQLAlchemy or OpenAI. Tests swap the ports for in-memory fakes
+(`tests/fakes.py`), so the suite runs without a database or an LLM.
 
-## Запуск
+## Tests, CI/CD and operations
 
-Локально (dev):
+- 1,200+ pytest tests, about 40 s locally. Postgres-specific SQL tests run against a Postgres
+  service container in CI.
+- GitHub Actions gates every deploy on the tests plus a front-end check (syntax and undeclared
+  identifiers in the Mini App). Push to `main` deploys.
+- Deploy goes over SSH: `git reset --hard origin/main` and `docker compose up -d --build` on the
+  VPS, then the job waits for the bot to reach polling and probes the Mini App from outside:
+  TLS, `/health`, and a 401 on unsigned API calls.
+- On the server: nightly database backups kept for 14 days, a healthcheck every 10 minutes
+  with Telegram alerts, and build-cache limits, because two bots share a 10 GB disk.
+
+## Run locally
 
 ```bash
-cp .env.example .env          # вписать BOT_TOKEN и OPENAI_API_KEY
-make up                       # db + bot + api, миграции применяются автоматически
-make logs                     # логи бота
+cp .env.example .env   # BOT_TOKEN and OPENAI_API_KEY
+make up                # db + bot + api, migrations apply automatically
+make test              # also: make lint, make typecheck
 ```
 
-Прод крутится на VPS `89.124.97.90`, **деплой — пуш в `main`** (GitHub Actions). Подробности и
-предупреждение про конфликт токена с локальным ботом — в [CLAUDE.md](CLAUDE.md) §3–4.
+Set `USE_FAKE_NLU=true` in `.env` to run on the built-in heuristic parser without OpenAI.
 
-Без ключа OpenAI можно поднять на встроенном эвристическом парсере:
-`USE_FAKE_NLU=true` в `.env`.
+## Stack
 
-## Тесты
+Python 3.12 · aiogram 3 · FastAPI · SQLAlchemy 2 (async) · PostgreSQL 16 · Alembic ·
+pydantic-settings · OpenAI (gpt-5.1, Whisper) or Anthropic Claude · Docker Compose ·
+GitHub Actions.
+The Mini App is plain HTML/JS with no build step.
 
-```bash
-make test        # domain unit + e2e (на фейках, без БД/LLM)
-make lint        # ruff
-make typecheck   # mypy
-```
+## About this repo
 
-## Что внутри (M0–M3)
-
-- Текст: «курица 250 грамм», «два банана», «съел рис».
-- **Голос** (M3): надиктовка → Whisper → транскрипт → тот же пайплайн.
-- Уточнение порции (M2): «фо бо» → inline-кнопки S/M/L → дозапись (FSM).
-- Учёт веса: «вес 86.8». Дневная статистика: «сколько осталось».
-- `/goal 1800`, `/week`, `/history`, `/undo`.
-- Multi-user с изоляцией по `user_id`, таймзоны пользователя.
-
-## Дальше
-
-- Админ-команды каталога продуктов, коррекция отдельных позиций записи.
-- Этап 2: web-дашборд (Next.js) на этом же REST API.
-
-## Стек
-
-Python 3.12 · aiogram 3 · FastAPI · SQLAlchemy 2 (async) · PostgreSQL · Alembic ·
-pydantic-settings · OpenAI · Docker Compose.
+Built by Daniil Grinzhola with Claude Code as a pair programmer. Product decisions, architecture
+and infrastructure are mine; `CLAUDE.md` holds the working rules for the agent. Specs and design
+notes in `docs/` are in Russian, starting with `docs/SPEC.md`.
