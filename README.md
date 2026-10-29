@@ -1,14 +1,22 @@
-# Nutrition Bot
+# Nutrition Tracker: Telegram bot + Mini App
 
-A Telegram bot that tracks what you eat. Type or say "chicken 250 g, two bananas", or send a
-photo of the plate, and it logs calories and macros against your daily target. It runs in
-production for a handful of users: [@Nutrition_calorie_bot](https://t.me/Nutrition_calorie_bot).
+A calorie and macro tracker inside Telegram with two interfaces over one backend:
+
+- a **chat bot** for fast logging: type or say "chicken 250 g, two bananas", or send a photo
+  of the plate;
+- a **Telegram Mini App** (a web app that opens inside Telegram) for what chat does badly:
+  browsing and searching history, fixing the product catalog in bulk, charts, and an AI
+  assistant over your own data.
+
+Both call the same application services over one PostgreSQL database, so there is nothing to
+sync. It runs in production for a handful of users:
+[@Nutrition_calorie_bot](https://t.me/Nutrition_calorie_bot).
 
 ## The LLM fills in, the database decides
 
 The LLM (OpenAI or Anthropic Claude, switched by `LLM_PROVIDER`) only extracts entities from a
-message and gives a first estimate of a
-product's nutrients per 100 g. The application does all the arithmetic
+message and gives a first estimate of a product's nutrients per 100 g. The application does all
+the arithmetic
 (`app/domain/nutrition.py`). The first estimate is pinned in the `products` table and never
 changes on its own, so "chicken breast" gives the same numbers every time, and each meal stores
 a snapshot, so history doesn't drift when the catalog is edited.
@@ -17,12 +25,28 @@ The invariant has a test: `tests/e2e/test_meal_flow.py::test_density_pinned_on_f
 
 ## Features
 
+**Bot**
+
 - Text and voice logging (Whisper); portion clarification with S/M/L buttons.
 - Photo logging: the model reads the composition, the plate weight comes from the user, and the
-  app turns shares into grams.
-- Daily and weekly dashboards, history, undo, per-item deletion, product catalog corrections.
-- Calorie target from the user's profile (Mifflin-St Jeor), weight and body-composition tracking.
-- Evening summary, a Telegram Mini App dashboard, an AI assistant tab.
+  app turns shares into grams. Nutrition labels and InBody printouts are read from a photo too.
+- Daily and weekly summaries, history, undo, per-item deletion, evening summary.
+- "Open in app" buttons jump from a chat message to the matching Mini App screen.
+
+**Mini App**
+
+- Product catalog editor: search, fix nutrients, merge duplicates, see which values are AI
+  estimates.
+- Frequent items: repeat a common meal in one tap.
+- Where the calories go: each product's contribution over a period.
+- Charts: calories per day against the target, weight trend, body-composition scans (InBody).
+- Day accuracy: the share of calories from labels versus AI estimates.
+- AI assistant over the whole history, on demand only, because every question costs money.
+- Text and voice input right on the screen.
+
+**Both**
+
+- Calorie target from the user's profile (Mifflin-St Jeor).
 - Monthly LLM spend cap: past the limit, photos and the assistant stop; text logging never does.
 
 ## Measured accuracy
@@ -49,6 +73,10 @@ web (FastAPI)  ─┴─►  application (use cases: Assistant, *Service)
 
 Services know nothing about SQLAlchemy or OpenAI. Tests swap the ports for in-memory fakes
 (`tests/fakes.py`), so the suite runs without a database or an LLM.
+
+The Mini App is plain HTML/JS served by FastAPI behind Caddy. Every API call carries Telegram's
+signed `initData`, and the server checks its HMAC-SHA256 against the bot token, so there are no
+passwords or sessions to manage.
 
 ## Tests, CI/CD and operations
 
