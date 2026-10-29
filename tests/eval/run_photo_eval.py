@@ -87,6 +87,7 @@ async def main() -> None:
     ap.add_argument("--nlu-model", default="", help="модель разбора фразы с карточки")
     ap.add_argument("--effort", default="", help="Claude: low|medium|high|xhigh|max")
     ap.add_argument("--thinking-off", action="store_true")
+    ap.add_argument("--fast", action="store_true", help="Claude: быстрый режим Opus (D-42)")
     ap.add_argument("--max-usd", type=float, default=3.0,
                     help="жёсткий потолок трат прогона (по прод-ценам)")
     args = ap.parse_args()
@@ -96,6 +97,7 @@ async def main() -> None:
     settings = eval_settings(
         args.provider or get_settings().llm_provider, nlu_model=args.nlu_model,
         vision_model=args.model, effort=args.effort, thinking_off=args.thinking_off,
+        fast=args.fast,
     )
     meter = EvalMeter(args.max_usd)
     assistant, user = await build_eval_assistant(settings, meter, with_vision=True)
