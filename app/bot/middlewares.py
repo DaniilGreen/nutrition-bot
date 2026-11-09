@@ -1,6 +1,7 @@
 """Middleware: сессия БД на апдейт + резолв пользователя + инъекция Assistant."""
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -8,7 +9,11 @@ from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
 from aiogram.types import User as TgUser
 
+from app.application.entities import User
+from app.bot.widgets import live
 from app.container import Container
+
+logger = logging.getLogger(__name__)
 
 
 class ServicesMiddleware(BaseMiddleware):
@@ -41,7 +46,22 @@ class ServicesMiddleware(BaseMiddleware):
             try:
                 result = await handler(event, data)
                 await session.commit()
-                return result
             except Exception:
                 await session.rollback()
                 raise
+        if live.watching(user) and live.enabled(user):
+            await self._push(data, user)
+        return result
+
+    async def _push(self, data: dict[str, Any], user: User) -> None:
+        """FR-49.1, D-46: после апдейта — виджет дня показывает то, что теперь в базе. Своя
+        сессия: хендлер уже закоммитил. Сбой здесь не должен ронять ответ человеку."""
+        bot = data.get("bot")
+        if bot is None:
+            return
+        try:
+            async with self._container.db.session_factory() as session:
+                assistant, _ = self._container.assistant_for(session)
+                await live.push(bot, user, assistant)
+        except Exception:  # noqa: BLE001
+            logger.exception("widget: пуш виджета дня упал")

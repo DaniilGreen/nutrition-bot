@@ -99,6 +99,9 @@ class DayPace:
     last_at: str | None = None
     norm_points: list[tuple[int, float]] = field(default_factory=list)
     today_points: list[tuple[int, float]] = field(default_factory=list)
+    # Норма целиком, по часам от начала суток человека (индекс 0 = `start_h`), — кривая виджета
+    # «Сегодня» (FR-49.1, D-48) рисует её независимо от `show`. Пусто — нормы нет (MA-INV-37).
+    norm: list[float] = field(default_factory=list)
 
 
 @dataclass

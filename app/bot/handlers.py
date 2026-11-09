@@ -144,6 +144,7 @@ from app.bot.keyboards import (
 from app.bot.states import MealStates, ProfileStates
 from app.bot.ui import gather, screens
 from app.bot.ui.kit import plural
+from app.bot.widgets import live as widgets_live
 from app.domain.goals import (
     Goal,
     Remaining,
@@ -3510,6 +3511,14 @@ async def _start_profile(message: Message, state: FSMContext, *, app: bool = Fal
 
 
 async def _show_today(message: Message, app_user: User, assistant: Assistant) -> None:
+    """FR-49.1, D-43: с флагом — виджет дня; виджет не ушёл — прежний rich-экран (W-INV-2)."""
+    bot = message.bot
+    if (
+        bot is not None
+        and widgets_live.enabled(app_user)
+        and await widgets_live.show_today(bot, message.chat.id, app_user, assistant)
+    ):
+        return
     await _rich(message, screens.today(await gather(assistant, app_user)))
 
 
@@ -3718,7 +3727,7 @@ async def _reply_screen(
     if isinstance(result, MealLogged):
         await _send_meal_card(message, result, app_user, assistant)
     elif isinstance(result, DailyStats):  # intent=QUERY «сколько осталось»
-        await _rich(message, screens.today(await gather(assistant, app_user)))
+        await _show_today(message, app_user, assistant)
     elif isinstance(result, ItemRemoved):
         await _rich(message, screens.item_removed(result))
     elif isinstance(result, ItemAdjusted):

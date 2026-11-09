@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     reminder_hour: int = 23  # локальное время вечернего итога — 23:59, у самого конца дня
     reminder_minute: int = 59
 
+    # FR-49, D-51: кому слать HTML-виджеты вместо rich-экранов. `owner` — роль владельца,
+    # telegram id через запятую, `all`; можно смешивать: `owner,357309245`. Пусто — никому.
+    widgets_users: str = "owner"
+
     log_level: str = "INFO"
     db_echo: bool = False
 

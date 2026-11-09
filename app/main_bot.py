@@ -14,6 +14,7 @@ from app.bot.handlers import router
 from app.bot.menu import setup_bot_commands, setup_miniapp_button
 from app.bot.middlewares import ServicesMiddleware
 from app.bot.reminders import run_reminder_loop
+from app.bot.widgets.live import WidgetQueryMiddleware
 from app.config import get_settings
 from app.container import Container, check_provider
 from app.infrastructure.products.seed import seed_curated
@@ -45,6 +46,8 @@ async def main() -> None:
     middleware = ServicesMiddleware(container)
     dp.message.middleware(middleware)
     dp.callback_query.middleware(middleware)
+    # FR-49, D-45: апдейт 10.4 `widget_query` aiogram не знает — перехват до разбора типа.
+    dp.update.outer_middleware(WidgetQueryMiddleware(container))
     dp.include_router(router)
 
     await setup_bot_commands(bot)
@@ -60,7 +63,11 @@ async def main() -> None:
         )
 
     try:
-        await dp.start_polling(bot)
+        # allowed_updates явно: по умолчанию aiogram просит только типы своих хендлеров, и
+        # Telegram не прислал бы `widget_query` вовсе (FR-49).
+        await dp.start_polling(
+            bot, allowed_updates=[*dp.resolve_used_update_types(), "widget_query"]
+        )
     finally:
         if reminder_task is not None:
             reminder_task.cancel()

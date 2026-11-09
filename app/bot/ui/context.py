@@ -111,7 +111,7 @@ class DayContext:
         return round(self.today.remaining.consumed.protein / self.weight_kg, 2)
 
 
-def _est_share(today: DailyStats) -> int:
+def est_share(today: DailyStats) -> int:
     """Какая доля сегодняшних калорий посчитана ОЦЕНКОЙ (is_estimate), а не по точному весу.
 
     Продукт продаёт точность — значит обязан честно говорить, где он её не гарантирует.
@@ -150,7 +150,7 @@ async def gather(assistant: Assistant, user: User, scans: object | None = None) 
         weight=weight,
         products=products,
         weight_kg=weight.logs[0].weight_kg if weight.logs else None,  # logs — новые первыми
-        est_kcal_share=_est_share(today),
+        est_kcal_share=est_share(today),
         local_hour=datetime.now(ZoneInfo(today.timezone)).hour,
         week_bal=await assistant.week_balance(
             user, 0, bmr_kcal=await scans.bmr(user) if scans is not None else None

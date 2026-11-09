@@ -10,6 +10,7 @@ from app.application.results import DailyStats, DayPace, WeeklyStats
 from app.clock import Clock, utcnow
 from app.domain.goals import Goal, remaining
 from app.domain.pace import (
+    MIN_DAYS,
     behind,
     curve_points,
     norm_curve,
@@ -117,10 +118,12 @@ class StatsService:
         minutes_since = (now_local - last).total_seconds() / 60 if last else None
 
         show = behind(pace, hour, today_kcal, goal.daily_kcal) and quiet_enough(minutes_since)
+        full = [round(v, 1) for v in pace.norm] if pace.days_used >= MIN_DAYS else []
         if not show:
             return DayPace(
                 show=False, hour=real_hour, norm_kcal=round(norm_kcal, 1),
                 today_kcal=round(today_kcal, 1), days_used=pace.days_used,
+                norm=full,
             )
 
         first = min((h for h, _ in today_meals), default=hour)
@@ -139,6 +142,7 @@ class StatsService:
             last_at=last.strftime("%H:%M") if last is not None else None,
             norm_points=curve_points(pace.norm, start, hour),
             today_points=today_cum,
+            norm=full,
         )
 
     async def day_meals(self, user: User, days_ago: int = 0) -> list[Meal]:
