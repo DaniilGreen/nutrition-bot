@@ -21,11 +21,14 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.application.entities import Meal
+from aiogram.types import InlineKeyboardMarkup
+
+from app.application.entities import Meal, Product
 from app.application.results import DailyStats, DayPace
 from app.bot.ui.context import est_share
 from app.bot.ui.kit import MON, WD
 from app.domain.goals import Goal
+from app.domain.nutrition import macros_for_grams
 from app.domain.streak import Streak
 from app.domain.timeframe import local_date
 
@@ -122,3 +125,36 @@ def today_caption(stats: DailyStats, g: Goal) -> str:
         f"📊 Сегодня: {round(c.kcal)} из {round(g.daily_kcal)} ккал · {rest} · "
         f"белок {round(c.protein)} из {round(g.protein_g)} г"
     )
+
+
+def frequent_data(
+    markup: InlineKeyboardMarkup, products: dict[int, Product], sets: dict[str, Meal]
+) -> str:
+    """`chat_data` виджета «⚡ Частое» (FR-49.2): ровно плитки клавиатуры FR-40 — тот же топ,
+    те же подписи и граммы, что у кнопок (`frequent_keyboard`), плюс ккал порции.
+
+    Формат v1: {"v":1,"t":[[подпись, хвост, операция, ккал, ≈ 0/1], …]}; операция — `p:<id>:<г>`
+    или `s:<ключ набора>`, она же уходит в запрос `w:<операция>:<ключ>`. Ккал продукта —
+    граммы × запиннутая плотность (INV-2), набора — его записанный итог (INV-3)."""
+    tiles = []
+    for row in markup.inline_keyboard:
+        for b in row:
+            op = (b.callback_data or "").split(":", 1)[-1]
+            label, _, tail = b.text.rpartition(" · ")
+            parts = op.split(":")
+            kcal, est = 0, 0
+            if parts[0] == "p" and len(parts) == 3:
+                prod = products.get(int(parts[1]))
+                if prod is not None:
+                    kcal = round(macros_for_grams(prod.density, float(parts[2])).kcal)
+                    est = int(prod.is_estimate)
+            elif parts[0] == "s" and len(parts) == 2 and parts[1] in sets:
+                m = sets[parts[1]]
+                kcal = round(m.totals.kcal)
+                est = int(any(i.is_estimate for i in m.items))
+            tiles.append([label.removeprefix("📌 "), tail, op, kcal, est])
+    text = _dump({"v": 1, "t": tiles})
+    while size(text) > LIMIT and tiles:  # ponytail: 8 плиток × короткие подписи влезают с запасом
+        tiles.pop()
+        text = _dump({"v": 1, "t": tiles})
+    return text

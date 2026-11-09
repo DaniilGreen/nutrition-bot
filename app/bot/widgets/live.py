@@ -178,15 +178,15 @@ def _reply(obj: dict[str, Any]) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 
-def parse_query(q: dict[str, Any]) -> tuple[int, int, str] | None:
-    """Строгий разбор `widget_query` (W-INV-4): (telegram id, message_id, день) или None.
+def parse_origin(q: dict[str, Any]) -> tuple[int, int, str] | None:
+    """Откуда запрос (W-INV-4): (telegram id, message_id, data) или None.
 
-    Только личный чат бота (`chat.id == from.id`), `data` ≤ 64 байт ровно `t:YYYY-MM-DD`."""
+    Только личный чат бота (`chat.id == from.id`), живой человек, `data` — строка ≤ 64 байт.
+    Формат самой `data` разбирает тот, кому она адресована (`t:` — здесь, `w:`/`u:` — «Частое»)."""
     data, frm, chat, mid = q.get("data"), q.get("from"), q.get("chat"), q.get("message_id")
-    if not isinstance(data, str) or len(data.encode()) > 64:
+    if not isinstance(data, str) or not data or len(data.encode()) > 64:
         return None
-    m = _QUERY.fullmatch(data)
-    if m is None or not isinstance(frm, dict) or not isinstance(chat, dict):
+    if not isinstance(frm, dict) or not isinstance(chat, dict):
         return None
     uid = frm.get("id")
     if not isinstance(uid, int) or isinstance(uid, bool) or frm.get("is_bot"):
@@ -195,11 +195,37 @@ def parse_query(q: dict[str, Any]) -> tuple[int, int, str] | None:
         return None
     if not isinstance(mid, int) or isinstance(mid, bool) or mid <= 0:
         return None
+    return uid, mid, data
+
+
+def parse_query(q: dict[str, Any]) -> tuple[int, int, str] | None:
+    """Запрос виджета дня: (telegram id, message_id, день) или None; `data` ровно `t:YYYY-MM-DD`."""
+    origin = parse_origin(q)
+    m = _QUERY.fullmatch(origin[2]) if origin else None
+    if origin is None or m is None:
+        return None
     try:
         datetime.strptime(m.group(1), "%Y-%m-%d")
     except ValueError:
         return None
-    return uid, mid, m.group(1)
+    return origin[0], origin[1], m.group(1)
+
+
+@dataclass
+class Outcome:
+    """Итог пишущего запроса. `commit` — что запомнить ПОСЛЕ фиксации (ключ повтора, «что
+    записал»), `abort` — что снять, если фиксация упала: иначе ответ «записал» и кэш повтора
+    врали бы о записи, которой нет."""
+
+    reply: dict[str, Any]
+    commit: Callable[[], None] | None = None
+    abort: Callable[[], None] | None = None
+
+
+# Запросы других виджетов: префикс `data` до «:» → обработчик. Обработчик пишет через assistant;
+# фиксацию, ответ и пуш виджета дня делает middleware (`_route`).
+Route = Callable[[int, int, str, User, Assistant], Awaitable[Outcome]]
+ROUTES: dict[str, Route] = {}
 
 
 async def answer(
@@ -255,9 +281,14 @@ class WidgetQueryMiddleware(BaseMiddleware):
         if not isinstance(q, dict):
             return await handler(event, data)
         bot: Bot = data["bot"]
-        parsed = parse_query(q)
+        origin = parse_origin(q)
         # OQ-W1: по этой строке в логе видно, что запросы виджета доходят до бота при поллинге.
-        logger.info("widget: запрос %r, разобран: %s", q.get("data"), parsed is not None)
+        logger.info("widget: запрос %r, источник принят: %s", q.get("data"), origin is not None)
+        handler_ = ROUTES.get(origin[2].split(":", 1)[0]) if origin else None
+        if origin is not None and handler_ is not None and isinstance(q.get("id"), str):
+            await self._route(bot, q, origin, handler_)
+            return None
+        parsed = parse_query(q)
         if parsed is None:
             await answer(bot, q, None, None)
             return None
@@ -275,3 +306,45 @@ class WidgetQueryMiddleware(BaseMiddleware):
         except Exception:  # noqa: BLE001 — апдейт виджета не должен ронять поллинг
             logger.exception("widget: запрос виджета не обработан")
         return None
+
+    async def _route(
+        self, bot: Bot, q: dict[str, Any], origin: tuple[int, int, str], handler_: Route
+    ) -> None:
+        """Пишущий запрос: обработчик → фиксация → ответ → пуш виджета дня. Сбой — `err`."""
+        uid, mid, data = origin
+        frm = q["from"]
+        reply: dict[str, Any] = {"err": "fail"}
+        user: User | None = None
+        try:
+            async with self._container.db.session_factory() as session:
+                assistant, users = self._container.assistant_for(session)
+                user = await users.get_or_create(
+                    telegram_id=uid, name=frm.get("first_name"),
+                    locale=frm.get("language_code") or "ru",
+                    timezone=self._container.settings.default_timezone,
+                )
+                if not enabled(user):
+                    reply = {"err": "bad"}
+                else:
+                    out = await handler_(uid, mid, data, user, assistant)
+                    try:
+                        await session.commit()  # «записал» в ответе не должен врать
+                    except BaseException:
+                        if out.abort is not None:
+                            out.abort()
+                        raise
+                    if out.commit is not None:
+                        out.commit()
+                    reply = out.reply
+        except Exception:  # noqa: BLE001
+            logger.exception("widget: пишущий запрос не обработан")
+            reply = {"err": "fail"}
+        with suppress(Exception):
+            await bot(AnswerWidgetQuery(widget_query_id=str(q["id"]), data=_reply(reply)))
+        if reply.get("ok") and user is not None:
+            try:
+                async with self._container.db.session_factory() as session:
+                    assistant, _ = self._container.assistant_for(session)
+                    await push(bot, user, assistant)
+            except Exception:  # noqa: BLE001
+                logger.exception("widget: пуш виджета дня после запроса упал")

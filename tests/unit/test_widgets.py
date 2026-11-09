@@ -417,3 +417,181 @@ async def test_middleware_ловит_widget_query() -> None:
     assert json.loads(bot.of(AnswerWidgetQuery)[0].data) == {"err": "bad"}
     plain = Update.model_validate({"update_id": 2})
     assert await mw(handler, plain, {"bot": bot}) == "routed"
+
+
+# --- «⚡ Частое» виджетом (FR-49.2, AC-276…AC-278) ---------------------------------------------
+
+def test_данные_частого_те_же_плитки_что_кнопки() -> None:
+    """MA-INV-1: плитки — ровно кнопки FR-40; ккал — граммы × запиннутая плотность (INV-1)."""
+    from app.application.entities import Product
+    from app.bot.keyboards import frequent_keyboard, set_key
+    from app.bot.ui.widgets import frequent_data
+    from app.domain.value_objects import Density
+
+    tvorog = Product(canonical_key="tvorog", display_name="Творог 5%", id=12, is_estimate=False,
+                     density=Density(121, 17, 5, 3))
+    s = _meal(NOW, "Курица", 420, est=True)
+    s.template_name = "Обед"
+    markup = frequent_keyboard([(s, 5)], [(12, "Творог 5%", 180.0, 9)])
+    assert markup is not None
+    d = json.loads(frequent_data(markup, {12: tvorog}, {set_key("Обед"): s}))
+    assert d["t"][0] == ["Творог 5%", "180 г", "p:12:180", 218, 0]  # 121 × 1.8 = 217.8
+    assert d["t"][1] == ["Обед", "420 ккал", f"s:{set_key('Обед')}", 420, 1]
+    assert len(json.dumps(d, ensure_ascii=False).encode()) <= LIMIT
+
+
+@pytest.fixture
+def freq(monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
+    """Запись «Частого» без БД: `_log_frequent` подменён, запоминаем, что он получил."""
+    from app.application.results import MealLogged
+    from app.bot import handlers
+    from app.bot.widgets import frequent
+
+    frequent._done.clear()
+    frequent._wrote.clear()
+    calls: list[str] = []
+    meals: dict[int, Meal] = {}
+
+    async def fake_log(user: User, assistant: object, data: str) -> MealLogged | None:
+        calls.append(data)
+        if data.endswith(":404:100"):
+            return None
+        meal = _meal(NOW, "Творог 5%", 218)
+        meal.id = 500 + len(calls)
+        meals[meal.id] = meal
+        return MealLogged(meal=meal, remaining=remaining(meal.totals, GOAL))
+
+    monkeypatch.setattr(handlers, "_log_frequent", fake_log)
+    return frequent, calls, meals
+
+
+async def _run(fn, uid: int, data: str, user: User, a: object) -> dict:  # noqa: ANN001
+    """Как `_route`: обработчик, затем «фиксация прошла» — commit-колбэк."""
+    out = await fn(uid, 7, data, user, a)
+    if out.commit is not None:
+        out.commit()
+    return out.reply
+
+
+async def test_частое_пишет_один_раз_на_тап(freq) -> None:  # noqa: ANN001
+    """AC-276/AC-277: запись тем же путём, что кнопка; повтор того же ключа не пишет."""
+    frequent, calls, _ = freq
+    a = FakeAssistant([])
+    w = frequent.on_write
+    r = await _run(w, 1, "w:p:12:180:k3x9a1", OWNER, a)
+    assert r["ok"] == 1 and r["k"] == 218 and r["l"] == 2200 - 218 and calls == ["fq:p:12:180"]
+    assert await _run(w, 1, "w:p:12:180:k3x9a1", OWNER, a) == r and len(calls) == 1  # W-INV-5
+    assert (await _run(w, 1, "w:p:12:180:zz11yy", OWNER, a))["ok"] == 1 and len(calls) == 2
+    for bad in ("w:p:12:0:abcd", "w:p:12:9999:abcd", "w:p:x:1:abcd", "w:p:12:180",
+                "w:s:zz:abcd", "w:p:12:180:AB", "x:p:12:180:abcd"):
+        assert (await _run(w, 1, bad, OWNER, a))["err"] == "bad", bad
+    assert (await _run(w, 1, "w:p:404:100:qqqq", OWNER, a))["err"] == "gone"
+    assert len(calls) == 3  # отказы не писали (404 дошёл до use-case и получил None)
+    assert (await _run(w, 1, "w:p:404:100:qqqq", OWNER, a))["err"] == "gone"  # ключ не залип
+
+
+async def test_частое_параллельный_повтор_пишет_раз(freq) -> None:  # noqa: ANN001
+    """W-INV-5 под гонкой: два одинаковых запроса задачами — одна запись."""
+    import asyncio
+
+    frequent, calls, _ = freq
+    a = FakeAssistant([])
+    r1, r2 = await asyncio.gather(
+        frequent.on_write(1, 7, "w:p:12:180:race01", OWNER, a),
+        frequent.on_write(1, 7, "w:p:12:180:race01", OWNER, a),
+    )
+    assert len(calls) == 1 and {r1.reply.get("err"), r2.reply.get("err")} >= {"busy"}
+
+
+async def test_частое_вернуть_только_своё(freq, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
+    """AC-278: «Вернуть» — только запись этого виджета этим человеком, без правок, за 10 минут."""
+    from app.application.results import MealDeleted
+
+    frequent, _, meals = freq
+    a = FakeAssistant([])
+    deleted: list[int] = []
+
+    async def delete_meal(user: User, meal_id: int) -> MealDeleted:
+        deleted.append(meal_id)
+        return MealDeleted(meal=meals.pop(meal_id, None))
+
+    async def get_meal(user: User, meal_id: int) -> Meal | None:
+        return meals.get(meal_id)
+
+    a.delete_meal = delete_meal  # type: ignore[attr-defined]
+    a.get_meal = get_meal  # type: ignore[attr-defined]
+    u = frequent.on_undo
+    r = await _run(frequent.on_write, 1, "w:p:12:180:aaaa", OWNER, a)
+    assert (await _run(u, 2, f"u:{r['m']}:bbbb", OTHER, a))["err"] == "bad"  # чужой
+    assert (await _run(u, 1, "u:999:cccc", OWNER, a))["err"] == "bad"  # не из виджета
+    ok = await _run(u, 1, f"u:{r['m']}:dddd", OWNER, a)
+    assert ok["ok"] == 1 and deleted == [r["m"]]
+    assert (await _run(u, 1, f"u:{r['m']}:eeee", OWNER, a))["err"] == "bad"  # уже вернули
+    r2 = await _run(frequent.on_write, 1, "w:p:12:180:ffff", OWNER, a)
+    meals[r2["m"]].items[0].grams = 250  # поправили вес — «Вернуть» не снесёт правку
+    assert (await _run(u, 1, f"u:{r2['m']}:gggg", OWNER, a))["err"] == "edited"
+    r3 = await _run(frequent.on_write, 1, "w:p:12:180:hhhh", OWNER, a)
+    monkeypatch.setattr(frequent, "_now", lambda: 10**9)  # прошло > 10 минут
+    assert (await _run(u, 1, f"u:{r3['m']}:iiii", OWNER, a))["err"] == "bad"
+    assert deleted == [r["m"]]
+
+
+async def test_маршрут_пишущего_запроса(freq, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
+    """Middleware: `w:` — в «Частое», фиксация, ответ, пуш виджета дня; без флага — отказ."""
+    from contextlib import asynccontextmanager
+
+    frequent, calls, _ = freq
+    committed: list[bool] = []
+    pushed: list[int] = []
+    fail_commit: list[bool] = []
+
+    class Session:
+        async def commit(self) -> None:
+            if fail_commit:
+                raise RuntimeError("commit failed")
+            committed.append(True)
+
+    class Users:
+        async def get_or_create(self, **kw: object) -> User:
+            return OWNER if kw["telegram_id"] == OWNER.telegram_id else OTHER
+
+    @asynccontextmanager
+    async def factory():  # noqa: ANN202
+        yield Session()
+
+    container = SimpleNamespace(
+        db=SimpleNamespace(session_factory=factory),
+        assistant_for=lambda s: (FakeAssistant([]), Users()),
+        settings=SimpleNamespace(default_timezone=TZ),
+    )
+
+    async def fake_push(bot: object, user: User, assistant: object) -> None:
+        pushed.append(user.telegram_id)
+
+    real = live.enabled
+    monkeypatch.setattr(live, "enabled", lambda u, s=None: real(u, "owner"))
+    monkeypatch.setattr(live, "push", fake_push)
+    from aiogram.types import Update
+
+    mw = live.WidgetQueryMiddleware(container)  # type: ignore[arg-type]
+    bot = FakeBot()
+
+    async def handler(event: object, data: dict) -> None:
+        raise AssertionError("widget_query не должен идти в роутер")
+
+    upd = Update.model_validate({"update_id": 3, "widget_query": _q("w:p:12:180:abcd")})
+    await mw(handler, upd, {"bot": bot})
+    assert json.loads(bot.of(AnswerWidgetQuery)[-1].data)["ok"] == 1
+    assert committed == [True] and pushed == [351362942] and calls == ["fq:p:12:180"]
+    other = _q("w:p:12:180:efgh", **{"from": {"id": 357309245}},
+               chat={"id": 357309245, "type": "private"})
+    await mw(handler, Update.model_validate({"update_id": 4, "widget_query": other}), {"bot": bot})
+    assert json.loads(bot.of(AnswerWidgetQuery)[-1].data) == {"err": "bad"} and len(calls) == 1
+    # Фиксация упала — ответ не «записал», и тот же ключ потом пишет заново (B1 ревью).
+    fail_commit.append(True)
+    q3 = _q("w:p:12:180:zzzz")
+    await mw(handler, Update.model_validate({"update_id": 5, "widget_query": q3}), {"bot": bot})
+    assert json.loads(bot.of(AnswerWidgetQuery)[-1].data) == {"err": "fail"} and len(pushed) == 1
+    fail_commit.clear()
+    await mw(handler, Update.model_validate({"update_id": 6, "widget_query": q3}), {"bot": bot})
+    assert json.loads(bot.of(AnswerWidgetQuery)[-1].data)["ok"] == 1 and len(calls) == 3

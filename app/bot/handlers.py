@@ -144,6 +144,7 @@ from app.bot.keyboards import (
 from app.bot.states import MealStates, ProfileStates
 from app.bot.ui import gather, screens
 from app.bot.ui.kit import plural
+from app.bot.widgets import frequent as widgets_frequent
 from app.bot.widgets import live as widgets_live
 from app.domain.goals import (
     Goal,
@@ -610,8 +611,15 @@ _FREQ_EMPTY = (
 async def btn_frequent(
     message: Message, app_user: User, assistant: Assistant, state: FSMContext
 ) -> None:
-    """FR-40: наборы и частое кнопками. Данные — те же, что у чипов аппки (`sets`, `frequent`)."""
+    """FR-40: наборы и частое кнопками. Данные — те же, что у чипов аппки (`sets`, `frequent`).
+    С флагом виджетов — плитками в виджете (FR-49.2); не вышло — прежняя клавиатура."""
     await state.clear()
+    if (
+        message.bot is not None
+        and widgets_live.enabled(app_user)
+        and await widgets_frequent.show(message.bot, message.chat.id, app_user, assistant)
+    ):
+        return
     sets = await assistant.recent_sets(app_user, days=30)
     # Тот же топ, что у аппки: бот не показывает продукт, которого нет в её чипах. Имя — из
     # каталога (так его запишет log_quick и покажет карточка), а не из снапшотов; продукт,
