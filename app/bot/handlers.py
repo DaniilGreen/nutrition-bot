@@ -3541,6 +3541,11 @@ async def _show_week(
 async def _show_weight(message: Message, app_user: User, assistant: Assistant) -> None:
     ctx = await gather(assistant, app_user)
     await _rich(message, screens.weight(ctx))
+    if len(ctx.weight_points) >= 2 and message.bot is not None and widgets_live.enabled(app_user):
+        if await widgets_live.show_weight(  # FR-49.3: виджет вместо PNG; не вышло — PNG (D-55)
+            message.bot, message.chat.id, ctx.weight_points, ctx.weight.timezone, ctx.goal.target
+        ):
+            return
     if len(ctx.weight_points) >= 2:  # FR-8, D-40: линия через сами замеры — нужно хотя бы два
         png = render_weight_chart(
             ctx.weight_points, tz=ctx.weight.timezone, target=ctx.goal.target
@@ -3850,6 +3855,14 @@ async def _maybe_weight_chart(
     trend = await assistant.weight_trend(app_user, limit=60)  # глубина — как у экрана (gather)
     if len(trend.logs) >= 2:
         goal = await assistant.current_goal(app_user)
+        if (
+            message.bot is not None
+            and widgets_live.enabled(app_user)
+            and await widgets_live.show_weight(
+                message.bot, message.chat.id, _weight_points(trend), trend.timezone, goal.target
+            )
+        ):
+            return  # FR-49.3: виджет вместо PNG (D-55)
         png = render_weight_chart(_weight_points(trend), tz=trend.timezone, target=goal.target)
         await message.answer_photo(BufferedInputFile(png, "weight.png"))
 

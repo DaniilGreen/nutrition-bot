@@ -28,13 +28,14 @@ from aiogram.types import TelegramObject, Update
 from app.application.assistant import Assistant
 from app.application.entities import User
 from app.bot.keyboards import open_in_app
-from app.bot.ui.widgets import today_caption, today_data
+from app.bot.ui.widgets import today_caption, today_data, weight_data
 from app.bot.widgets import template
 from app.bot.widgets.transport import AnswerWidgetQuery, EditMessageWidgetData, SendWidget
 from app.config import get_settings
 from app.domain.prefs import day_start
 from app.domain.streak import logged_streak
 from app.domain.timeframe import local_date
+from app.domain.weight_change import kg as wkg
 
 if TYPE_CHECKING:
     from app.container import Container
@@ -120,6 +121,27 @@ async def show_today(bot: Bot, chat_id: int, user: User, assistant: Assistant) -
     if old is not None and old.day == built.day and old.message_id != msg.message_id:
         with suppress(Exception):
             await bot.delete_message(chat_id, old.message_id)
+    return True
+
+
+async def show_weight(
+    bot: Bot, chat_id: int, points: list[tuple[datetime, float]], tz: str, target: str
+) -> bool:
+    """«⚖️ Вес» графиком (FR-49.3) вместо PNG. False — замеров меньше двух или не вышло:
+    вызывающий шлёт прежний PNG (D-55)."""
+    try:
+        data = weight_data(points, tz, target)
+        if data is None:
+            return False
+        last = json.loads(data)
+        await bot(SendWidget(
+            chat_id=chat_id, html=template("weight"), chat_data=data,
+            caption=f"⚖️ {wkg(last['l'])} кг · за период {wkg(last['dp'], sign=True)} кг",
+            reply_markup=open_in_app("body"),
+        ))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("widget: вес не ушёл (%s) — фолбэк на PNG", exc)
+        return False
     return True
 
 

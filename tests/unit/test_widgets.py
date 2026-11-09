@@ -595,3 +595,51 @@ async def test_маршрут_пишущего_запроса(freq, monkeypatch:
     fail_commit.clear()
     await mw(handler, Update.model_validate({"update_id": 6, "widget_query": q3}), {"bot": bot})
     assert json.loads(bot.of(AnswerWidgetQuery)[-1].data)["ok"] == 1 and len(calls) == 3
+
+
+# --- «⚖️ Вес» виджетом (FR-49.3, AC-279) -------------------------------------------------------
+
+def test_вес_данные_те_же_числа_что_текст() -> None:
+    """AC-279: точки — сами замеры, Δ — `weight_change` (те же числа, что в тексте экрана)."""
+    from app.bot.ui.widgets import weight_data
+    from app.domain.weight_change import weight_change
+
+    t0 = datetime(2026, 9, 28, 1, 30, tzinfo=UTC)  # 08:30 по Etc/GMT-7
+    pts = [(t0 + timedelta(days=1.4 * i), 86.8 - 0.05 * i) for i in range(30)]
+    d = json.loads(weight_data(pts, TZ, "cut") or "{}")
+    ch = weight_change(pts)
+    assert ch is not None and len(d["p"]) == 30 and d["p"][0] == [0.0, 86.8]
+    assert d["dp"] == ch.period_kg and d["dm"] == ch.month_kg and d["l"] == round(ch.last_kg, 1)
+    assert d["st"] == "ok" and d["a0"] == "2026-09-28" and d["h0"] == 8.5
+    assert weight_data(pts[:1], TZ, "cut") is None  # один замер — графика нет (FR-8)
+    up = json.loads(weight_data(list(reversed([(t, w) for t, w in pts])), TZ, "cut") or "{}")
+    assert up["st"] in ("ok", "bad")
+    maint = json.loads(weight_data(pts, TZ, "maintain") or "{}")
+    assert maint["st"] == "mute"
+
+
+def test_вес_120_замеров_в_бюджете() -> None:
+    """AC-279: длинная история — данные ≤ 1024 байт, Δ «за период» — по показанным замерам."""
+    from app.bot.ui.widgets import weight_data
+    from app.domain.weight_change import weight_change
+
+    t0 = datetime(2026, 5, 1, 1, 0, tzinfo=UTC)
+    pts = [(t0 + timedelta(days=i * 1.5), 90.0 - 0.031 * i) for i in range(120)]
+    text = weight_data(pts, TZ, "cut") or ""
+    d = json.loads(text)
+    assert len(text.encode()) <= LIMIT and 2 <= len(d["p"]) < 120
+    shown = pts[-len(d["p"]):]
+    ch = weight_change(shown)
+    assert ch is not None and d["dp"] == ch.period_kg
+
+
+async def test_вес_виджет_или_png(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FR-49.3/D-55: виджет ушёл — True; sendWidget упал — False (хендлер шлёт PNG)."""
+    t0 = datetime(2026, 10, 1, 1, 0, tzinfo=UTC)
+    pts = [(t0 + timedelta(days=i), 86.0 - 0.1 * i) for i in range(10)]
+    bot = FakeBot()
+    assert await live.show_weight(bot, 1, pts, TZ, "cut")  # type: ignore[arg-type]
+    sent = bot.of(SendWidget)[0]
+    assert sent.html == template("weight") and sent.caption == "⚖️ 85,1 кг · за период −0,9 кг"
+    assert not await live.show_weight(FakeBot(fail=True), 1, pts, TZ, "cut")  # type: ignore[arg-type]
+    assert not await live.show_weight(bot, 1, pts[:1], TZ, "cut")  # type: ignore[arg-type]

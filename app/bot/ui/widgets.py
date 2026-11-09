@@ -158,3 +158,45 @@ def frequent_data(
         tiles.pop()
         text = _dump({"v": 1, "t": tiles})
     return text
+
+
+def weight_data(points: list[tuple[datetime, float]], tz: str, target: str) -> str | None:
+    """`chat_data` виджета «⚖️ Вес» (FR-49.3): записанные замеры как есть (D-40).
+
+    Формат v1: "p" — [[дни от первого замера, кг], …] по настоящему времени; "a0" — ISO-дата
+    первого замера и "h0" — её час (даты точек JS считает от них); "a"/"z" — подписи краёв
+    оси; "l" — последний;
+    "dp" — Δ за период; "dm" — Δ за 4 недели или null; "st" — статус Δ (ok/bad/mute, MA-INV-20).
+    Все разности — `weight_change`, как в тексте экрана: числа не разъедутся. None — замеров
+    меньше двух (график не нужен, FR-8)."""
+    from app.domain.weight_change import weight_change
+
+    zone = ZoneInfo(tz)
+    pts = list(points)
+    while len(pts) >= 2:
+        ch = weight_change(pts)
+        assert ch is not None
+        t0 = pts[0][0]
+        d0 = t0.astimezone(zone).date()
+        first, last = d0, pts[-1][0].astimezone(zone).date()
+        status = (
+            "mute" if target == "maintain" or abs(ch.period_kg) < 0.05
+            else "ok" if (ch.period_kg < 0) == (target != "bulk") else "bad"
+        )
+        data = {
+            "v": 1,
+            "a0": d0.isoformat(),
+            "h0": round(t0.astimezone(zone).hour + t0.astimezone(zone).minute / 60, 1),
+            "a": f"{first.day} {MON[first.month - 1]}",
+            "z": f"{last.day} {MON[last.month - 1]}",
+            "p": [[round((t - t0).total_seconds() / 86400, 1), round(w, 1)] for t, w in pts],
+            "l": round(ch.last_kg, 1),
+            "dp": ch.period_kg,
+            "dm": ch.month_kg,
+            "st": status,
+        }
+        text = _dump(data)
+        if size(text) <= LIMIT:
+            return text
+        pts = pts[1:]  # старейший замер уходит; Δ «за период» — по показанным, как и было
+    return None
