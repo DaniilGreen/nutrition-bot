@@ -11,14 +11,16 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
+# Зависимости — до кода: правка `app/` не должна переустанавливать пакеты. Раньше `COPY app`
+# стоял перед `pip install`, и каждый деплой собирал образы заново (сотни МБ на образ, их два):
+# 10.11.2026 это забило диск сервера в 100% посреди деплоя. Пакет ставится editable на пустую
+# заглушку `app/`, настоящий код ложится поверх следующим слоем.
 COPY pyproject.toml ./
+RUN mkdir app && touch app/__init__.py && pip install --no-cache-dir -e ".[dev]"
 COPY app ./app
 COPY migrations ./migrations
 COPY alembic.ini ./
-
-RUN pip install --no-cache-dir -e ".[dev]"
-# Фронт — после установки зависимостей: правка HTML не должна
-# инвалидировать слой с пакетами (§5.7).
+# Фронт — последним: правка HTML не должна инвалидировать слой с пакетами (§5.7).
 COPY web ./web
 
 CMD ["python", "-m", "app.main_bot"]
