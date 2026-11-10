@@ -1448,3 +1448,22 @@ def test_отлив_и_кит_во_всех(path: _Shipped) -> None:
     assert SHEEN in html and "{{" not in html
     assert "light-dark(#34C75924,#34C7592E)" in SHEEN
 
+
+
+@pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.name)
+def test_шапка_по_базовой_линии(path: _Shipped) -> None:
+    """Владелец 11.11: дата рядом с заголовком «скачет» — крупный заголовок и мелкий текст стоят
+    на одной базовой линии. Правило `header{align-items:baseline}` НЕ работает, когда у шапки класс
+    `.r` с `align-items:center` (класс сильнее тега — так правка «Недели» 11.11 не применилась):
+    нужен либо `.r{…baseline}`, либо `header.r{…baseline}`. Строки ленты — тоже по базовой линии."""
+    html = path.read_text()
+    css = html[:html.index("</style>")]
+    head = re.search(r"<header([^>]*)>(.*?)</header>", html, re.S)
+    if head and "class=r" in head.group(1) and "class=m" in head.group(2):
+        assert (".r{display:flex;align-items:baseline" in css
+                or "header.r{align-items:baseline}" in css), path.name
+        assert not re.search(r"(^|\})header\{[^}]*align-items", css), path.name  # мёртвое правило
+    for row in (".it{", ".e{display:grid"):
+        if row in css and path.stem in ("today", "day"):
+            rule = css[css.index(row):css.index("}", css.index(row))]
+            assert "align-items:baseline" in rule, f"{path.name}: {row}"
