@@ -914,7 +914,7 @@ async def test_частое_виджет_и_фолбэк_на_клавиатур
 
 async def test_вес_хендлеры_виджет_или_png(monkeypatch: pytest.MonkeyPatch) -> None:
     """FR-49.3, AC-291, D-60: «⚖️ Вес» и запись веса с флагом — ОДИН виджет: ни rich-экрана, ни
-    текста «Вес записан», ни PNG рядом. Виджет не ушёл — rich/текст и PNG, как раньше."""
+    текста «Вес записан» рядом. Виджет не ушёл — rich/текст без картинки (PNG снят, D-63)."""
     from unittest.mock import AsyncMock
 
     from app.application.results import WeightLogged
@@ -935,7 +935,6 @@ async def test_вес_хендлеры_виджет_или_png(monkeypatch: pyte
     monkeypatch.setattr(handlers, "gather", fake_gather)
     monkeypatch.setattr(handlers, "_rich", fake_rich)
     monkeypatch.setattr(handlers.screens, "weight", lambda c: "RICH")
-    monkeypatch.setattr(handlers, "render_weight_chart", lambda *a, **k: b"png")
     monkeypatch.setattr(handlers.widgets_live, "enabled", lambda u, s=None: True)
     sent: list[bool] = [True]
     captions: list[str] = []
@@ -951,7 +950,7 @@ async def test_вес_хендлеры_виджет_или_png(monkeypatch: pyte
     assert not msg.answer_photo.await_count and rich == []  # rich перед виджетом — дубль
     sent[0] = False
     await handlers._show_weight(msg, OWNER, None)  # type: ignore[arg-type]
-    assert msg.answer_photo.await_count == 1 and rich == ["RICH"]
+    assert not msg.answer_photo.await_count and rich == ["RICH"]
 
     class A:
         async def weight_trend(self, user: User, limit: int = 14) -> WeightTrend:
@@ -969,29 +968,30 @@ async def test_вес_хендлеры_виджет_или_png(monkeypatch: pyte
     assert captions[-1] == "⚖️ Вес записан"
     sent[0] = False
     await handlers._reply_screen(msg, logged, OWNER, A())  # type: ignore[arg-type]
-    assert msg.answer.await_count == 1 and msg.answer_photo.await_count == 1
+    assert msg.answer.await_count == 1 and not msg.answer_photo.await_count
 
 
 async def test_запись_веса_текстом_один_график(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-291: «вес 85.2» текстом — график ОДИН. С 15.07 его слали и `_reply_screen`, и хендлер
+    """AC-291: «вес 85.2» текстом — ответ ОДИН. С 15.07 график слали и `_reply_screen`, и хендлер
     текста (`_maybe_weight_chart` дважды): два PNG, с флагом — два виджета веса."""
     from unittest.mock import AsyncMock
 
-    from aiogram.methods import SendPhoto
+    from aiogram.methods import SendMessage, SendPhoto
 
     from app.application.dto import Intent, ParsedMessage
     from app.bot import handlers
     from tests.unit.test_bot_reply_fix import _plain, _world
 
-    monkeypatch.setattr(handlers, "render_weight_chart", lambda *a, **k: b"png")
+    monkeypatch.setattr(handlers.widgets_live, "enabled", lambda u, s=None: True)
     w = await _world()
     for kg in (86.0, 85.6):
         await w.assistant._weights.log(w.user, kg)
     w.nlu.queue = [ParsedMessage(intent=Intent.WEIGHT, weight_kg=85.2)]
     msg = _plain("вес 85.2")
     await handlers.on_text(msg, msg.bot, w.user, w.assistant, AsyncMock(), w.state)
-    photos = [c for c in msg.bot.await_args_list if isinstance(c.args[0], SendPhoto)]
-    assert len(photos) == 1
+    sent = [c.args[0] for c in msg.bot.await_args_list]
+    assert len([c for c in sent if isinstance(c, SendWidget)]) == 1
+    assert not [c for c in sent if isinstance(c, SendPhoto | SendMessage)]
 
 
 async def test_ответ_на_t_не_ждёт_замка(monkeypatch: pytest.MonkeyPatch) -> None:

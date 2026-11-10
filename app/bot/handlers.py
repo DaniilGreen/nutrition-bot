@@ -28,7 +28,6 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
-    BufferedInputFile,
     CallbackQuery,
     ErrorEvent,
     InlineKeyboardButton,
@@ -73,7 +72,6 @@ from app.application.results import (
     WeightTrend,
 )
 from app.bot import coach_chat, quick
-from app.bot.dashboard_image import render_weight_chart  # единственный уцелевший PNG — график веса
 from app.bot.formatters import (  # текстовые подсказки внутри диалога (не экраны)
     SCAN_REFUSAL,
     format_goal_proposal,
@@ -3529,7 +3527,7 @@ async def _show_week(
 
 async def _show_weight(message: Message, app_user: User, assistant: Assistant) -> None:
     """FR-8; с флагом и ≥ 2 замерах — один виджет (FR-49.3, D-60): rich-экран с теми же числами
-    перед ним был дублем. Не вышло — rich-экран и PNG (D-55)."""
+    перед ним был дублем. Не вышло — rich-экран без графика (PNG снят, D-63)."""
     ctx = await gather(assistant, app_user)
     if (
         len(ctx.weight_points) >= 2 and message.bot is not None and widgets_live.enabled(app_user)
@@ -3539,11 +3537,6 @@ async def _show_weight(message: Message, app_user: User, assistant: Assistant) -
     ):
         return
     await _rich(message, screens.weight(ctx))
-    if len(ctx.weight_points) >= 2:  # FR-8, D-40: линия через сами замеры — нужно хотя бы два
-        png = render_weight_chart(
-            ctx.weight_points, tz=ctx.weight.timezone, target=ctx.goal.target
-        )
-        await message.answer_photo(BufferedInputFile(png, "weight.png"))
 
 
 async def _show_history(message: Message, app_user: User, assistant: Assistant) -> None:
@@ -3850,10 +3843,10 @@ async def _send_goal_card(
 async def _weight_logged(
     message: Message, app_user: User, assistant: Assistant, result: WeightLogged
 ) -> None:
-    """Вес записан (FR-7): текст и тот же график, что на «⚖️ Вес» (FR-8), если замеров ≥ 2.
-    С флагом — одним виджетом «⚖️ Вес записан» (FR-49.3, D-60): его «с прошлого» — та же
-    разность, что в тексте. Не вышло — текст и PNG (D-55). Единственное место пути: хендлеры
-    текста, голоса и ответа на карточку график сами не шлют (до 10.11 он уходил дважды)."""
+    """Вес записан (FR-7): с флагом и ≥ 2 замерах — одним виджетом «⚖️ Вес записан» (FR-49.3,
+    D-60): его «с прошлого» — та же разность, что в тексте. Иначе — текст (PNG снят, D-63).
+    Единственное место пути: хендлеры текста, голоса и ответа на карточку график сами не шлют
+    (до 10.11 он уходил дважды)."""
     trend = await assistant.weight_trend(app_user, limit=60)  # глубина — как у экрана (gather)
     pts = _weight_points(trend)
     goal = await assistant.current_goal(app_user) if len(pts) >= 2 else None
@@ -3866,9 +3859,6 @@ async def _weight_logged(
     ):
         return
     await message.answer(format_result(result))
-    if goal is not None:
-        png = render_weight_chart(pts, tz=trend.timezone, target=goal.target)
-        await message.answer_photo(BufferedInputFile(png, "weight.png"))
 
 
 async def _safe_edit(message: Message, text: str, markup: object = None) -> None:

@@ -6,11 +6,6 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# шрифт с кириллицей для рендера дашборда картинкой (Pillow)
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends fonts-dejavu-core \
-    && rm -rf /var/lib/apt/lists/*
-
 # Зависимости — до кода: правка `app/` не должна переустанавливать пакеты. Раньше `COPY app`
 # стоял перед `pip install`, и каждый деплой собирал образы заново (сотни МБ на образ, их два):
 # 10.11.2026 это забило диск сервера в 100% посреди деплоя. Пакет ставится editable на пустую
