@@ -1242,3 +1242,6 @@ def test_вес_линия_растёт_от_точки_к_точке() -> None:
     html = template("weight")
     assert "pathLength" not in html and "function grow(){" in html
     assert "if(document.body.className=='an')grow()" in html
+    # Telegram останавливает виджет, если «тяжёлых» элементов (прозрачность < 1 или идущая
+    # анимация) больше 16 — точки прячет радиус, не opacity (их бывает 60+)
+    assert "style.opacity" not in html and "setAttribute('r',j>i?0" in html
