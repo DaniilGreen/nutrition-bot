@@ -11,14 +11,14 @@ button{font:inherit;font-weight:600;border:0;border-radius:12px;background:var(-
 .nt{font-size:12px;color:var(--m);margin-top:10px;line-height:1.4}code{font:12px ui-monospace,monospace}
 .bz{opacity:.45;pointer-events:none}#ts{font-size:13px;margin-top:8px;color:var(--m);min-height:17px}
 @media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
-<div id=hd></div><header><b>🎯 Цель</b></header>
+<div id=hd></div><header><b>{{ic:goal}} Цель</b></header>
 <div class=tg id=tg></div><div id=bd></div><div id=ts></div>
 <div class=nt>Белок — якорь на твой вес, жир — не ниже 0,8 г/кг, углеводы — что осталось.<br><code>/goal 1800</code> — калории, разложу сам · <code>/goal Б Ж У</code> — калории посчитаю</div>
 <script>
 let A1=1;const TW=window.TelegramWidget;try{TW.setResizeAnchor('bottom')}catch(e){}const NU=v=>'<span class=cu data-n='+v+'>'+v+'</span>',AN=()=>{const v=!TW||TW.isActive!==!1;document.body.className=A1&&v?'an':'';if(A1&&v){A1=0;try{requestAnimationFrame(t0=>{const e=document.querySelectorAll('.cu'),f=t=>{const k=Math.min(1,(t-t0)/900);e.forEach(x=>x.textContent=Math.round(x.dataset.n*(1-(1-k)**3)));k<1&&requestAnimationFrame(f)};f(t0)})}catch(e){}}};try{TW.onEvent('activated',()=>{A1&&(window.RD||draw)()})}catch(e){}
 const W=TW,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
 K=()=>Math.random().toString(36).slice(2,8).padEnd(6,'0'),
-TG=[['cut','🔻','Похудение',''],['maintain','⚖️','Поддержание',''],['bulk','🔺','Набор','']],
+TG=[['cut','{{ic:down}}','Похудение',''],['maintain','{{ic:scale}}','Поддержание',''],['bulk','{{ic:up}}','Набор','']],
 L=['Белок','Жир','Углеводы'],CL=['--pr','--fa','--ca'];
 let D=null,B=0;
 const hp=t=>{try{t?W.HapticFeedback.notificationOccurred(t):W.HapticFeedback.selectionChanged()}catch(e){}};

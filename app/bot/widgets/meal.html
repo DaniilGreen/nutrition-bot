@@ -23,32 +23,31 @@ button{font:inherit;font-weight:600;border:0;border-radius:12px;background:var(-
 let A1=1;const TW=window.TelegramWidget;try{TW.setResizeAnchor('bottom')}catch(e){}const NU=v=>'<span class=cu data-n='+v+'>'+v+'</span>',AN=()=>{const v=!TW||TW.isActive!==!1;document.body.className=A1&&v?'an':'';if(A1&&v){A1=0;try{requestAnimationFrame(t0=>{const e=document.querySelectorAll('.cu'),f=t=>{const k=Math.min(1,(t-t0)/900);e.forEach(x=>x.textContent=Math.round(x.dataset.n*(1-(1-k)**3)));k<1&&requestAnimationFrame(f)};f(t0)})}catch(e){}}};try{TW.onEvent('activated',()=>{A1&&(window.RD||draw)()})}catch(e){}
 const W=TW,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},R=Math.round,
 T=s=>(s+'').replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';'),K=()=>Math.random().toString(36).slice(2,8).padEnd(6,'0'),C=n=>(n+'').replace('.',','),
-M={busy:'Ещё пишу…',gone:'Записи уже нет.',old:'Прошло 10 мин — не вернуть.',edited:'Уже поправили — не вернуть.',TIMEOUT:'Бот не ответил — открой «Сегодня».'};
+M={gone:'Записи уже нет.',old:'Прошло 10 мин.',edited:'Уже поправили.'};
 let D=null,B=0,P={},S=0,F={};
 const hp=t=>{try{t?W.HapticFeedback.notificationOccurred(t):W.HapticFeedback.selectionChanged()}catch(e){}},
 G=x=>P[x[0]]!=null?P[x[0]]:x[2],
 L=['Ккал','Белок','Жир','Углеводы'],CL=['--br','--pr','--fa','--ca'],
 toast=s=>{$('ts').textContent=s||''};
 function draw(){const d=D;if(!d||d.v!=1)return;AN();if(d.i[0]&&!d.i.some(x=>x[0]==S))S=d.i[0][0];const k=d.k;$('hd').textContent=d.hd||'Записал';$('at').textContent=d.at?d.at+' · '+d.dl:'';
-if(d.x){$('bd').innerHTML='<div class=c style="padding:10px 12px"><b>'+(d.nb?'📌 Вошло в набор «'+T(d.nb)+'»':'Запись удалена')+'</b><div class=m>'+(d.nb?'Карточка набора — ниже.':T(d.i.map(x=>x[1]).join(', '))+' · '+k[0]+'\u00a0ккал')+'</div></div>';$('ac').innerHTML=d.z?'<button class=bk data-q=r>⏪ Вернуть</button>':'';return}
+if(d.x){$('bd').innerHTML='<div class=c style="padding:10px 12px"><b>'+(d.nb?'Вошло в набор «'+T(d.nb)+'»':'Запись удалена')+'</b><div class=m>'+(d.nb?'':T(d.i.map(x=>x[1]).join(', '))+' · '+k[0]+'\u00a0ккал')+'</div></div>';$('ac').innerHTML=d.z?'<button class=bk data-q=r>{{ic:back}} Вернуть</button>':'';return}
 const nw=document.body.clientWidth<260,n=nw?3:4,V=d.i.length>n+1?d.i.slice(0,n):d.i;if(V!=d.i&&!V.some(x=>x[0]==S))V[n-1]=d.i.find(x=>x[0]==S);
 const h=d.i.length<2&&d.i[0],hv=h&&G(h)!=h[2]?R(h[3]*G(h)/h[2]):0;$('bd').className=d.l||nw?'l1':'';
 $('bd').innerHTML='<div class=bg>+'+(hv||NU(k[0]))+'<small>ккал</small></div><div class=mc>Б <b>'+k[1]+'</b> · Ж <b>'+k[2]+'</b> · У <b>'+k[3]+'</b>'+(d.ss?' · приём пищи <b>'+d.ss+'</b>':'')+'</div><div class=c>'+
 V.map(x=>{const g=G(x),p=g!=x[2],o=d.i.length<4||x[0]==S;return'<div class=it data-i='+x[0]+'><div class=nm>'+T(x[1])+(x[4]?' <s>≈</s>':'')+'</div><div class=m>'+(o||!x[2]?'':C(g)+'\u00a0г')+'</div><div class="kc'+(p?' pv':'')+'">'+(h?'':p?R(x[3]*g/x[2]):x[3])+'</div>'+
 (o?(x[5]?'<div class="st ed"><button data-s=-1>−</button><b'+(p?' class=pv':'')+'>'+C(g)+'\u00a0г</b><button data-s=1>+</button></div>':'<div class="m ed" style="text-align:left">'+(x[2]?C(x[2])+'\u00a0г · вес не правится':'без веса')+'</div>')+
-(d.i.length>1?'<button class=dl data-q=d>🗑</button>':'<span></span>'):'')+'</div>'}).join('')+(V.length<d.i.length?'<div class="it m" style="cursor:default;display:block">+'+(d.i.length-V.length)+' — в приложении ↓</div>':'')+'</div>'+
+(d.i.length>1?'<button class=dl data-q=d>{{ic:trash}}</button>':'<span></span>'):'')+'</div>'}).join('')+(V.length<d.i.length?'<div class="it m" style="cursor:default;display:block">+'+(d.i.length-V.length)+' в приложении ↓</div>':'')+'</div>'+
 '<div class="c dy">'+d.dy.map((r,i)=>'<div><span class=m>'+L[i]+'</span><i'+(!i&&r[0]>r[1]?' style="color:var(--dg)"':'')+'>'+r[2]+'%</i><b>'+NU(r[0])+'<s>'+(nw?'/':' / ')+r[1]+'</s></b><div class=tk><i style="width:'+Math.max(0,Math.min(100,r[2]))+'%;background:var('+CL[i]+')"></i></div></div>').join('')+'</div>';
-$('ac').innerHTML=(d.z==1?'<button class=bk data-q=r>⏪ Вернуть</button>':'')+'<button class=un data-q=u>↩️ Отменить всё</button>'}
+$('ac').innerHTML=(d.z==1?'<button class=bk data-q=r>{{ic:back}} Вернуть</button>':'')+'<button class=un data-q=u>{{ic:x}} Отменить всё</button>'}
 function send(q,el){if(!W||!W.request)return;B=1;el&&el.classList.add('bz');toast('');
-const fin=(r,e)=>{B=0;el&&el.classList.remove('bz');if(r&&r.v){D=r;for(const id in P){const x=D.i.find(x=>x[0]==id);if(!x||x[2]==P[id])delete P[id]}hp('success')}else{P={};F={};hp('error');toast(M[r?r.err:e&&e.code]||'Не вышло — попробуй ещё раз.')}draw();flush()};
+const fin=(r,e)=>{B=0;el&&el.classList.remove('bz');if(r&&r.v){D=r;for(const id in P){const x=D.i.find(x=>x[0]==id);if(!x||x[2]==P[id])delete P[id]}hp('success')}else{P={};F={};hp('error');toast(M[r?r.err:e&&e.code]||'Не вышло — ещё раз.')}draw();flush()};
 try{W.request(q+':'+K()).then(a=>fin(J(a&&a.result)||{err:'fail'}),e=>fin(null,e))}catch(e){fin(null,null)}}
 function flush(){if(B||!D||D.x)return;const x=D.i.find(x=>P[x[0]]!=null&&P[x[0]]!=x[2]&&P[x[0]]!=F[x[0]]);if(x){F[x[0]]=P[x[0]];send('m:a:'+D.m+':'+x[0]+':'+P[x[0]],document.querySelector('[data-i="'+x[0]+'"] .st'))}}
 document.addEventListener('click',ev=>{const b=ev.target.closest('button'),it=ev.target.closest('[data-i]');if(!b&&D&&ev.target.closest('.dy')){D.l=D.l?0:1;hp();draw();try{W.request('m:l:'+D.l+':'+K())}catch(e){}return}if(!b&&it&&D&&D.i.length>3){S=+it.dataset.i;hp();draw();return}if(!b||!D)return;const row=b.closest('[data-i]'),id=row&&+row.dataset.i,x=row&&D.i.find(x=>x[0]==id);
 if(b.dataset.s&&x){const g=Math.min(2000,Math.max(1,R(G(x))+10*b.dataset.s));if(g!=G(x)){P[id]=g;hp();draw();flush()}return}
-if(B){toast(M.busy);return}const q=b.dataset.q;
+if(B)return;const q=b.dataset.q;
 if(q=='d'&&x)send('m:d:'+D.m+':'+id,row);else if(q=='u'||q=='r')send('m:'+q+':'+D.m,b)});
 function load(){D=J(W&&W.chatData);P={};F={};draw()}
 function upd(){const d=J(W.chatData);if(B||!d||d.v!=1||(D&&d.rv<D.rv))return;D=d;draw()}
 if(W){W.onEvent('chatDataChanged',upd);load();try{W.ready&&W.ready()}catch(e){}}else load();
-if(!D)document.body.insertAdjacentHTML('beforeend','<p class=m>Нет данных.</p>');
 </script>

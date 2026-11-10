@@ -1334,3 +1334,20 @@ def test_плашка_недели_как_в_аппке() -> None:
     worst = json.loads(text := today_data(_stats(_worst_day()), GOAL, 91.5, Streak(1, False, 1, 1),
                                           NOW, 4, week=w))
     assert len(text.encode()) <= LIMIT and worst["w"][0] == "Перебор за неделю"
+
+
+def test_иконки_набора_вместо_эмодзи() -> None:
+    """D-81: в собранных шаблонах нет меток `{{ic:…}}` и нет эмодзи-иконок действий — свой набор
+    (контур 24×24, обводка 2); правило `.ic` одно; неизвестная иконка — ошибка сборки, не пустота."""
+    from app.bot.widgets.icons import ICONS, inline
+
+    for t in SHIPPED:
+        html = t.read_text()
+        assert "{{ic:" not in html, t.name
+        for emo in ("🗑", "⏪", "🔁", "✅", "✖", "↩", "🗒", "🎯", "🌙", "📈", "⚖", "⚡", "🔻", "🔺"):
+            assert emo not in html, f"{t.name}: {emo}"
+        if "<svg class=ic" in html:
+            assert html.count(".ic{") == 1, t.name
+    assert all(re.fullmatch(r"[MmLlHhVvCcSsAaZz0-9 .\-]+", d) for d in ICONS.values())
+    with pytest.raises(KeyError):
+        inline("<style></style>{{ic:нет}}".replace("нет", "nope"))

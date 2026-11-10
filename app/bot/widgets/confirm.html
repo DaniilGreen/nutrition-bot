@@ -14,7 +14,7 @@ button{font:inherit;font-weight:600;border:0;border-radius:12px;background:var(-
 .st{white-space:nowrap}@media (max-width:260px){.c{padding:4px 8px}.sz{font-size:11px;padding:3px 5px}.ch{gap:4px}#ac button{flex-basis:60px;font-size:13px;padding:8px 4px}}
 .bz{opacity:.45;pointer-events:none}#ts{font-size:13px;margin-top:8px;color:var(--m)}#ts:empty{display:none}.dn{font-weight:600;color:var(--ok)}
 .an .it{animation:fu .4s ease-out both}@keyframes fu{from{opacity:0;transform:translateY(6px)}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
-<header><b>🍽 Проверь и запиши</b><div class=m>размер — тапом, граммы — ± 10</div></header>
+<header><b>{{ic:plate}} Проверь и запиши</b><div class=m>размер — тапом, граммы — ± 10</div></header>
 <div id=bd></div><div id=ac></div><div id=ts></div>
 <script>
 let A1=1;const TW=window.TelegramWidget;try{TW.setResizeAnchor('bottom')}catch(e){}const NU=v=>'<span class=cu data-n='+v+'>'+v+'</span>',AN=()=>{const v=!TW||TW.isActive!==!1;document.body.className=A1&&v?'an':'';if(A1&&v){A1=0;try{requestAnimationFrame(t0=>{const e=document.querySelectorAll('.cu'),f=t=>{const k=Math.min(1,(t-t0)/900);e.forEach(x=>x.textContent=Math.round(x.dataset.n*(1-(1-k)**3)));k<1&&requestAnimationFrame(f)};f(t0)})}catch(e){}}};try{TW.onEvent('activated',()=>{A1&&(window.RD||draw)()})}catch(e){}
@@ -32,10 +32,10 @@ return'<div class="it'+(ND&&k==null?' nd':'')+'" data-i='+i+' style="animation-d
 (s?s.map((g,j)=>'<button class="sz'+(G[i]==g?' on':'')+'" data-g='+g+'>'+'SML'[j]+(nw?'·'+g:' · '+g+' г')+'</button>').join(''):'')+
 (x[6]==0?'<span class=st'+(G[i]?'':' style="visibility:hidden"')+'><button data-s=-1>−</button><b>'+G[i]+' г</b><button data-s=1>+</button></span>':x[6]==1?'<span class=m>'+G[i]+' г · вес из названия</span>':x[6]==2?'<span class=m>свои цифры</span>':'')+'</div></div>'}).join('')+'</div>'+
 '<div class=tt><span class=m>Итого ≈</span><b>'+(f?NU(R(t)):R(t))+'</b><span class=m>ккал · Б '+R(p)+(miss.length?' · без размера: '+miss.length:'')+'</span></div>';
-$('ac').innerHTML='<button class=go data-q=w>✅ Записать</button><button class=no data-q=x'+(nw?' style="flex:0 0 44px" aria-label=Отмена>✖️':'>✖️ Отмена')+'</button>';
+$('ac').innerHTML='<button class=go data-q=w>{{ic:ok}} Записать</button><button class=no data-q=x'+(nw?' style="flex:0 0 44px" aria-label=Отмена>{{ic:x}}':'>{{ic:x}} Отмена')+'</button>';
 if(miss.length&&ND)$('ts').textContent=M.need}
 function send(q,el){if(!W||!W.request||B)return;B=1;el.classList.add('bz');$('ts').textContent='';
-const fin=(r,e)=>{B=0;el.classList.remove('bz');if(r&&r.ok){hp('success');if(r.x)D={v:1,x:1};else DONE='✓ Записал — карточка ниже'}else{hp('error');if(r&&r.err=='need')ND=1;$('ts').textContent=M[r?r.err:e&&e.code]||'Не вышло — попробуй ещё раз.'}draw()};
+const fin=(r,e)=>{B=0;el.classList.remove('bz');if(r&&r.ok){hp('success');if(r.x)D={v:1,x:1};else DONE='{{ic:ok}} Записал — карточка ниже'}else{hp('error');if(r&&r.err=='need')ND=1;$('ts').textContent=M[r?r.err:e&&e.code]||'Не вышло — попробуй ещё раз.'}draw()};
 try{W.request(q+':'+K()).then(a=>fin(J(a&&a.result)||{err:'fail'}),e=>fin(null,e))}catch(e){fin(null,null)}}
 document.addEventListener('click',ev=>{const b=ev.target.closest('button');if(!b||!D||B)return;const row=b.closest('[data-i]'),i=row&&+row.dataset.i;
 if(b.dataset.g){G[i]=+b.dataset.g;hp();draw();return}

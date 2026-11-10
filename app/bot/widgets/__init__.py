@@ -24,4 +24,6 @@ def template(name: str, part: str | None = None) -> str:
     if name in PARTS:
         kind = part if part in PARTS[name] else PARTS[name][0]
         html = html.replace("<!--P-->", (_DIR / f"{name}.{kind}.html").read_text(encoding="utf-8"))
-    return html
+    from app.bot.widgets.icons import inline  # иконки набора (D-81)
+
+    return inline(html)

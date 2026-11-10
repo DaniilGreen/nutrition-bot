@@ -25,7 +25,7 @@ import json
 import re
 import time
 from datetime import date, datetime, timedelta
-from html import unescape
+from html import escape, unescape
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -149,7 +149,8 @@ def today_data(
     text = ""
     for limit in NAME_STEPS:
         rows = [
-            [idx(m.eaten_at), m.eaten_at.astimezone(tz).strftime("%M"), _name(m, limit),
+            # имя — HTML-безопасным: шаблон кладёт его в innerHTML без своего экранирования (D-81)
+            [idx(m.eaten_at), m.eaten_at.astimezone(tz).strftime("%M"), escape(_name(m, limit)),
              round(m.totals.kcal), int(any(i.is_estimate for i in m.items)),
              round(sum(i.grams or 0 for i in m.items)), round(m.totals.protein),
              round(m.totals.fat), round(m.totals.carb), m.id or 0,
