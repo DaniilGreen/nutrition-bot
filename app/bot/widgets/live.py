@@ -25,6 +25,7 @@ from typing import Any
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.application.assistant import Assistant
 from app.application.entities import User
@@ -156,9 +157,11 @@ async def show_weight(
         data = weight_data(points, tz, target)
         if data is None:
             return False
+        burn = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text="🔥 Реальный расход", callback_data="burn")]])  # FR-50: `burn.CALLBACK`
         await bot(SendWidget(
             chat_id=chat_id, html=template("weight"), chat_data=data, caption=caption,
-            reply_markup=open_in_app("body"),
+            reply_markup=open_in_app("body", burn),
         ))
     except Exception as exc:  # noqa: BLE001
         logger.warning("widget: вес не ушёл (%s) — фолбэк на PNG", exc)

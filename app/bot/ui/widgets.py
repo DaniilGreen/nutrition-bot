@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from html import unescape
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -337,3 +337,79 @@ def evening_data(
         lines.pop()
         text = _dump({**base, "nt": lines})
     return text
+
+
+def _diary_words(d: Any, since: date | None) -> tuple[str, str, int]:
+    """Сверка «ждали — показали» (`energy.diary_check`) — те же слова, что в «Итогах» аппки."""
+    from app.domain.weight_change import kg
+
+    s = f"{since.day:02d}.{since.month:02d}" if since else ""
+    if d.verdict == "waiting" and d.days < 7:
+        return "Сверка с дневником", f"Появится через неделю записей после замера {s}.", 0
+    if d.verdict == "waiting":
+        text = (
+            f"С {s} по дневнику дефицит ≈ {round(d.deficit_kcal)} ккал — около "
+            f"{kg(abs(d.expected_kg))} кг, в основном жир. Следующий замер покажет, сколько ушло."
+            if d.deficit_kcal >= 0 else
+            f"С {s} записано больше расхода на {round(-d.deficit_kcal)} ккал — около "
+            f"{kg(d.expected_kg, sign=True)} кг. Следующий замер покажет, так ли это."
+        )
+        return "Сверка с дневником", text, 0
+    if d.verdict == "few_logs":
+        return ("Сверка с дневником",
+                f"Записано {d.logged_days} дн. из {d.days} — сверять не по чему.", 0)
+    exp, got = kg(d.expected_kg, sign=True), kg(d.actual_kg or 0, sign=True)
+    if d.verdict == "agree":
+        return "Сходится", f"Ждали {exp} кг, весы показали {got}. Дневнику можно верить.", 0
+    if d.verdict == "less_lost":
+        return ("Ушло меньше, чем ждали", f"{got} кг вместо {exp}. Обычно так, если не всё "
+                "записано или расход ниже расчётного.", 1)
+    return ("Ушло больше, чем ждали", f"{got} кг вместо {exp}. Расход, похоже, выше расчётного — "
+            "или часть потери вода.", 1)
+
+
+def burn_data(ov: Any, today: date) -> str:
+    """`chat_data` виджета «🔥 Реальный расход» (FR-50): та же сводка `BodyScanService.overview`,
+    что у «Итогов» аппки (MA-INV-1) — числа и слова Python, JS рисует.
+
+    Формат v1:
+      st  none — замеров нет · wait — нет пары замеров 28–120 дней · few — мало полных дней · ok
+      t   расход по замерам, ккал/день   er  погрешность ±   in  съедено в среднем (полный день)
+      fb  расход по формуле (обмен × активность)   pp  цель по расходу (можно ставить)
+      ld/dd/nd  полных дней / дней в окне / нужно   nt  строка состояния
+      dt/dx/da  сверка дневника: заголовок, текст, 1 — тревога"""
+    from app.domain import energy
+
+    data: dict[str, Any] = {"v": 1}
+    if not ov.scans:
+        data.update(st="none", nt="Пришли фото бланка InBody — расход посчитаю по составу тела "
+                                  "между двумя замерами с зазором от 4 недель.")
+        return _dump(data)
+    if ov.burn_kcal:
+        data["fb"] = round(ov.burn_kcal)
+    sp = ov.spend
+    if sp is None or sp.verdict == "short_window":
+        base = min((s.measured_at for s in ov.scans
+                    if (today - s.measured_at.date()).days <= energy.WINDOW_MAX_DAYS),
+                   default=ov.scans[-1].measured_at)
+        due = base.date() + timedelta(days=energy.WINDOW_MIN_DAYS)
+        data.update(st="wait", nt=(
+            f"Нужен замер не раньше {due.day} {MON[due.month - 1]} — тогда расход посчитается "
+            "по двум замерам." if due > today else
+            "Следующий замер InBody даст расход: зазор с прошлым уже больше 4 недель."))
+    elif sp.verdict == "few_logs":
+        need = -(-sp.days * 8 // 10)  # ceil(0.8 × дней), как `need_days` в «Итогах»
+        data.update(st="few", ld=sp.logged_days, dd=sp.days, nd=need,
+                    nt=f"Записано {sp.logged_days} полных дн. из {sp.days}, нужно от {need}.")
+    else:
+        data.update(st="ok", t=round(sp.tdee_kcal), er=round(sp.error_kcal),
+                    **{"in": round(sp.intake_kcal)}, ld=sp.logged_days, dd=sp.days)
+        p = ov.proposal
+        if sp.proposable and p is not None and p.base == "energy" and p.changed:
+            data["pp"] = round(p.proposed.daily_kcal)
+        elif not sp.proposable:
+            data["nt"] = "Разброс пока широкий — ещё один замер через месяц, и можно будет " \
+                         "предложить цель по расходу."
+    if ov.diary is not None:
+        data["dt"], data["dx"], data["da"] = _diary_words(ov.diary, ov.diary_since)
+    return _dump(data)

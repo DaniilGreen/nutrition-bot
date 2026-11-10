@@ -140,6 +140,7 @@ from app.bot.keyboards import (
 from app.bot.states import MealStates, ProfileStates
 from app.bot.ui import gather, screens
 from app.bot.ui.kit import plural
+from app.bot.widgets import burn as widgets_burn
 from app.bot.widgets import frequent as widgets_frequent
 from app.bot.widgets import live as widgets_live
 from app.bot.widgets import meal as widgets_meal
@@ -445,6 +446,31 @@ async def cmd_week(
     message: Message, app_user: User, assistant: Assistant, scans: BodyScanService
 ) -> None:
     await _show_week(message, app_user, assistant, scans)
+
+
+@router.message(Command("burn"))
+async def cmd_burn(message: Message, app_user: User, scans: BodyScanService) -> None:
+    await _show_burn(message, app_user, scans)
+
+
+@router.callback_query(F.data == widgets_burn.CALLBACK)
+async def on_burn(callback: CallbackQuery, app_user: User, scans: BodyScanService) -> None:
+    """Кнопка «🔥 Реальный расход» под виджетом «⚖️ Вес» (FR-50)."""
+    await callback.answer()
+    if isinstance(callback.message, Message):
+        await _show_burn(callback.message, app_user, scans)
+
+
+async def _show_burn(message: Message, app_user: User, scans: BodyScanService) -> None:
+    """FR-50: с флагом — виджет; без флага или сбой — те же строки текстом."""
+    if (
+        message.bot is not None and widgets_live.enabled(app_user)
+        and await widgets_burn.show(message.bot, message.chat.id, app_user, scans)
+    ):
+        return
+    raw = await widgets_burn.data(app_user, scans)
+    await message.answer(widgets_burn.text(raw), parse_mode=None,
+                         reply_markup=open_in_app("body"))
 
 
 @router.message(Command("card"))
