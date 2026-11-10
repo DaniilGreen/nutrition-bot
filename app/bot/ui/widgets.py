@@ -20,16 +20,18 @@ rich-экранов (MA-INV-1). Полный `gather()` виджету не ну
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.application.entities import Meal
 from app.application.results import DailyStats, DayPace
+from app.bot.keyboards import weighable
 from app.bot.quick import Frequent, parse_op
 from app.bot.ui.context import est_share
 from app.bot.ui.kit import MON, WD
-from app.domain.goals import Goal
+from app.domain.goals import Goal, Remaining
 from app.domain.nutrition import macros_for_grams
 from app.domain.streak import Streak
 from app.domain.timeframe import local_date
@@ -197,3 +199,66 @@ def weight_data(points: list[tuple[datetime, float]], tz: str, target: str) -> s
             return text
         pts = pts[1:]  # старейший замер уходит; Δ «за период» — по показанным, как и было
     return None
+
+
+MEAL_NAME_STEPS = (28, 18, 12)
+
+
+def meal_data(
+    meal: Meal, left: Remaining, goal: Goal, tz: str, *, session_kcal: float | None = None,
+    undo: int = 0, deleted: bool = False,
+) -> str | None:
+    """`chat_data` карточки приёма (FR-49.4). None — не влезла в бюджет: вызывающий шлёт rich.
+
+    Формат v1 (ключи короткие — бюджет 1024 байта, ответ на запрос — те же данные + "ok"):
+      m   id записи                     at  «13:05» — время записи      dl  «вт, 10 ноя»
+      i   [[id позиции, имя, граммы, ккал, ≈ 0/1, вес правится 0/1]] — порядок записи
+      k   записью [ккал, Б, Ж, У]       l   осталось в дне записи [ккал, Б] (`Remaining`)
+      g   цель [ккал, Б]                e   съедено в дне [ккал, Б]
+      ss  ккал приёма пищи (FR-47), если записей в нём больше одной
+      z   что можно вернуть этим виджетом: 0 — ничего, 1 — позицию, 2 — запись
+      x   1 — запись удалена (карточка показывает «удалена» и «⏪ Вернуть»)
+      rv  ревизия (мс): `chatDataChanged` старше показанного виджет пропускает
+    Граммы и ккал позиции — снапшот (INV-3); JS лишь предпросматривает пропорцию (W-INV-1)."""
+    zone = ZoneInfo(tz)
+    at = meal.eaten_at.astimezone(zone)
+    can = {i.id for i in weighable(meal)}
+    t, c = meal.totals, left.consumed
+    base: dict[str, Any] = {
+        "v": 1, "m": meal.id, "at": at.strftime("%H:%M"),
+        "dl": f"{WD[at.weekday()].lower()}, {at.day} {MON[at.month - 1]}",
+        "k": [round(t.kcal), round(t.protein), round(t.fat), round(t.carb)],
+        "l": [round(left.kcal_left), round(left.protein_left)],
+        "g": [round(goal.daily_kcal), round(goal.protein_g)],
+        "e": [round(c.kcal), round(c.protein)],
+        "z": undo, "x": int(deleted),
+        "rv": time.time_ns() // 1_000_000 % 10**10,  # ревизия: старшая правка не ляжет поверх
+    }
+    if session_kcal is not None:
+        base["ss"] = round(session_kcal)
+    for limit in MEAL_NAME_STEPS:
+        items = []
+        for i in meal.items:
+            name = i.name_snapshot.strip()
+            name = name if len(name) <= limit else name[: limit - 1].rstrip() + "…"
+            grams = round(i.grams, 1) if i.grams else 0
+            items.append([i.id, name, grams, round(i.macros.kcal), int(i.is_estimate),
+                          int(i.id in can)])
+        text = _dump({**base, "i": items})
+        if size(text) <= LIMIT - 8:  # запас под "ok":1 в ответе на запрос
+            return text
+    return None
+
+
+def meal_caption(meal: Meal, left: Remaining, *, deleted: bool = False) -> str:
+    """Подпись карточки приёма (W-INV-2): что записал и остаток — текстом."""
+    if deleted:
+        return "↩️ Запись удалена"
+    names = ", ".join(
+        f"{i.name_snapshot} {i.grams:g} г" if i.grams else i.name_snapshot for i in meal.items
+    )
+    if len(names) > 120:
+        names = names[:119].rstrip() + "…"
+    rest = round(left.kcal_left)
+    tail = f"осталось {rest}" if rest >= 0 else f"перебор {-rest}"
+    return f"✅ Записал: {names} · {round(meal.totals.kcal)} ккал · {tail}"

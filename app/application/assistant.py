@@ -773,6 +773,10 @@ class Assistant:
             "adjust", after, await self._day_left(user, after.eaten_at), [old], [res[0]]
         )
 
+    async def day_left(self, user: User, eaten_at: datetime) -> Remaining:
+        """Остаток дня, в который записан приём (карточка приёма, FR-49.4) — не сегодняшнего."""
+        return await self._day_left(user, eaten_at)
+
     async def _day_left(self, user: User, eaten_at: datetime) -> Remaining:
         """Остаток ДНЯ приёма: карточка вчерашнего приёма показывает бары вчера (как при записи)."""
         days = self._stats.days_ago(user, eaten_at)

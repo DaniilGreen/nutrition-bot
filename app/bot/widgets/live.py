@@ -285,6 +285,9 @@ class Outcome:
     reply: dict[str, Any]
     commit: Callable[[], None] | None = None
     abort: Callable[[], None] | None = None
+    # После ответа виджету (сессия уже закрыта): поправить само сообщение — данные, подпись,
+    # кнопки, — чтобы открытый позже виджет показал правду, а не то, что был при отправке.
+    after: Callable[[Bot], Awaitable[None]] | None = None
 
 
 # Запросы других виджетов: префикс `data` до «:» → обработчик. Обработчик пишет через assistant;

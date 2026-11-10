@@ -144,6 +144,7 @@ from app.bot.ui import gather, screens
 from app.bot.ui.kit import plural
 from app.bot.widgets import frequent as widgets_frequent
 from app.bot.widgets import live as widgets_live
+from app.bot.widgets import meal as widgets_meal
 from app.domain.goals import (
     Goal,
     Remaining,
@@ -3674,7 +3675,14 @@ async def _send_meal_card(
     message: Message, result: MealLogged, app_user: User, assistant: Assistant
 ) -> None:
     """Карточка записи единым Rich-стилем: что записал + дневной прогресс всеми барами + кнопки.
-    Запись — часть приёма пищи из нескольких записей: строка его суммы и «📌» на весь (FR-47)."""
+    Запись — часть приёма пищи из нескольких записей: строка его суммы и «📌» на весь (FR-47).
+    С флагом виджетов — карточка виджетом (FR-49.4); не вышло — эта же rich-карточка."""
+    if (
+        message.bot is not None
+        and widgets_live.enabled(app_user)
+        and await widgets_meal.show(message.bot, message.chat.id, app_user, assistant, result)
+    ):
+        return
     ctx = await gather(assistant, app_user)
     sess = await _session(app_user, assistant, result.meal.id)
     await _rich(

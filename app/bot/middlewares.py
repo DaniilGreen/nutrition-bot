@@ -165,6 +165,7 @@ class WidgetQueryMiddleware(BaseMiddleware):
         uid, mid, data = origin
         reply: dict[str, Any] = {"err": "fail"}
         user: User | None = None
+        out: live.Outcome | None = None
         try:
             async with self._container.db.session_factory() as session:
                 assistant, users = self._container.assistant_for(session)
@@ -182,10 +183,17 @@ class WidgetQueryMiddleware(BaseMiddleware):
                     if out.commit is not None:
                         out.commit()
                     reply = out.reply
+            if not reply.get("ok"):
+                out = None
         except Exception:  # noqa: BLE001
             logger.exception("widget: пишущий запрос не обработан")
             reply = {"err": "fail"}
         await live.reply(bot, qid, reply)
+        if reply.get("ok") and out is not None and out.after is not None:
+            try:
+                await out.after(bot)
+            except Exception:  # noqa: BLE001
+                logger.exception("widget: правка сообщения виджета после запроса упала")
         if reply.get("ok") and user is not None:
             try:
                 await live.push(bot, user, reader(self._container))

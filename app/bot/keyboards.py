@@ -405,6 +405,24 @@ def meal_actions_keyboard(
     return builder.as_markup()
 
 
+def meal_widget_keyboard(
+    meal: Meal | None, session: MealSession | None = None
+) -> InlineKeyboardMarkup | None:
+    """Под виджетом карточки приёма (FR-49.4) — то, чего в самом виджете нет: «🔁 Повторить» (она
+    же связывает ответ на карточку с записью, FR-44) и «📌» по правилам `meal_actions_keyboard`.
+    Вес, «🗑» и «↩️ Отменить всё» — внутри виджета. Записи нет (удалили) — только аппка.
+    Последним рядом — «📱 Открыть в приложении» на «День» (FR-46): туда ведёт «ещё N позиций»."""
+    if meal is None or meal.id is None:
+        return open_in_app("day")
+    full = meal_actions_keyboard(meal, None, session, trash=False)
+    keep = (MEAL_REPEAT_PREFIX, DISH_SAVE_PREFIX)
+    rows = [
+        [b] for row in full.inline_keyboard for b in row
+        if (b.callback_data or "").split(":", 1)[0] in keep
+    ]
+    return open_in_app("day", InlineKeyboardMarkup(inline_keyboard=rows))
+
+
 def weighable(meal: Meal) -> list[MealItem]:
     """Позиции, вес которых можно поправить (FR-43): сохранённые и с граммами. Стейтед без веса
     масштабировать не от чего — `adjust_item` его и не возьмёт."""
