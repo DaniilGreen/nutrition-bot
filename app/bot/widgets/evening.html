@@ -11,12 +11,13 @@ body{margin:0;padding:12px 14px max(12px,env(safe-area-inset-bottom));font:15px/
 button{font:600 15px system-ui,sans-serif;border:0;border-radius:14px;padding:11px 14px;width:100%;background:var(--ac);color:var(--at);cursor:pointer;margin-top:8px}
 button[disabled]{background:var(--tr);color:var(--m)}.dn{color:var(--ok);font-weight:600}
 @media (max-width:260px){.bg{font-size:20px}.bg small{display:block;margin:0}.hr{gap:8px}#cl .m{display:none}#nt div{font-size:13px}}
-</style>
+.cu{counter-reset:n var(--n)}.cu::after{content:counter(n)}.an .cu{animation:cu 1s ease-out}@keyframes cu{from{--n:0}}.an .tk i{animation:g .9s ease-out}@keyframes g{from{width:0}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
 <header class=r><b>🌙 Итог дня</b><span class=m id=dl></span><span class=sp></span><span class=p id=sk></span></header>
 <div class=c><div class=hr id=hr></div><div class=ft id=ft></div></div>
 <div class=c id=nt></div>
 <div class=c id=cl></div>
 <script>
+let A1=1,CU=0;try{CSS.registerProperty({name:'--n',syntax:'<integer>',inherits:!1,initialValue:'0'});CU=1}catch(e){}const NU=v=>CU?'<span class=cu style="--n:'+v+'"></span>':v,AN=()=>{document.body.className=A1?'an':'';A1=0};
 const W=window.TelegramWidget,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
 T=s=>(s+'').replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';'),K=()=>Math.random().toString(36).slice(2,8).padEnd(6,'0'),
 bar=(v,g,c)=>'<div class=tk><i style="width:'+(g>0?Math.max(0,Math.min(100,v/g*100)):0)+'%;background:var('+c+')"></i></div>',
@@ -25,8 +26,8 @@ let D=null,B=0;
 function pill(){const s=D.s;$('sk').style.display=s?'':'none';$('sk').textContent=s?(s[0]?'🔥 '+s[0]+(s[1]?' ❄':'')+' · ':'')+s[2]+' из '+s[3]:''}
 function close_(t){$('cl').innerHTML=D.c?'<div class=dn>✓ День закрыт — записан полностью</div><div class=m>Отмечен как полный. Вспомнишь ещё — просто напиши в чат.</div>':
 '<div><b>Всё записал за день?</b></div><div class=m>Отметка, что записано всё: без неё неполный день не отличить от полного.</div><button id=bt>✅ Всё записал</button>'+(t?'<div class=m style="margin-top:6px">'+T(t)+'</div>':'')}
-function draw(){D=J(W&&W.chatData);if(!D||D.v!=1)return;const e=D.e,g=D.g,ov=e[0]>g[0];$('dl').textContent=D.dl;pill();
-$('hr').innerHTML='<div><div class=m>Ккал</div><div class=bg'+(ov?' style="color:var(--dg)"':'')+'>'+e[0]+'<small>из '+g[0]+'</small></div>'+bar(e[0],g[0],'--br')+'</div><div><div class=m>Белок</div><div class=bg>'+e[1]+'<small>из '+g[1]+'\u00a0г</small></div>'+bar(e[1],g[1],'--pr')+'</div>';
+function draw(){D=J(W&&W.chatData);if(!D||D.v!=1)return;AN();const e=D.e,g=D.g,ov=e[0]>g[0];$('dl').textContent=D.dl;pill();
+$('hr').innerHTML='<div><div class=m>Ккал</div><div class=bg'+(ov?' style="color:var(--dg)"':'')+'>'+NU(e[0])+'<small>из '+g[0]+'</small></div>'+bar(e[0],g[0],'--br')+'</div><div><div class=m>Белок</div><div class=bg>'+NU(e[1])+'<small>из '+g[1]+'\u00a0г</small></div>'+bar(e[1],g[1],'--pr')+'</div>';
 $('ft').innerHTML='<i class=d style="background:var(--fa);margin-left:0"></i>Жир <b>'+e[2]+'</b>/'+g[2]+'<i class=d style="background:var(--ca)"></i>Углев. <b>'+e[3]+'</b>/'+g[3];
 const nt=(D.lo?['Записано '+e[0]+'\u00a0ккал — похоже, не всё попало в бота. Кинь текстом, что ещё ел.']:[]).concat(D.nt||[]);$('nt').style.display=nt.length?'':'none';$('nt').innerHTML=nt.map(x=>'<div>'+T(x)+'</div>').join('');close_()}
 document.addEventListener('click',ev=>{if(ev.target.id!='bt'||!W||!W.request||B||!D)return;const b=ev.target;B=1;b.disabled=true;b.textContent='Закрываю…';

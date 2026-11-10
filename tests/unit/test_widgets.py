@@ -1195,3 +1195,21 @@ def test_неделя_тысячи_одним_видом() -> None:
 def test_плитка_частого_граммы_не_отрываются() -> None:
     """Хвост «180 г» — общий с текстом кнопки FR-40; неразрывный пробел ставит шаблон."""
     assert "T(x[1]).replace(' ','\\u00a0')" in template("frequent")
+
+
+@pytest.mark.parametrize("path", sorted(WIDGETS.glob("*.html")), ids=lambda p: p.name)
+def test_анимация_только_css_и_при_появлении(path: Path) -> None:
+    """D-64: анимация — CSS под классом `an`, который ставится только первым показом; счётчику
+    свойство регистрирует JS в `try` (нет `registerProperty` — число сразу финальное, D-56);
+    `prefers-reduced-motion` её снимает."""
+    html = path.read_text()
+    assert "AN=()=>{document.body.className=A1?'an':'';A1=0}" in html
+    assert "try{CSS.registerProperty(" in html
+    assert re.search(r"prefers-reduced-motion:reduce\)\{[^}]*\.an \*\{animation:none", html)
+    assert ".an " in html.split("</style>")[0]
+
+
+def test_сегодня_одинаковый_ответ_не_перерисовывает() -> None:
+    """Тяга `t:` приходит через долю секунды после показа: тот же день не должен перерисовать
+    героя и оборвать счёт (D-64)."""
+    assert "sm=K==k" in template("today") and "if(sm)return;" in template("today")
