@@ -110,11 +110,10 @@ async def build(assistant: Assistant, user: User, now: datetime | None = None) -
     stats = await assistant.today(user)
     goal = await assistant.current_goal(user)
     trend = await assistant.weight_trend(user, limit=1)
-    pace = await assistant.day_pace(user)
     streak = await assistant.streak(user)
     day = local_date(now, stats.timezone, start_h)
     weight = trend.logs[0].weight_kg if trend.logs else None
-    data = today_data(stats, goal, weight, pace, streak, now, start_h)
+    data = today_data(stats, goal, weight, streak, now, start_h)
     return Built(day.isoformat(), data)
 
 

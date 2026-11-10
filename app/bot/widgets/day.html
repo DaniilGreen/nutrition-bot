@@ -11,7 +11,7 @@ button{font:inherit;font-weight:600;border:0;border-radius:12px;background:var(-
 .dy{padding:6px 12px}.dy>div{display:grid;grid-template-columns:minmax(0,1fr) auto;font-size:13px;margin:2px 0}.dy span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pg{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:2px 0;border-top:1px solid var(--tr)}@media (max-width:260px){header b{font-size:15px}.pg .nv{height:26px}}.dy b{font-weight:600}
 .tk{grid-column:1/-1;height:4px;border-radius:2px;background:var(--tr);overflow:hidden;margin-top:2px}.tk i{display:block;height:100%}
 #ac{display:flex;gap:8px}#ac button{flex:1 1 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:8px 6px}.un{color:var(--al)}.bk{background:var(--ac);color:var(--at)}
-.rg{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:13px}.rg button{width:34px;height:28px;padding:0;font-size:18px}.rg b{min-width:58px;text-align:center}
+.rg{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:13px}.rg button{width:34px;height:28px;padding:0;font-size:18px}.rg b{min-width:58px;text-align:center}.pv{color:var(--ac)}
 .bz{opacity:.45;pointer-events:none}#ts{font-size:13px;margin-top:8px;color:var(--m);min-height:17px}
 .an .tk i{animation:g .9s ease-out}@keyframes g{from{width:0}}.an .e{animation:fu .4s ease-out both}@keyframes fu{from{opacity:0;transform:translateY(5px)}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
 <header><b id=tt></b><button class=nv data-n=1 aria-label="Предыдущий день">‹</button><button class=nv data-n=-1 aria-label="Следующий день">›</button></header>
@@ -24,27 +24,28 @@ L=['Ккал','Белок','Жир','Углеводы'],CL=['--br','--pr','--fa'
 M={gone:'Этой записи уже нет.',old:'Вернуть уже нельзя — прошло 10 минут.',edited:'Запись уже поправили — не вернуть.',bad:'Так нельзя — открой историю заново.',busy:'Уже делаю…',TIMEOUT:'Бот не ответил — проверь в «Сегодня».',RATE_LIMITED:'Слишком часто — секунду.'};
 let D=null,S=null,WH=0,B=0,P=0,RG=0;
 const hp=t=>{try{t?W.HapticFeedback.notificationOccurred(t):W.HapticFeedback.selectionChanged()}catch(e){}},
-sel=x=>S&&x[0]==S[0]&&(!S[1]||x[1]==S[1]);
+sel=x=>S&&x[0]==S[0]&&(!S[1]||x[1]==S[1]),pv=x=>S&&S[1]&&x[1]==S[1]&&x[4]&&RG!=x[4];
 function draw(){const d=D;if(!d||d.v!=1)return;const f=A1,nw=document.body.clientWidth<260,k=nw?3:4,pn=Math.ceil(d.e.length/k)||1;AN();$('tt').textContent='🗒 '+d.t;if(P>=pn)P=pn-1;
 document.querySelector('[data-n="-1"]').classList.toggle('bz',!d.da);let h='',g=-2;
 if(!d.e.length)h='<div class=m style="padding:10px 0">Ничего не записано.</div>';
 d.e.forEach((x,i)=>{if(i<P*k||i>=P*k+k)return;if(x[10]!=g){g=x[10];if(g>=0){const r=d.g[g];h+='<div class=gh>🍽 '+r[0]+' · '+(r[2]?'≈':'')+r[1]+' ккал</div>'}}
-h+='<div class="e'+(x[10]>=0?' g':'')+(sel(x)?' on':'')+'" data-i='+i+' style="animation-delay:'+i*30+'ms"><span class=m>'+x[2]+'</span><span>'+T(x[3])+'</span><b>'+(x[9]?'≈':'')+x[5]+'</b><small>'+(x[4]?x[4]+' г · ':'')+'Б'+x[6]+' Ж'+x[7]+' У'+x[8]+'</small></div>'});
+h+='<div class="e'+(x[10]>=0?' g':'')+(sel(x)?' on':'')+'" data-i='+i+' style="animation-delay:'+i*30+'ms"><span class=m>'+x[2]+'</span><span>'+T(x[3])+'</span>'+(pv(x)?'<b class=pv>'+Math.round(x[5]*RG/x[4]):'<b>'+(x[9]?'≈':'')+x[5])+'</b><small>'+(x[4]?(pv(x)?RG:x[4])+' г · ':'')+'Б'+x[6]+' Ж'+x[7]+' У'+x[8]+'</small></div>'});
 if(pn>1)h+='<div class=pg><span class=m>'+(P*k+1)+'–'+Math.min(d.e.length,P*k+k)+' из '+d.e.length+'</span><button class=nv data-p=-1'+(P?'':' style="visibility:hidden"')+'>‹</button><button class=nv data-p=1'+(P<pn-1?'':' style="visibility:hidden"')+'>›</button></div>';
 if(d.mo&&P==pn-1)h+='<div class=m style="padding:4px 0">Ещё '+d.mo+' — в приложении ↓</div>';
 $('bd').innerHTML='<div class=c>'+h+'</div><div class="c dy">'+d.dy.map((r,i)=>'<div><span>'+(nw&&i==3?'Углев.':L[i])+' · '+(f&&!i?NU(r[0]):r[0])+' / '+r[1]+'</span><b'+(!i&&r[0]>r[1]?' style="color:var(--dg)"':'')+'>'+r[2]+'%</b><div class=tk><i style="width:'+Math.max(0,Math.min(100,r[2]))+'%;background:var('+CL[i]+')"></i></div></div>').join('')+'</div>';
 const x=S&&d.e.find(sel),whole=S&&!S[1];
 const gw=x&&!whole&&x[4];
-$('rg').innerHTML='<div class=rg'+(gw?'':' style="visibility:hidden"')+'><span class=m>повторить</span><button data-g=-1>−</button><b>'+RG+' г</b><button data-g=1>+</button><span class=m>≈ '+(gw?Math.round(x[5]*RG/x[4]):0)+' ккал</span></div>';
-$('ac').innerHTML='<button class="un'+(x?'':' bz')+'" data-q=x style="flex:0 0 44px" aria-label="Убрать">🗑</button><button class="'+(x?'':'bz')+'" data-q=o>✏️ Править</button><button class="'+(x?'':'bz')+'" data-q=p>🔁 '+(whole?'Всю запись':'Повторить')+'</button>'+(d.z?'<button class=bk data-q=r style="flex:0 0 44px" aria-label="Вернуть">⏪</button>':'')}
+$('rg').innerHTML='<div class=rg'+(gw?'':' style="visibility:hidden"')+'><span class=m>вес</span><button data-g=-1>−</button><b>'+RG+' г</b><button data-g=1>+</button><span class=m>≈ '+(gw?Math.round(x[5]*RG/x[4]):0)+' ккал</span></div>';
+$('ac').innerHTML='<button class="un'+(x?'':' bz')+'" data-q=x style="flex:0 0 44px" aria-label="Убрать">🗑</button><button class="'+(x?'':'bz')+'" data-q=p>🔁 '+(whole?'Всю запись':'Повторить')+'</button>'+(d.z?'<button class=bk data-q=r style="flex:0 0 44px" aria-label="Вернуть">⏪</button>':'')}
+function flush(){if(B||!S||!S[1])return;const x=D.e.find(sel);if(x&&x[4]&&RG!=x[4])send('h:a:'+D.da+':'+x[0]+':'+x[1]+':'+RG+':'+K(),null)}
 function send(q,el){if(!W||!W.request||B)return;B=1;el&&el.classList.add('bz');
-const fin=(r,e)=>{B=0;el&&el.classList.remove('bz');if(r&&r.v){D=r;if(!D.e.some(sel))S=null;$('ts').textContent=r.tm||'';hp(r.ok?'success':'')}else{hp('error');$('ts').textContent=M[r?r.err:e&&e.code]||'Не вышло — попробуй ещё раз.'}draw()};
+const fin=(r,e)=>{B=0;el&&el.classList.remove('bz');if(r&&r.v){D=r;if(!D.e.some(sel))S=null;$('ts').textContent=r.tm||'';hp(r.ok?'success':'')}else{hp('error');$('ts').textContent=M[r?r.err:e&&e.code]||'Не вышло — попробуй ещё раз.';const x=S&&D.e.find(sel);if(x)RG=x[4]}draw();flush()};
 try{W.request(q).then(a=>fin(J(a&&a.result)||{err:'fail'}),e=>fin(null,e))}catch(e){fin(null,null)}}
-document.addEventListener('click',ev=>{if(!D||B)return;const b=ev.target.closest('button'),r=ev.target.closest('[data-i]');
+document.addEventListener('click',ev=>{if(!D)return;const b=ev.target.closest('button'),r=ev.target.closest('[data-i]');
 if(b&&b.dataset.p){P+= +b.dataset.p;hp();draw();return}
 if(b&&b.dataset.n){P=0;const n=D.da+ +b.dataset.n;if(n<0)return;WH=Math.max(WH,$('bd').offsetHeight);$('bd').style.minHeight=WH+'px';S=null;$('ts').textContent='';send('h:d:'+n,b);return}
-if(b&&b.dataset.g){RG=Math.min(2000,Math.max(1,RG+10*b.dataset.g));hp();draw();return}
-if(b&&b.dataset.q){const q=b.dataset.q,x=S&&D.e.find(sel);if(q=='r')send('h:r:'+D.da+':'+K(),b);else if(q=='o'&&x){try{W.request('o:'+x[0]+':'+K()).then(()=>hp('success'),()=>0)}catch(e){}$('ts').textContent='✏️ Карточка записи — ниже.'}else if(x)send('h:'+q+':'+D.da+':'+x[0]+':'+(S[1]||0)+(q=='p'?':'+(S[1]&&x[4]?RG:0):'')+':'+K(),b);return}
+if(b&&b.dataset.g){RG=Math.min(2000,Math.max(1,RG+10*b.dataset.g));hp();draw();flush();return}if(B)return;
+if(b&&b.dataset.q){const q=b.dataset.q,x=S&&D.e.find(sel);if(q=='r')send('h:r:'+D.da+':'+K(),b);else if(x)send('h:'+q+':'+D.da+':'+x[0]+':'+(S[1]||0)+(q=='p'?':0':'')+':'+K(),b);return}
 if(r){const x=D.e[+r.dataset.i];S=S&&S[0]==x[0]&&S[1]==x[1]&&x[11]?[x[0],0]:S&&S[0]==x[0]&&!S[1]?null:[x[0],x[1]];RG=x[4];hp();draw()}});
 if(W){W.onEvent('chatDataChanged',()=>{const d=J(W.chatData);if(d&&!B&&D&&d.da==D.da){D=d;draw()}});D=J(W.chatData);draw();try{W.ready&&W.ready()}catch(e){}}else{D=null}
 if(!D)document.body.insertAdjacentHTML('beforeend','<p class=m>Нет данных.</p>');

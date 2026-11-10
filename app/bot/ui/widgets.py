@@ -7,12 +7,11 @@ rich-экранов (MA-INV-1). Полный `gather()` виджету не ну
 
 Формат `today` (v1), ключи короткие — бюджет 1024 байта UTF-8, а кириллица по два байта:
   d   ISO-дата дня (ключ запроса `t:<d>`)        dl  «вт, 10 ноя»       at  «14:20» — свежесть
-  sh  час начала суток человека                   hn  индекс текущего часа от `sh`
+  sh  час начала суток человека
   g   цель [ккал, Б, Ж, У]                        e   съедено [ккал, Б, Ж, У]
   l   осталось [ккал, Б] (`Remaining`, со знаком)  pk  белок на кг веса (нет веса — нет ключа)
   es  % ккал оценкой (≈, §3.5 MA)
   s   серия [дней, заморозка недели 0/1, покрыто дней, из скольких] (D-44, D-57) — «N из 30»
-  n   норма по часам от `sh` (нет — MA-INV-37)    nk  «сейчас» кривой — `DayPace.today_kcal`
   h   [[индекс часа, ккал, записей]] — все часы с записями (никогда не режутся)
   it  [[индекс часа, «мм», имя, ккал, ≈ 0/1, граммы (0 — без веса), Б, Ж, У, id записи]] — свежие
       первыми (режутся с хвоста);
@@ -29,7 +28,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.application.entities import Meal
-from app.application.results import DailyStats, DayPace
+from app.application.results import DailyStats
 from app.bot.keyboards import weighable
 from app.bot.quick import Frequent, parse_op
 from app.bot.ui.context import DayContext, est_share
@@ -61,8 +60,8 @@ def size(text: str) -> int:
 
 
 def today_data(
-    stats: DailyStats, goal: Goal, weight_kg: float | None, pace: DayPace | None,
-    streak: Streak | None, now: datetime, start_h: int,
+    stats: DailyStats, goal: Goal, weight_kg: float | None, streak: Streak | None,
+    now: datetime, start_h: int,
 ) -> str:
     """`chat_data` виджета «Сегодня» (FR-49.1). Всегда ≤ LIMIT байт.
 
@@ -89,7 +88,6 @@ def today_data(
         "dl": f"{WD[day.weekday()].lower()}, {day.day} {MON[day.month - 1]}",
         "at": local.strftime("%H:%M"),
         "sh": start_h,
-        "hn": (local.hour - start_h) % 24,
         "g": [round(g.daily_kcal), round(g.protein_g), round(g.fat_g), round(g.carb_g)],
         "e": [round(c.kcal), round(c.protein), round(c.fat), round(c.carb)],
         # Остатки — тем же `Remaining`, что у rich-экрана и подписи: JS их не вычитает (W-INV-1).
@@ -101,9 +99,6 @@ def today_data(
         base["pk"] = round(c.protein / weight_kg, 1)
     if streak is not None and streak.of > 0:
         base["s"] = [streak.days, int(streak.frozen), streak.covered, streak.of]
-    if pace is not None and pace.norm:
-        base["n"] = [round(v) for v in pace.norm]
-        base["nk"] = round(pace.today_kcal)  # W-INV-1: «сейчас» — не сумма округлённых часов в JS
 
     text = ""
     for limit in NAME_STEPS:
@@ -121,9 +116,7 @@ def today_data(
             rows = rows[:-1]  # выпадает самая старая запись; её час с суммой остаётся в `h`
         if len(rows) == len(meals):
             break
-    if size(text) > LIMIT:  # ponytail: норма — первое, чем жертвуем (кривая не нарисуется)
-        base.pop("n", None)
-        base.pop("nk", None)
+    if size(text) > LIMIT:  # ponytail: лента целиком выпала — часы с суммами остались
         text = _dump({**base, "it": []})
     return text
 

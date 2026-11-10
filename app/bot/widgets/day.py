@@ -1,5 +1,5 @@
-"""«🗒 История» виджетом (FR-49.8, D-67, D-68): листание ‹ ›, 🗑 позиции, ⏪ Вернуть,
-🔁 повторить с весом.
+"""«🗒 История» виджетом (FR-49.8, D-67, D-68): листание ‹ ›, ± вес позиции сразу, 🗑, ⏪ Вернуть,
+🔁 повторить в сегодня.
 
 Те же use-case, что у кнопок rich-экрана дня: `remove_item` / `delete_meal`, `restore_meal` со
 сверкой отпечатка (FR-41), `repeat_item` / `repeat_meal` (FR-42). Числа — `day_card` (MA-INV-1).
@@ -36,6 +36,7 @@ _KEY = r"([0-9a-z]{4,10})"
 _READ = re.compile(r"h:d:([0-9]{1,3})")
 _DEL = re.compile(rf"h:x:([0-9]{{1,3}}):([0-9]{{1,10}}):([0-9]{{1,10}}):{_KEY}")
 _BACK = re.compile(rf"h:r:([0-9]{{1,3}}):{_KEY}")
+_ADJ = re.compile(rf"h:a:([0-9]{{1,3}}):([0-9]{{1,10}}):([0-9]{{1,10}}):([0-9]{{1,4}}):{_KEY}")
 _REP = re.compile(rf"h:p:([0-9]{{1,3}}):([0-9]{{1,10}}):([0-9]{{1,10}}):([0-9]{{1,4}}):{_KEY}")
 CAPTION = "🗒 История"
 
@@ -97,7 +98,8 @@ async def on_day(uid: int, mid: int, data: str, user: User, assistant: Assistant
         if da > MAX_DAYS:
             return live.Outcome({"err": "bad"})
         return live.Outcome(json.loads(await _day(assistant, user, da, slot_key in _undo)))
-    m = _DEL.fullmatch(data) or _BACK.fullmatch(data) or _REP.fullmatch(data)
+    m = (_DEL.fullmatch(data) or _BACK.fullmatch(data) or _REP.fullmatch(data)
+         or _ADJ.fullmatch(data))
     if m is None or int(m.group(1)) > MAX_DAYS:
         return live.Outcome({"err": "bad"})
     da, key = int(m.group(1)), (uid, m.groups()[-1])
@@ -146,6 +148,16 @@ async def _write(
     meal = await assistant.get_meal(user, meal_id)
     if meal is None:
         return live.Outcome({"err": "gone"})  # чужая или уже удалённая
+
+    if op == "a":  # ± в строке позиции — вес этой записи сразу (как ±10 г карточки, FR-43)
+        grams = int(m.group(4))
+        it = next((i for i in meal.items if i.id == item_id), None)
+        if it is None or not it.grams or not MIN_PORTION_G <= grams <= MAX_PORTION_G:
+            return live.Outcome({"err": "bad"})  # позиция без веса — граммы не правятся
+        if await assistant.adjust_meal_item(user, meal_id, item_id, float(grams)) is None:
+            return live.Outcome({"err": "gone"})
+        text = await _day(assistant, user, da, slot_key in _undo)
+        return live.Outcome({**json.loads(text), "ok": 1}, after=_edit(uid, mid, text))
 
     if op == "p":  # «🔁 Повторить» в сегодня с выбранным весом (FR-42, D-68), с любого дня
         grams = int(m.group(4))

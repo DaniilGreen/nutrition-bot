@@ -20,7 +20,6 @@ _COMMANDS = [
     BotCommand(command="card", description="Карточка дня"),
     BotCommand(command="history", description="История"),
     BotCommand(command="ask", description="Спросить ассистента про свои данные"),
-    BotCommand(command="undo", description="Отменить запись"),
     BotCommand(command="goal", description="Цель по калориям"),
     BotCommand(command="profile", description="Настроить цель по профилю"),
     BotCommand(command="products", description="Поправить КБЖУ продукта"),

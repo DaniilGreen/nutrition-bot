@@ -163,3 +163,20 @@ async def test_кнопка_история_виджет_или_rich(monkeypatch:
     await handlers._show_history(msg, user, assistant)
     assert shown.await_count == 1 and not assistant.day_card.await_count  # rich не собирался
     assert SendWidget  # тип ответа виджета — тот же транспорт
+
+
+async def test_вес_позиции_правится_сразу(world) -> None:  # noqa: ANN001
+    """Владелец 10.11: ± в истории правит вес записи сразу, как ±10 г карточки (тот же
+    `adjust_meal_item`, КБЖУ из снимка); строки дня приходят в ответе — бары двигаются."""
+    assistant, u, (_, eggs, _) = await world()
+    before = (await _do(assistant, u, "h:d:0"))["dy"][0][0]
+    egg = eggs.items[0]
+    r = await _do(assistant, u, f"h:a:0:{eggs.id}:{egg.id}:250:a1a1")
+    row = next(x for x in r["e"] if x[1] == egg.id)
+    assert r["ok"] == 1 and row[4] == 250 and row[5] == round(451 * 250 / 230)
+    assert r["dy"][0][0] == before + round(451 * 250 / 230) - 451
+    for bad in (f"h:a:0:{eggs.id}:{egg.id}:0:a2a2", f"h:a:0:{eggs.id}:{egg.id}:2001:a3a3",
+                f"h:a:0:{eggs.id}:999:200:a4a4"):
+        assert (await _do(assistant, u, bad))["err"] == "bad", bad
+    html = template("day")
+    assert "h:a:" in html and "data-q=o" not in html  # ✏️ Править больше не нужна

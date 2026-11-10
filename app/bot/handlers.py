@@ -501,9 +501,17 @@ async def cmd_history(message: Message, app_user: User, assistant: Assistant) ->
     await _show_history(message, app_user, assistant)
 
 
+_UNDO_MOVED = (
+    "Отдельной отмены больше нет — убрать запись можно там, где она видна: 🗑 в «🗒 История», "
+    "тап по записи в «📊 Сегодня» или «↩️ Отменить всё» под её карточкой."
+)
+
+
 @router.message(Command("undo"))
-async def cmd_undo(message: Message, app_user: User, assistant: Assistant) -> None:
-    await _show_undo_picker(message, app_user, assistant)
+async def cmd_undo(message: Message, state: FSMContext) -> None:
+    """D-73: пикер «Что отменить?» снят — отмена живёт в «Истории», «Сегодня» и карточке."""
+    await state.clear()
+    await message.answer(_UNDO_MOVED, reply_markup=main_menu_keyboard())
 
 
 @router.message(Command("products"))
@@ -619,11 +627,11 @@ async def btn_profile(message: Message, state: FSMContext) -> None:
 
 
 @router.message(F.text == BTN_UNDO)
-async def btn_undo(
-    message: Message, app_user: User, assistant: Assistant, state: FSMContext
-) -> None:
+async def btn_undo(message: Message, state: FSMContext) -> None:
+    """Старая кнопка из закэшированной клавиатуры (D-73): без перехвата «↩️ Отменить» ушло бы в
+    разбор как еда. Отвечаем, где теперь отмена, и шлём меню без неё."""
     await state.clear()
-    await _show_undo_picker(message, app_user, assistant)
+    await message.answer(_UNDO_MOVED, reply_markup=main_menu_keyboard())
 
 
 _FREQ_HEAD = "⚡ <b>Частое</b> — тап сразу запишет в сегодня."
@@ -3594,17 +3602,6 @@ async def _day_send(
             return
         logger.warning("экран дня не принят, рисую плоско: %s", exc)
         await send(screens.day(dv, rem, repeat, note, flat=True))
-
-
-async def _show_undo_picker(message: Message, app_user: User, assistant: Assistant) -> None:
-    history = await assistant.today_meals(app_user)  # #12: весь сегодняшний день, не последние 5
-    if not history.meals:
-        await message.answer("Нечего отменять.")
-        return
-    await message.answer(
-        _PICKER_HEAD,
-        reply_markup=undo_picker_keyboard(history.meals, history.timezone),
-    )
 
 
 async def _send_typing(message: Message) -> None:

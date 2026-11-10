@@ -100,13 +100,13 @@ def test_данные_худшего_дня_в_бюджете() -> None:
     """AC-269: 20 записей, имена по 99 символов — ≤ 1024 байт, все часы на месте, «ещё N»:
     записей в часах больше, чем в ленте, — виджет пишет «ещё N — в приложении»."""
     meals = _worst_day()
-    text = today_data(_stats(meals), GOAL, 91.5, PACE, Streak(127, True, 28, 30), NOW, 4)
+    text = today_data(_stats(meals), GOAL, 91.5, Streak(127, True, 28, 30), NOW, 4)
     assert len(text.encode()) <= LIMIT
     d = json.loads(text)
     assert sum(n for _, _, n in d["h"]) == 20 and len(d["it"]) < 20
     assert abs(sum(k for _, k, _ in d["h"]) - sum(m.totals.kcal for m in meals)) <= len(d["h"])
     assert "x" not in d and "w" not in d  # мёртвые ключи не возвращаются
-    assert "n" in d and len(d["n"]) == 24
+    assert "n" not in d and "nk" not in d  # кривая темпа снята (D-73)
     assert all(len(row[2]) <= 22 for row in d["it"])
 
 
@@ -116,23 +116,20 @@ def test_данные_обычного_дня() -> None:
         _meal(datetime(2026, 11, 10, 2, 12, tzinfo=UTC), "Овсянка", 420, est=True),  # 09:12
         _meal(datetime(2026, 11, 10, 6, 5, tzinfo=UTC), "Курица", 700),  # 13:05
     ]
-    d = json.loads(today_data(_stats(meals), GOAL, 91.5, PACE, Streak(3, False, 3, 3), NOW, 4))
+    d = json.loads(today_data(_stats(meals), GOAL, 91.5, Streak(3, False, 3, 3), NOW, 4))
     assert d["d"] == "2026-11-10" and d["dl"] == "вт, 10 ноя" and d["at"] == "14:20"
-    assert d["hn"] == 10  # 14:00 − начало суток 4:00
     assert d["g"] == [2200, 183, 80, 200] and d["e"][0] == 1120
     assert d["es"] == 38  # 420 из 1120 — оценкой
     assert d["h"] == [[5, 420, 1], [9, 700, 1]]
-    assert d["nk"] == 990  # «сейчас» кривой — число Python (`DayPace.today_kcal`), W-INV-1
     # свежие первыми; граммы и Б/Ж/У записи — Python (W-INV-1), под строкой «100 г · Б35 Ж23 У88»
     assert d["it"][0] == [9, "05", "Курица", 700, 0, 100, 35, 23, 88, meals[1].id]
     assert d["it"][1] == [5, "12", "Овсянка", 420, 1, 100, 21, 14, 52, meals[0].id]
     assert d["s"] == [3, 0, 3, 3] and d["pk"] == round(d["e"][1] / 91.5, 1)
 
 
-def test_без_нормы_нет_кривой_и_серии() -> None:
-    """MA-INV-37: нет пяти дошедших дней — `n` нет; серия 0 — пилюли нет."""
-    empty = DayPace(show=False, hour=9, norm_kcal=0, today_kcal=0, days_used=2)
-    d = json.loads(today_data(_stats([]), GOAL, None, empty, Streak(0, False), NOW, 4))
+def test_пустой_день_без_серии() -> None:
+    """Серия 0 — пилюли нет; веса нет — нет г/кг; лента и часы пустые."""
+    d = json.loads(today_data(_stats([]), GOAL, None, Streak(0, False), NOW, 4))
     assert "n" not in d and "s" not in d and "pk" not in d and d["it"] == [] and d["h"] == []
 
 
@@ -408,8 +405,8 @@ async def test_handlers_today_виджет_или_rich(monkeypatch: pytest.Monke
 
 
 async def test_build_на_настоящем_ассистенте(fake_container) -> None:  # noqa: ANN001
-    """Вся цепочка `live.build` на настоящих сервисах (фейковые репозитории): норма темпа
-    приходит целиком при ≥ 5 дошедших днях, серия считается, числа совпадают с `today()`."""
+    """Вся цепочка `live.build` на настоящих сервисах (фейковые репозитории): серия считается,
+    числа совпадают с `today()`; кривой темпа в данных нет (D-73)."""
     from tests.e2e.test_api_pace import _history
 
     assistant, users = fake_container.assistant_for(None)
@@ -417,14 +414,10 @@ async def test_build_на_настоящем_ассистенте(fake_container
     _history(fake_container.meals, u.id, days=8, kcal_per_day=2000)
     built = await live.build(assistant, u)
     d = json.loads(built.data)
-    assert len(d["n"]) == 24 and d["n"][-1] == 2000
+    assert "n" not in d
     assert d["s"][:2] == [8, 0]  # восемь дней подряд; сегодня ещё пусто — не рвёт и не считается
     today = await assistant.today(u)
     assert d["l"][0] == round(today.remaining.kcal_left)
-    thin = await users.get_or_create(telegram_id=12, name="y", locale="ru",
-                                     timezone="Europe/Moscow")
-    _history(fake_container.meals, thin.id, days=2, kcal_per_day=2000)
-    assert "n" not in json.loads((await live.build(assistant, thin)).data)  # MA-INV-37
 
 
 async def test_middleware_ловит_widget_query() -> None:
@@ -1045,10 +1038,9 @@ async def test_серия_по_записям_и_закрытым_дням(fake_
 
 def test_серия_без_истории_пилюли_нет() -> None:
     """Ни одной записи — ни серии, ни покрытия: ключа `s` в данных нет."""
-    empty = DayPace(show=False, hour=9, norm_kcal=0, today_kcal=0, days_used=0)
-    d = json.loads(today_data(_stats([]), GOAL, None, empty, Streak(0, False), NOW, 4))
+    d = json.loads(today_data(_stats([]), GOAL, None, Streak(0, False), NOW, 4))
     assert "s" not in d
-    d = json.loads(today_data(_stats([]), GOAL, None, empty, Streak(0, True, 20, 29), NOW, 4))
+    d = json.loads(today_data(_stats([]), GOAL, None, Streak(0, True, 20, 29), NOW, 4))
     assert d["s"] == [0, 1, 20, 29]  # серия порвалась, покрытие осталось
 
 
@@ -1139,7 +1131,7 @@ def _builders() -> dict[str, str]:
     m = meals[0]
     m.id = 9
     return {
-        "today": today_data(_stats(meals), GOAL, 91.5, PACE, Streak(3, True, 3, 3), NOW, 4),
+        "today": today_data(_stats(meals), GOAL, 91.5, Streak(3, True, 3, 3), NOW, 4),
         "weight": weight_data([(t0 + timedelta(days=i), 86 - i / 10) for i in range(30)], TZ,
                               "cut") or "",
         "meal": meal_data(m, _stats(meals).remaining, TZ, session_kcal=900, undo=1) or "",
@@ -1245,3 +1237,11 @@ def test_вес_линия_растёт_от_точки_к_точке() -> None:
     # Telegram останавливает виджет, если «тяжёлых» элементов (прозрачность < 1 или идущая
     # анимация) больше 16 — точки прячет радиус, не opacity (их бывает 60+)
     assert "style.opacity" not in html and "setAttribute('r',j>i?0" in html
+
+
+def test_неделя_листание_не_растит_виджет() -> None:
+    """D-73: высоту при листании держим по `<html>` — у `body` отступы, и мерить по нему значило
+    прибавлять их на каждом листании («чем дальше листаешь, тем выше»)."""
+    html = template("week")
+    assert "document.body.style.minHeight" not in html
+    assert "const de=document.documentElement;WH=Math.max(WH,de.offsetHeight)" in html
