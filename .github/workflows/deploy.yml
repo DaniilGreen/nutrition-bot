@@ -1,9 +1,12 @@
-# Пуш в main → сервер подтягивает код и перезапускает стек.
+# Пуш в main → CI собирает образ → сервер тянет его, подтягивает код и перезапускает стек.
 #
-# ponytail: без раннеров и registry — ssh + git pull + compose. Для двух пользователей
-# полноценный пайплайн (build → push в registry → pull) лишний слой; потолок такой
-# схемы — один сервер, появится второй → тогда registry.
+# Образ собирается здесь, а не на сервере (D-59): 1 ядро и 1 ГБ на два бота — сборка там
+# загоняла обоих в своп, а диск в 89–94 %. ghcr бесплатен, вход — токеном самого прогона.
 name: deploy
+
+permissions:
+  contents: read
+  packages: write
 
 on:
   push:
@@ -62,8 +65,32 @@ jobs:
           # каждая из которых уже доезжала до прода (web/responsive.md).
           node web/check.mjs
 
-  deploy:
+  # Образ — на раннере (D-59). Кэш слоёв живёт в GitHub Actions: правка кода не трогает
+  # слой пакетов, он пересобирается только при правке pyproject.toml или Dockerfile.
+  image:
     needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/daniilgreen/nutrition-bot:${{ github.sha }}
+            ghcr.io/daniilgreen/nutrition-bot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: image
     if: github.event_name != 'pull_request'   # PR только проверяем, катит только main
     runs-on: ubuntu-latest
     steps:
@@ -71,23 +98,29 @@ jobs:
         env:
           SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          ssh -o BatchMode=yes root@"$SSH_HOST" 'bash -s' <<'REMOTE'
+          # Токен прогона живёт, пока идёт job: им логинимся, тянем образ и сразу выходим —
+          # на сервере не остаётся долгоживущего ключа к registry.
+          printf '%s' "$GHCR_TOKEN" | ssh -o BatchMode=yes root@"$SSH_HOST" \
+            "docker login ghcr.io -u ${{ github.actor }} --password-stdin >/dev/null"
+          ssh -o BatchMode=yes root@"$SSH_HOST" "IMAGE_TAG=${{ github.sha }} bash -s" <<'REMOTE'
           set -euo pipefail
+          export IMAGE_TAG
           cd /opt/burnfat
+          COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
           git fetch --quiet origin main
           git reset --hard --quiet origin/main   # деплой = точная копия main
-          docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
-          docker image prune -f >/dev/null       # 10 ГБ диска: старые слои иначе забьют его
-          # Кэш сборки `image prune` не трогает, а он растёт ~120 МБ за деплой:
-          # шесть деплоев за 05.09.2026 дали 739 МБ и загнали диск в 96%.
-          # Не чистим догола — на нём держится тридцатисекундный деплой; держим потолок.
-          docker builder prune -f --keep-storage=512MB >/dev/null 2>&1 || true
+          pulled=0; $COMPOSE pull --quiet bot api && pulled=1
+          docker logout ghcr.io >/dev/null
+          [ "$pulled" = 1 ] || { echo "образ $IMAGE_TAG не скачался"; exit 1; }
+          $COMPOSE up -d --no-build
+          docker image prune -f >/dev/null       # 10 ГБ диска: прошлый образ иначе останется
           REMOTE
 
       - name: verify
@@ -100,6 +133,9 @@ jobs:
           ssh -o BatchMode=yes root@"$SSH_HOST" '
             cd /opt/burnfat
             docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
+            # Бот обязан бежать на образе ЭТОГО коммита, а не на прошлом.
+            img=$(docker inspect -f "{{.Config.Image}}" "$(docker compose ps -q bot)")
+            case "$img" in *:${{ github.sha }}) ;; *) echo "бот на образе $img"; exit 1 ;; esac
             for i in $(seq 1 18); do
               docker compose logs --since 3m bot | grep -q "Run polling" && exit 0
               sleep 5
