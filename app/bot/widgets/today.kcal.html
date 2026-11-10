@@ -1,4 +1,4 @@
-<style>.bg{font-size:clamp(24px,12vw,44px);font-weight:700;letter-spacing:-1px;line-height:1.05;margin-top:2px}.bg small{font-size:14px;color:var(--m);font-weight:500;margin-left:2px}#hero .bg{font-size:clamp(32px,15vw,56px)}.ft:empty{display:none}</style>
+<style>.bg{font-size:clamp(24px,12vw,44px);font-weight:700;letter-spacing:-1px;line-height:1.05;margin-top:2px}.bg small{font-size:14px;color:var(--m);font-weight:500;margin-left:2px}#hero .bg{font-size:clamp(32px,15vw,56px)}</style>
 <script>
-function hero(){const g=D.g,e=D.e,lk=D.l[0];$('hero').innerHTML='<div class=bg'+(lk<0?' style="color:var(--dg)"':'')+'>'+NU(Math.abs(lk))+'</div><div class=mi>ккал '+(lk<0?'перебор':'осталось')+' · белка ещё '+Math.max(0,D.l[1])+' г</div>'+bar(e[0],g[0],'--br');$('ft').innerHTML=''}
+function hero(){const g=D.g,e=D.e,lk=D.l[0];$('hero').innerHTML='<div class=bg'+(lk<0?' style="color:var(--dg)"':'')+'>'+NU(Math.abs(lk))+'</div><div class=mi>ккал '+(lk<0?'перебор':'осталось')+' · белка ещё '+Math.max(0,D.l[1])+' г</div>'+bar(e[0],g[0],'--br')+(D.w&&D.w[4]?'<div class=mi>'+D.w[4]+'</div>':'');$('ft').innerHTML=''}
 </script>

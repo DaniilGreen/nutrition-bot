@@ -146,7 +146,7 @@ def test_данные_обычного_дня() -> None:
     # последнее — id позиции: запись из одной позиции с весом правится прямо в «Сегодня» (D-74)
     assert d["it"][0] == [9, "05", "Курица", 700, 0, 100, 35, 23, 88, meals[1].id, 0]
     assert d["it"][1] == [5, "12", "Овсянка", 420, 1, 100, 21, 14, 52, meals[0].id, 0]
-    assert d["s"] == [3, 0, 3, 3] and d["pk"] == round(d["e"][1] / 91.5, 1)
+    assert d["s"] == "🔥 3 дн. подряд" and d["pk"] == round(d["e"][1] / 91.5, 1)
 
 
 def test_имя_записи_не_режется_без_нужды() -> None:
@@ -244,6 +244,9 @@ class FakeAssistant:
 
     async def day_pace(self, user: User) -> DayPace:
         return PACE
+
+    async def week_balance(self, user: User, weeks_ago: int = 0, *, bmr_kcal=None):  # noqa: ANN001, ANN201
+        return None  # плашку недели проверяет `test_плашка_недели` на `week_strip` (D-80)
 
     async def streak(self, user: User) -> Streak:
         return Streak(12, False, 28, 30)
@@ -446,7 +449,7 @@ async def test_build_на_настоящем_ассистенте(fake_container
     built = await live.build(assistant, u)
     d = json.loads(built.data)
     assert "n" not in d
-    assert d["s"][:2] == [8, 0]  # восемь дней подряд; сегодня ещё пусто — не рвёт и не считается
+    assert d["s"] == "🔥 8 дн. подряд"  # восемь дней подряд; сегодня ещё пусто — не рвёт и не считается
     today = await assistant.today(u)
     assert d["l"][0] == round(today.remaining.kcal_left)
 
@@ -1068,7 +1071,7 @@ def test_серия_без_истории_пилюли_нет() -> None:
     d = json.loads(today_data(_stats([]), GOAL, None, Streak(0, False), NOW, 4))
     assert "s" not in d
     d = json.loads(today_data(_stats([]), GOAL, None, Streak(0, True, 20, 29), NOW, 4))
-    assert d["s"] == [0, 1, 20, 29]  # серия порвалась, покрытие осталось
+    assert d["s"] == "20 из 29 дн."  # серия порвалась, покрытие осталось (D-77)
 
 
 @pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.name)
@@ -1290,3 +1293,42 @@ async def test_вид_панели_как_в_аппке(monkeypatch: pytest.Monk
     assert sent.html == template("today", hero or "bars") and "<!--P-->" not in sent.html
     assert json.loads(sent.chat_data)["f"] == ["Приёмов", 2]
     assert ("function hero(){" in sent.html) and sent.html.count("function hero(){") == 1
+
+
+def test_плашка_недели_как_в_аппке() -> None:
+    """AC-303, D-80: плашка «Сегодня» — правила `weekShown`/`weekRight`/`weekLine` аппки на том же
+    `week_balance`: перебор и запас с «до воскресенья по N в день», мало записей, пол, понедельник."""
+    from datetime import date as D_
+
+    from app.bot.ui.widgets import week_strip
+    from app.domain.week import balance
+
+    week = [D_(2026, 11, 9) + timedelta(days=i) for i in range(7)]  # пн 9 … вс 15
+
+    def mk(kcal: list, goal: float = 2176) -> list:
+        return list(zip(week, kcal, [goal] * 7, strict=True))
+
+    # пятница, пн–чт по 2300 — перебор 496; сегодня пусто — «с сегодня по»
+    w = balance(mk([2300] * 4 + [None, None, None]), today=week[4])
+    s = week_strip(w, week[4])
+    assert s is not None and s[0] == "Перебор за неделю" and s[1] == "496 ккал" and s[2] == 1
+    assert s[3] == f"до воскресенья\nс сегодня по {round(w.per_day_kcal)}\nв день"
+    assert s[4] == f"Неделя: перебор 496 · до вс по {round(w.per_day_kcal)}"
+    # запас
+    r = week_strip(balance(mk([1800] * 4 + [None, None, None]), today=week[4]), week[4])
+    assert r is not None and r[0] == "Запас на неделе" and r[2] == 0
+    # понедельник — плашки нет (неделя только началась), как у аппки
+    assert week_strip(balance(mk([1800] + [None] * 6), today=week[0]), week[0]) is None
+    # до сегодня записей нет — плашки нет
+    assert week_strip(balance(mk([None, None, 2000] + [None] * 4), today=week[2]), week[2]) is None
+    # мало записей
+    few = week_strip(balance(mk([1500, None, None, 900, None, None, None]), today=week[3]), week[3])
+    assert few is not None and few[3] == "мало записей" and few[4] == ""
+    # пол: «неделю уже не догнать», строки «до вс» нет
+    o = week_strip(balance(mk([2176] * 4 + [6000, None, None]), today=week[4], bmr_kcal=1925), week[4])
+    assert o is not None and o[3].startswith("неделю уже не догнать") and "до вс" not in o[4]
+    assert week_strip(None, week[4]) is None
+    # худший день + плашка — данные всё равно в бюджете: выпадают старые записи, не плашка
+    worst = json.loads(text := today_data(_stats(_worst_day()), GOAL, 91.5, Streak(1, False, 1, 1),
+                                          NOW, 4, week=w))
+    assert len(text.encode()) <= LIMIT and worst["w"][0] == "Перебор за неделю"

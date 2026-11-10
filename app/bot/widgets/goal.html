@@ -10,7 +10,7 @@ button{font:inherit;font-weight:600;border:0;border-radius:12px;background:var(-
 .lg{flex:1 1 140px;min-width:0}.lg div{padding:4px 0;font-size:14px}.lg b{font-weight:600}.lg .m{white-space:nowrap}.lg i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
 .nt{font-size:12px;color:var(--m);margin-top:10px;line-height:1.4}code{font:12px ui-monospace,monospace}
 .bz{opacity:.45;pointer-events:none}#ts{font-size:13px;margin-top:8px;color:var(--m);min-height:17px}
-.an .ar{animation:ar .9s ease-out both}@keyframes ar{from{stroke-dasharray:0 264}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
+@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
 <div id=hd></div><header><b>🎯 Цель</b></header>
 <div class=tg id=tg></div><div id=bd></div><div id=ts></div>
 <div class=nt>Белок — якорь на твой вес, жир — не ниже 0,8 г/кг, углеводы — что осталось.<br><code>/goal 1800</code> — калории, разложу сам · <code>/goal Б Ж У</code> — калории посчитаю</div>
@@ -24,10 +24,11 @@ let D=null,B=0;
 const hp=t=>{try{t?W.HapticFeedback.notificationOccurred(t):W.HapticFeedback.selectionChanged()}catch(e){}};
 function draw(n){D=n||D||J(W&&W.chatData);if(!D||D.v!=1)return;const d=D,f=A1;AN();$('hd').textContent=d.hd||'';
 $('tg').innerHTML=TG.map(t=>'<button class="'+(t[0]==d.tg?'on':'')+(d.wk?'':' bz')+'" data-g='+t[0]+'><span>'+t[1]+'</span>'+t[document.body.clientWidth<260?3:2]+'</button>').join('');
-let o=0;const arcs=d.m.map((r,i)=>{const len=264*r[2]/100,s='<circle class=ar cx=56 cy=56 r=42 fill=none stroke="var('+CL[i]+')" stroke-width=14 stroke-dasharray="'+len.toFixed(1)+' 264" stroke-dashoffset="'+(-o).toFixed(1)+'"/>';o+=len;return s}).join('');
+let o=0;const arcs=d.m.map((r,i)=>{const len=264*r[2]/100,s='<circle class=ar data-l='+len.toFixed(1)+' data-o='+(-o).toFixed(1)+' cx=56 cy=56 r=42 fill=none stroke="var('+CL[i]+')" stroke-width=14 stroke-dasharray="'+len.toFixed(1)+' 264" stroke-dashoffset="'+(-o).toFixed(1)+'"/>';o+=len;return s}).join('');
 $('bd').innerHTML='<div class=c><div class=dn><svg viewBox="0 0 112 112"><circle cx=56 cy=56 r=42 fill=none stroke="var(--tr)" stroke-width=14 />'+arcs+'</svg><div><b>'+(f?NU(d.k):d.k)+'</b><span class=m>ккал</span></div></div><div class=lg>'+
 d.m.map((r,i)=>'<div><i style="background:var('+CL[i]+')"></i>'+L[i]+' <b>'+r[0]+' г</b><span class=m>'+r[1]+' · '+r[2]+'%</span></div>').join('')+'</div></div>';
-if(!d.wk)$('ts').textContent='Сменить цель — после первого веса: «вес 86.8».'}
+if(!d.wk)$('ts').textContent='Сменить цель — после первого веса: «вес 86.8».';
+if(f&&document.body.className=='an')try{requestAnimationFrame(t0=>{const c=document.querySelectorAll('.ar'),g=t=>{const q=1-(1-Math.min(1,(t-t0)/900))**3;c.forEach(x=>{x.setAttribute('stroke-dasharray',x.dataset.l*q+' 264');x.setAttribute('stroke-dashoffset',x.dataset.o*q)});q<1&&requestAnimationFrame(g)};g(t0)})}catch(e){}}
 document.addEventListener('click',ev=>{const b=ev.target.closest('[data-g]');if(!b||!D||B||b.dataset.g==D.tg||!W||!W.request)return;B=1;b.classList.add('bz');$('ts').textContent='';
 const fin=(r,e)=>{B=0;b.classList.remove('bz');if(r&&r.v){hp('success');draw(r)}else{hp('error');$('ts').textContent=r&&r.err=='noweight'?'Сначала запиши вес — «вес 86.8».':'Не вышло — попробуй ещё раз.'}};
 try{W.request('g:t:'+b.dataset.g+':'+K()).then(a=>fin(J(a&&a.result)),e=>fin(null,e))}catch(e){fin(null,null)}});

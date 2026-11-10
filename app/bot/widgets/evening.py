@@ -26,7 +26,7 @@ from aiogram.exceptions import TelegramBadRequest
 from app.application.assistant import Assistant
 from app.application.entities import User
 from app.bot.ui.context import DayContext
-from app.bot.ui.widgets import LIMIT, evening_data, size
+from app.bot.ui.widgets import LIMIT, evening_data, size, streak_pill
 from app.bot.widgets import live, template
 from app.bot.widgets.transport import EditMessageWidgetData, SendWidget
 from app.domain.prefs import day_start
@@ -76,7 +76,7 @@ async def on_close(
     streak = await assistant.streak(user)
     reply: dict[str, Any] = {"ok": 1}
     if streak.of > 0:  # как `evening_data`: нет истории — нет пилюли, а не «0 из 0»
-        reply["s"] = [streak.days, int(streak.frozen), streak.covered, streak.of]
+        reply["s"] = streak_pill(streak)
     sent = _SENT.get((uid, mid))
 
     async def after(bot: Bot) -> None:

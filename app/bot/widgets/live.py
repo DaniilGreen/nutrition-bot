@@ -112,8 +112,13 @@ async def build(assistant: Assistant, user: User, now: datetime | None = None) -
     streak = await assistant.streak(user)
     day = local_date(now, stats.timezone, start_h)
     weight = trend.logs[0].weight_kg if trend.logs else None
+    # Плашка недели (D-80): тот же обмен из замеров, что у `/api/day`, — сервис замеров
+    # кладут в `EXTRA` middleware и открывалка пуша; нет его — пол без замера, как у `gather`.
+    scans = (EXTRA.get() or {}).get("scans")
+    bmr = await scans.bmr(user) if scans is not None else None
+    week = await assistant.week_balance(user, 0, bmr_kcal=bmr) if goal.daily_kcal > 0 else None
     data = today_data(stats, goal, weight, streak, now, start_h,
-                      foot=sanitize(user.ui_prefs)["foot_third"])
+                      foot=sanitize(user.ui_prefs)["foot_third"], week=week)
     return Built(day.isoformat(), data)
 
 

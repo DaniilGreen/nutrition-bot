@@ -37,6 +37,7 @@ def reader(container: Container) -> Callable[[], AbstractAsyncContextManager[Ass
     @asynccontextmanager
     async def open_() -> AsyncIterator[Assistant]:
         async with container.db.session_factory() as session:
+            live.EXTRA.set({"scans": container.body_scans_for(session)})  # плашка недели (D-80)
             yield container.assistant_for(session)[0]
 
     return open_
@@ -64,6 +65,7 @@ class ServicesMiddleware(BaseMiddleware):
             )
             data["assistant"] = assistant
             data["scans"] = self._container.body_scans_for(session)
+            live.EXTRA.set({"users": users, "scans": data["scans"]})  # сборке «Сегодня» (D-80)
             data["users"] = users
             data["app_user"] = user
             data["session"] = session

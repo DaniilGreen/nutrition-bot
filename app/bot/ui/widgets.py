@@ -11,7 +11,8 @@ rich-экранов (MA-INV-1). Полный `gather()` виджету не ну
   g   цель [ккал, Б, Ж, У]                        e   съедено [ккал, Б, Ж, У]
   l   осталось [ккал, Б] (`Remaining`, со знаком)  pk  белок на кг веса (нет веса — нет ключа)
   f   третья ячейка подвала [подпись, значение]: «Вес» / «Приёмов» (`foot_third`, D-78)
-  s   серия [дней, заморозка недели 0/1, покрыто дней, из скольких] (D-44, D-57) — «N из 30»
+  w   плашка недели (`week_strip`, D-80); нет ключа — плашки нет
+  s   пилюля серии словами: «🔥 76 дн. подряд ❄» / «28 из 30 дн.» (D-44, D-57, D-77)
   h   [[индекс часа, ккал, записей]] — все часы с записями (никогда не режутся)
   it  [[индекс часа, «мм», имя, ккал, ≈ 0/1, граммы (0 — без веса), Б, Ж, У, id записи, id позиции
       (запись из одной позиции с весом — её вес правится прямо в виджете, D-74; иначе 0)]] — свежие
@@ -40,6 +41,7 @@ from app.domain.nutrition import macros_for_grams
 from app.domain.streak import Streak
 from app.domain.timeframe import local_date
 from app.domain.value_objects import Macros
+from app.domain.week import WeekBalance
 
 LIMIT = 1024  # байт UTF-8 на chat_data / ответ запроса (Bot API 10.4)
 # Имя целиком, пока влезает в бюджет: по ширине строку режет CSS (`text-overflow`); ступени
@@ -62,9 +64,44 @@ def size(text: str) -> int:
     return len(text.encode())
 
 
+def streak_pill(streak: Streak) -> str:
+    """Пилюля серии словами (D-77): «🔥 76 дн. подряд», серии нет — покрытие «28 из 30 дн.»."""
+    if streak.days:
+        return f"🔥 {streak.days} дн. подряд" + (" ❄" if streak.frozen else "")
+    return f"{streak.covered} из {streak.of} дн."
+
+
+def week_strip(w: WeekBalance | None, today: date) -> list[Any] | None:
+    """Плашка недели «Сегодня» (D-80) — правила `weekShown`/`weekRight`/`weekLine` аппки (§6.23):
+    [заголовок, число, перебор 0/1, правая колонка строками, строка для «Только калорий"]."""
+    if w is None or not w.goal_kcal or w.verdict == "empty" or w.days[0].day == today:
+        return None
+    if not any(d.kcal is not None and d.day < today for d in w.days):
+        return None
+    if w.verdict == "few_logs":
+        return [f"Неделя · записано {w.logged_days} дн.", "", 0, "мало записей", ""]
+    over = w.balance_kcal > 0
+    t = next((d for d in w.days if d.day == today), None)
+    today_in = t is not None and not t.over  # сегодня ещё не в балансе — оно «оставшееся»
+    per = None if w.per_day_kcal is None else round(w.per_day_kcal)
+    if w.floor_hit:
+        right = "неделю уже не догнать —\nешь по обычной цели"
+    elif per is None:
+        right = "перебор" if w.verdict == "over" else "в плане"
+    elif w.remaining_days == 1:
+        right = f"{'на сегодня' if today_in else 'на завтра'}\n{per}"
+    else:
+        start = "с сегодня по " if today_in and not (t and t.kcal) else "по "
+        right = f"до воскресенья\n{start}{per}\nв день"
+    line = f"Неделя: {'перебор' if over else 'запас'} {round(abs(w.balance_kcal))}" + (
+        f" · до вс по {per}" if per is not None else "")
+    return ["Перебор за неделю" if over else "Запас на неделе",
+            f"{round(abs(w.balance_kcal))}\u00a0ккал", int(over), right, line]
+
+
 def today_data(
     stats: DailyStats, goal: Goal, weight_kg: float | None, streak: Streak | None,
-    now: datetime, start_h: int, foot: str = "weight",
+    now: datetime, start_h: int, foot: str = "weight", week: WeekBalance | None = None,
 ) -> str:
     """`chat_data` виджета «Сегодня» (FR-49.1). Всегда ≤ LIMIT байт.
 
@@ -102,10 +139,12 @@ def today_data(
               else ["Приёмов", len(MealSession.group(stats.meals))]),
         "h": [[h, round(k), int(n)] for h, (k, n) in sorted(hours.items())],
     }
+    if (strip := week_strip(week, day)) is not None:
+        base["w"] = strip
     if weight_kg:
         base["pk"] = round(c.protein / weight_kg, 1)
     if streak is not None and streak.of > 0:
-        base["s"] = [streak.days, int(streak.frozen), streak.covered, streak.of]
+        base["s"] = streak_pill(streak)
 
     text = ""
     for limit in NAME_STEPS:
@@ -336,7 +375,7 @@ def evening_data(
         "g": [round(g.daily_kcal), round(g.protein_g), round(g.fat_g), round(g.carb_g)],
     }
     if streak is not None and streak.of > 0:
-        base["s"] = [streak.days, int(streak.frozen), streak.covered, streak.of]
+        base["s"] = streak_pill(streak)
     lines = [p for p in (_plain(x) for x in notes) if p]
     text = _dump({**base, "nt": lines})
     while size(text) > LIMIT and lines:
