@@ -1344,6 +1344,7 @@ def test_иконки_набора_вместо_эмодзи() -> None:
     for t in SHIPPED:
         html = t.read_text()
         assert "{{ic:" not in html, t.name
+        html = re.sub(r"\.replace\('[^']+',", "", html)  # эмодзи из текста Python, которое заменяют иконкой
         for emo in ("🗑", "⏪", "🔁", "✅", "✖", "↩", "🗒", "🎯", "🌙", "📈", "⚖", "⚡", "🔻", "🔺"):
             assert emo not in html, f"{t.name}: {emo}"
         if "<svg class=ic" in html:
@@ -1351,3 +1352,13 @@ def test_иконки_набора_вместо_эмодзи() -> None:
     assert all(re.fullmatch(r"[MmLlHhVvCcSsAaZz0-9 .\-]+", d) for d in ICONS.values())
     with pytest.raises(KeyError):
         inline("<style></style>{{ic:нет}}".replace("нет", "nope"))
+
+
+@pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.name)
+def test_иконка_не_ловит_правила_графика(path: _Shipped) -> None:
+    """D-81: общее `svg{display:block;width:100%}` графика растягивало иконку заголовка «Недели» на
+    свою строку. Голый селектор `svg{` в шаблоне с иконками — только как `svg:not(.ic)`."""
+    html = path.read_text()
+    if "<svg class=ic" in html:
+        css = html[:html.index("</style>")]
+        assert not re.search(r"(^|[},\n])svg\{", css), path.name
