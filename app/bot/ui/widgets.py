@@ -349,12 +349,14 @@ def week_data(v: WeekView, macros: dict[date, Macros], today: date, weeks_ago: i
         ])
     a, g = v.avg, v.goal
     return _dump({
-        # под героем — только «в плане ✅»: «записано N из M» видно по столбикам (владелец 11.11)
-        "v": 1, "t": v.title, "h": v.hero, "hs": v.sub.split("записано")[0].rstrip(" ·"),
-        "ov": int(v.over), "c": days,
+        # Минимализм (владелец 11.11): под героем ничего — «в плане» и «записано N из M» видно
+        # по столбикам; `hs` пустым остаётся для уже отправленных сообщений со старым шаблоном.
+        "v": 1, "t": v.title, "h": v.hero, "hs": "", "ov": int(v.over), "c": days,
         "a": [round(a.kcal), round(a.protein), round(a.fat), round(a.carb)],
         "g": [round(g.daily_kcal), round(g.protein_g), round(g.fat_g), round(g.carb_g)],
-        "al": v.avg_label, "k": [hit, logged], "tl": v.tail, "wa": weeks_ago,
+        "al": v.avg_label, "k": [hit, logged],
+        # «Неделя закрыта — с понедельника новая» — очевидно, в виджете не пишем (владелец 11.11)
+        "tl": "" if v.tail.startswith("Неделя закрыта") else v.tail, "wa": weeks_ago,
     })
 
 

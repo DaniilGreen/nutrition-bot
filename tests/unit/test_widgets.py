@@ -1163,9 +1163,19 @@ async def test_неделя_те_же_числа_что_экран(name: str) ->
     v = screens.week_view(ctx)
     assert not isinstance(v, str)
     assert len(d["c"]) == 7 and d["k"] == list(screens.week_hits(v))
-    # владелец 11.11: «записано N из M» в виджете лишнее (видно по столбикам) — только «в плане ✅»
-    assert "записано" in v.sub and "записано" not in d["hs"]
-    assert d["hs"] == ("в плане ✅" if v.sub.startswith("в плане") else "")
+    # владелец 11.11, минимализм: под героем ничего («в плане», «записано N из M» видно по
+    # столбикам), подвал «Неделя закрыта — с понедельника новая» не пишем; шаблон `hs` не рисует
+    assert "записано" in v.sub and d["hs"] == "" and "'hs'" not in sent.html
+    assert d["tl"] == ("" if v.tail.startswith("Неделя закрыта") else v.tail)
+    assert "footer:empty{display:none}" in sent.html
+    from dataclasses import replace as _rep
+
+    from app.bot.ui.widgets import week_data
+
+    closed = _rep(v, tail="Неделя закрыта — с понедельника новая.")
+    assert json.loads(week_data(closed, dict(ctx.macros7), ctx.days[-1][0]))["tl"] == ""
+    left = _rep(v, tail="До воскресенья по 2 087 — неделя сойдётся.")
+    assert json.loads(week_data(left, dict(ctx.macros7), ctx.days[-1][0]))["tl"] == left.tail
     assert [c[1] for c in d["c"]] == [{"none": 0, "ok": 1, "low": 2, "over": 3}[x] for x in v.cells]
     rows = dict(ctx.macros7)
     for c, day in zip(d["c"], v.days, strict=True):
@@ -1236,6 +1246,8 @@ def test_ключи_данных_читает_шаблон(name: str) -> None:
     keys = set(json.loads(_builders()[name])) - {"v"}
     if name == "meal":  # шапка и след «вошло в набор» (FR-47) — того же шаблона
         keys |= set(json.loads(merged_data("бургер"))) - {"v"}
+    if name == "week":
+        keys -= {"hs"}  # пустой, ради уже отправленных сообщений: их шаблон без него падает
     dead = {k for k in keys if not re.search(rf"\b[dDr]\.{k}\b", html)}
     assert not dead, f"{name}: шаблон не читает {sorted(dead)}"
 
@@ -1435,3 +1447,4 @@ def test_отлив_и_кит_во_всех(path: _Shipped) -> None:
     html = path.read_text()
     assert SHEEN in html and "{{" not in html
     assert "light-dark(#34C75924,#34C7592E)" in SHEEN
+
