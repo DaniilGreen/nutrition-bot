@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from app.application.dto import ParsedItem, ParsedMessage, PlateReading
 from app.application.entities import (
@@ -24,6 +24,7 @@ class InMemoryUserRepo:
         self._users: dict[int, User] = {}
         self._goals: dict[int, Goal] = {}
         self.history: dict[int, list] = {}
+        self.closed: dict[int, set[date]] = {}
         self._seq = 0
 
     async def get_or_create(
@@ -66,6 +67,15 @@ class InMemoryUserRepo:
     async def mark_scan_nudged(self, user_id: int, at: datetime) -> None:
         if user_id in self._users:
             self._users[user_id].scan_nudged_at = at
+
+    async def closed_days(self, user_id: int) -> list[date]:
+        return sorted(self.closed.get(user_id, set()))
+
+    async def close_day(self, user_id: int, day: date) -> bool:
+        days = self.closed.setdefault(user_id, set())
+        fresh = day not in days
+        days.add(day)
+        return fresh
 
     async def list_active(self) -> list[User]:
         return list(self._users.values())
@@ -208,6 +218,9 @@ class InMemoryMealRepo:
             item.id = self._item_seq
         self._meals.append(meal)
         return meal
+
+    async def eaten_times(self, user_id: int) -> list[datetime]:
+        return [m.eaten_at for m in self._meals if m.user_id == user_id]
 
     async def list_between(self, user_id: int, start: datetime, end: datetime) -> list[Meal]:
         return [m for m in self._meals if m.user_id == user_id and start <= m.eaten_at < end]

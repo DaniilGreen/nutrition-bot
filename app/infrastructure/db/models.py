@@ -1,11 +1,12 @@
 """ORM-модели (SQLAlchemy 2.0). Отделены от доменных сущностей; маппинг — в репозиториях."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -228,6 +229,20 @@ class GoalHistoryORM(Base):
     daily_kcal: Mapped[float] = mapped_column(Float)
     protein_g: Mapped[float] = mapped_column(Float)
     source: Mapped[str] = mapped_column(String(16), default="manual")
+
+
+class ClosedDayORM(Base):
+    """День, закрытый кнопкой «✅ всё записал» вечернего итога (D-57): сигнал полноты дня."""
+
+    __tablename__ = "closed_days"
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    day: Mapped[date] = mapped_column(Date, primary_key=True)  # местная дата человека
+    closed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class BugReportORM(Base):

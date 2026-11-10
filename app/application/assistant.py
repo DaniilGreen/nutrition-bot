@@ -102,6 +102,7 @@ from app.domain.portion_answer import parse as parse_portion
 from app.domain.question import looks_like_question
 from app.domain.reconcile import Reconciliation, reconcile
 from app.domain.spend import month_limit_reached
+from app.domain.streak import Streak
 from app.domain.value_objects import Density, Macros, sum_macros
 from app.domain.week import WeekBalance
 
@@ -639,6 +640,14 @@ class Assistant:
         self, user: User, weeks_ago: int = 0, *, bmr_kcal: float | None = None
     ) -> WeekBalance:
         return await self._stats.week_balance(user, weeks_ago, bmr_kcal=bmr_kcal)
+
+    async def streak(self, user: User) -> Streak:
+        """Серия записанных дней и покрытие «N из 30» (D-44, D-57)."""
+        return await self._stats.streak(user)
+
+    async def close_day(self, user: User, day: date) -> bool:
+        """«✅ всё записал» вечернего итога (D-57, FR-49.6)."""
+        return await self._stats.close_day(user, day)
 
     async def day_pace(self, user: User) -> DayPace:
         """§6.20: темп сегодняшнего дня против личной нормы к этому часу."""

@@ -10,7 +10,8 @@ rich-экранов (MA-INV-1). Полный `gather()` виджету не ну
   sh  час начала суток человека                   hn  индекс текущего часа от `sh`
   g   цель [ккал, Б, Ж, У]                        e   съедено [ккал, Б, Ж, У]
   l   осталось [ккал, Б] (`Remaining`, со знаком)  pk  белок на кг веса (нет веса — нет ключа)
-  es  % ккал оценкой (≈, §3.5 MA)                s   серия [дней, заморозка недели 0/1] (D-44)
+  es  % ккал оценкой (≈, §3.5 MA)
+  s   серия [дней, заморозка недели 0/1, покрыто дней, из скольких] (D-44, D-57) — «N из 30»
   n   норма по часам от `sh` (нет — MA-INV-37)    nk  «сейчас» кривой — `DayPace.today_kcal`
   h   [[индекс часа, ккал, записей]] — все часы с записями (никогда не режутся)
   it  [[индекс часа, «мм», имя, ккал, ≈ 0/1]] — записи, свежие первыми (режутся с хвоста);
@@ -91,8 +92,8 @@ def today_data(
     }
     if weight_kg:
         base["pk"] = round(c.protein / weight_kg, 1)
-    if streak is not None and streak.days > 0:
-        base["s"] = [streak.days, int(streak.frozen)]
+    if streak is not None and streak.of > 0:
+        base["s"] = [streak.days, int(streak.frozen), streak.covered, streak.of]
     if pace is not None and pace.norm:
         base["n"] = [round(v) for v in pace.norm]
         base["nk"] = round(pace.today_kcal)  # W-INV-1: «сейчас» — не сумма округлённых часов в JS

@@ -1,7 +1,7 @@
 """Реализация портов на SQLAlchemy. Маппинг ORM <-> доменные dataclass'ы."""
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -24,6 +24,7 @@ from app.infrastructure.db.models import (
     AppSettingORM,
     BodyScanORM,
     BugReportORM,
+    ClosedDayORM,
     GoalHistoryORM,
     LlmSpendORM,
     MealItemORM,
@@ -177,6 +178,19 @@ class SqlUserRepo:
         orm.scan_nudged_at = at
         await self._s.flush()
 
+
+    async def closed_days(self, user_id: int) -> list[date]:
+        res = await self._s.execute(
+            select(ClosedDayORM.day).where(ClosedDayORM.user_id == user_id)
+        )
+        return list(res.scalars().all())
+
+    async def close_day(self, user_id: int, day: date) -> bool:
+        res = await self._s.execute(
+            pg_insert(ClosedDayORM).values(user_id=user_id, day=day)
+            .on_conflict_do_nothing().returning(ClosedDayORM.day)
+        )
+        return res.scalar_one_or_none() is not None
 
     async def list_active(self) -> list[User]:
         res = await self._s.execute(select(UserORM).where(UserORM.is_active.is_(True)))
@@ -663,6 +677,10 @@ class SqlMealRepo:
             .order_by(MealORM.eaten_at)
         )
         return [_meal_to_domain(o) for o in res.scalars().all()]
+
+    async def eaten_times(self, user_id: int) -> list[datetime]:
+        res = await self._s.execute(select(MealORM.eaten_at).where(MealORM.user_id == user_id))
+        return list(res.scalars().all())
 
     async def list_recent(self, user_id: int, limit: int) -> list[Meal]:
         res = await self._s.execute(

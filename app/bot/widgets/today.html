@@ -43,7 +43,7 @@ $('hm').textContent=al.length>k?'· ещё '+(al.length-k)+' ч раньше':''
 const all=(D.it||[]).filter(x=>x[0]==S),its=all.slice(0,5),mo=((hs.find(x=>x[0]==S)||[])[2]||all.length)-its.length;
 $('ls').innerHTML=its.map(x=>'<div class=it><span class=m>'+H(x[0])+':'+x[1]+'</span><span>'+T(x[2])+'</span><b>'+(x[4]?'≈':'')+x[3]+'</b></div>').join('')+(mo>0?'<div class="it m">Ещё '+mo+' — в приложении ↓</div>':'')}
 function draw(s){const d=J(s);if(!d||d.v!=1)return;const k=JSON.stringify({...d,at:0,hn:0}),ch=K&&k!=K;K=k;D=d;
-$('dl').textContent=d.dl;$('lv').innerHTML=ST?(ST>1?'снимок':'итог дня'):'<i></i>'+d.at;$('sk').style.display=d.s?'':'none';$('sk').textContent=d.s?'🔥 '+d.s[0]+(d.s[1]?' ❄':''):'';
+$('dl').textContent=d.dl;$('lv').innerHTML=ST?(ST>1?'снимок':'итог дня'):'<i></i>'+d.at;const k2=d.s;$('sk').style.display=k2?'':'none';$('sk').textContent=k2?(k2[0]?'🔥 '+k2[0]+(k2[1]?' ❄':'')+' · ':'')+k2[2]+' из '+k2[3]:'';
 hero();pace();hours();F=0;
 if(ch){const c=$('hc');c.classList.remove('fl');void c.offsetWidth;c.classList.add('fl')}}
 document.addEventListener('click',ev=>{const t=ev.target.closest('[data-h]');if(t){S=+t.dataset.h;hours();hp()}else if(ev.target.closest('#hero')){E=1-E;hero();hp()}});

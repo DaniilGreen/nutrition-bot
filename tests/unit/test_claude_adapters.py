@@ -505,7 +505,10 @@ def _settings(**kw) -> Settings:
     return Settings(_env_file=None, **kw)
 
 
-def test_по_умолчанию_openai_и_прежние_модели():
+def test_по_умолчанию_openai_и_прежние_модели(monkeypatch):
+    # Умолчания — без переменных процесса: локальный `.env` в контейнере задаёт свои модели.
+    for var in ("OPENAI_MODEL", "LLM_PROVIDER", "NLU_MODEL", "VISION_MODEL", "COACH_MODEL"):
+        monkeypatch.delenv(var, raising=False)
     s = _settings()
     assert s.llm_provider == "openai"
     assert (s.model_for("nlu"), s.model_for("vision"), s.model_for("coach")) == (

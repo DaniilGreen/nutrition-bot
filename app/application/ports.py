@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import date, datetime
 from typing import Protocol
 
 from app.application.dto import ParsedItem, ParsedMessage, PlateReading, ScanReading
@@ -80,6 +80,14 @@ class UserRepo(Protocol):
 
     async def mark_scan_nudged(self, user_id: int, at: datetime) -> None:
         """Отметить, что о замере напомнили (§6.24, MA-INV-63)."""
+        ...
+
+    async def closed_days(self, user_id: int) -> list[date]:
+        """Дни, закрытые кнопкой «✅ всё записал» (D-57): местные даты человека."""
+        ...
+
+    async def close_day(self, user_id: int, day: date) -> bool:
+        """Закрыть день (D-57). False — уже был закрыт: повтор ничего не пишет."""
         ...
 
     async def list_active(self) -> list[User]: ...
@@ -200,6 +208,10 @@ class MealRepo(Protocol):
     async def list_between(
         self, user_id: int, start: datetime, end: datetime
     ) -> list[Meal]: ...
+
+    async def eaten_times(self, user_id: int) -> list[datetime]:
+        """Когда ел — время каждой записи человека за всю историю, без позиций (серия D-57)."""
+        ...
 
     async def list_recent(self, user_id: int, limit: int) -> list[Meal]: ...
 

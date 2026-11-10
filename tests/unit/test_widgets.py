@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 import zlib
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -97,7 +97,7 @@ def test_данные_худшего_дня_в_бюджете() -> None:
     """AC-269: 20 записей, имена по 99 символов — ≤ 1024 байт, все часы на месте, «ещё N»:
     записей в часах больше, чем в ленте, — виджет пишет «ещё N — в приложении»."""
     meals = _worst_day()
-    text = today_data(_stats(meals), GOAL, 91.5, PACE, Streak(12, True), NOW, 4)
+    text = today_data(_stats(meals), GOAL, 91.5, PACE, Streak(127, True, 28, 30), NOW, 4)
     assert len(text.encode()) <= LIMIT
     d = json.loads(text)
     assert sum(n for _, _, n in d["h"]) == 20 and len(d["it"]) < 20
@@ -113,7 +113,7 @@ def test_данные_обычного_дня() -> None:
         _meal(datetime(2026, 11, 10, 2, 12, tzinfo=UTC), "Овсянка", 420, est=True),  # 09:12
         _meal(datetime(2026, 11, 10, 6, 5, tzinfo=UTC), "Курица", 700),  # 13:05
     ]
-    d = json.loads(today_data(_stats(meals), GOAL, 91.5, PACE, Streak(3, False), NOW, 4))
+    d = json.loads(today_data(_stats(meals), GOAL, 91.5, PACE, Streak(3, False, 3, 3), NOW, 4))
     assert d["d"] == "2026-11-10" and d["dl"] == "вт, 10 ноя" and d["at"] == "14:20"
     assert d["hn"] == 10  # 14:00 − начало суток 4:00
     assert d["g"] == [2200, 183, 80, 200] and d["e"][0] == 1120
@@ -122,7 +122,7 @@ def test_данные_обычного_дня() -> None:
     assert d["nk"] == 990  # «сейчас» кривой — число Python (`DayPace.today_kcal`), W-INV-1
     assert d["it"][0] == [9, "05", "Курица", 700, 0]  # свежие первыми
     assert d["it"][1] == [5, "12", "Овсянка", 420, 1]
-    assert d["s"] == [3, 0] and d["pk"] == round(d["e"][1] / 91.5, 1)
+    assert d["s"] == [3, 0, 3, 3] and d["pk"] == round(d["e"][1] / 91.5, 1)
 
 
 def test_без_нормы_нет_кривой_и_серии() -> None:
@@ -214,10 +214,17 @@ class FakeAssistant:
     async def day_pace(self, user: User) -> DayPace:
         return PACE
 
-    async def daily_series(self, user: User, days: int = 30):  # noqa: ANN201
-        day = date(2026, 11, 10)
-        rows = [(day - timedelta(days=i), Macros(1900, 1, 1, 1), 5) for i in range(days)]
-        return list(reversed(rows)), GOAL
+    async def streak(self, user: User) -> Streak:
+        return Streak(12, False, 28, 30)
+
+
+async def _ask(bot: object, q: dict, user: User, assistant: object) -> None:
+    """Запрос виджета тем же путём, что в проде: outer-middleware с фейковым контейнером."""
+    from aiogram.types import Update
+
+    mw = WidgetQueryMiddleware(_container(assistant=assistant, user=user))  # type: ignore[arg-type]
+    upd = Update.model_validate({"update_id": 99, "widget_query": q})
+    await mw(lambda e, d: None, upd, {"bot": bot})  # type: ignore[arg-type]
 
 
 def _open(assistant: object):  # noqa: ANN202
@@ -248,8 +255,8 @@ async def test_чужой_и_без_флага_отказ(monkeypatch: pytest.Mo
     real = live.enabled
     monkeypatch.setattr(live, "enabled", lambda u, s=None: real(u, "owner"))
     bot = FakeBot()
-    await live.answer(bot, _q("x"), OWNER, FakeAssistant([]))  # type: ignore[arg-type]
-    await live.answer(bot, _q(), OTHER, FakeAssistant([]))  # type: ignore[arg-type]
+    await _ask(bot, _q("x"), OWNER, FakeAssistant([]))
+    await _ask(bot, _q(), OTHER, FakeAssistant([]))
     answers = bot.of(AnswerWidgetQuery)
     assert [json.loads(a.data) for a in answers] == [{"err": "bad"}, {"err": "bad"}]
     assert not bot.of(EditMessageWidgetData)
@@ -298,17 +305,17 @@ async def test_тяга_свежий_вчерашний_старший(monkeypat
     bot = FakeBot()
     a = FakeAssistant([_meal(datetime(2026, 11, 10, 2, 0, tzinfo=UTC), "Овсянка", 420)])
     # После рестарта бот виджета не помнит — запрос учит его id и правит данные.
-    await live.answer(bot, _q(message_id=90), OWNER, a)  # type: ignore[arg-type]
+    await _ask(bot, _q(message_id=90), OWNER, a)
     r = json.loads(bot.of(AnswerWidgetQuery)[-1].data)
     assert r["v"] == 1 and r["e"][0] == 420 and live._LIVE[351362942].message_id == 90
     assert len(bot.of(EditMessageWidgetData)) == 1
-    await live.answer(bot, _q("t:2026-11-09", message_id=60), OWNER, a)  # type: ignore[arg-type]
+    await _ask(bot, _q("t:2026-11-09", message_id=60), OWNER, a)
     assert json.loads(bot.of(AnswerWidgetQuery)[-1].data) == {"st": 1}
-    await live.answer(bot, _q(message_id=80), OWNER, a)  # type: ignore[arg-type]
+    await _ask(bot, _q(message_id=80), OWNER, a)
     assert json.loads(bot.of(AnswerWidgetQuery)[-1].data) == {"st": 2}
     assert len(bot.of(EditMessageWidgetData)) == 1  # снимки не правятся
     # Новее известного (виджет, отправленный до рестарта и показанный позже) — он и живой.
-    await live.answer(bot, _q(message_id=95), OWNER, a)  # type: ignore[arg-type]
+    await _ask(bot, _q(message_id=95), OWNER, a)
     assert json.loads(bot.of(AnswerWidgetQuery)[-1].data)["v"] == 1
     assert live._LIVE[351362942].message_id == 95
 
@@ -340,7 +347,7 @@ async def test_сбой_сборки_всё_равно_ответ(monkeypatch: p
 
     monkeypatch.setattr(live, "build", boom)
     bot = FakeBot()
-    await live.answer(bot, _q(), OWNER, FakeAssistant([]))  # type: ignore[arg-type]
+    await _ask(bot, _q(), OWNER, FakeAssistant([]))
     assert json.loads(bot.of(AnswerWidgetQuery)[0].data) == {"err": "fail"}
 
 
@@ -407,7 +414,7 @@ async def test_build_на_настоящем_ассистенте(fake_container
     built = await live.build(assistant, u)
     d = json.loads(built.data)
     assert len(d["n"]) == 24 and d["n"][-1] == 2000
-    assert d["s"][0] == 8  # восемь полных дней подряд, сегодня ещё не прошло порог
+    assert d["s"][:2] == [8, 0]  # восемь дней подряд; сегодня ещё пусто — не рвёт и не считается
     today = await assistant.today(u)
     assert d["l"][0] == round(today.remaining.kcal_left)
     thin = await users.get_or_create(telegram_id=12, name="y", locale="ru",
@@ -762,7 +769,9 @@ async def test_новый_день_вчерашний_виджет_забыт(mo
     assert not live.watching(OWNER) and not bot.of(EditMessageWidgetData)
 
 
-def _container(fail: bool = False, assistant: object | None = None) -> SimpleNamespace:
+def _container(
+    fail: bool = False, assistant: object | None = None, user: User = OWNER
+) -> SimpleNamespace:
     from contextlib import asynccontextmanager
 
     class Session:
@@ -773,7 +782,7 @@ def _container(fail: bool = False, assistant: object | None = None) -> SimpleNam
         async def get_or_create(self, **kw: object) -> User:
             if fail:
                 raise RuntimeError("db down")
-            return OWNER
+            return user
 
     @asynccontextmanager
     async def factory():  # noqa: ANN202
@@ -966,3 +975,57 @@ async def test_ответ_на_t_не_ждёт_замка(monkeypatch: pytest.Mo
     held.release()
     await task
     assert len(bot.of(EditMessageWidgetData)) == 1  # правка — после, под замком
+
+
+# --- серия записанных дней (D-57, AC-275) ------------------------------------------------------
+
+async def test_серия_по_записям_и_закрытым_дням(fake_container) -> None:  # noqa: ANN001
+    """D-57: день засчитан, если есть хоть одна запись (порога калорий нет) или он закрыт
+    «✅ всё записал»; дни до первой записи — не пропуски; длинная серия не режется окном."""
+    from tests.e2e.test_api_pace import _history
+
+    assistant, users = fake_container.assistant_for(None)
+    u = await users.get_or_create(telegram_id=21, name="x", locale="ru", timezone="Europe/Moscow")
+    _history(fake_container.meals, u.id, days=3, kcal_per_day=150)  # мало ккал — всё равно день
+    s = await assistant.streak(u)
+    assert (s.days, s.frozen, s.covered, s.of) == (3, False, 3, 3)  # новичок: без ❄
+    from app.domain.prefs import day_start
+    from app.domain.timeframe import local_date
+
+    today = local_date(datetime.now(UTC), u.timezone, day_start(u.ui_prefs))
+    assert await assistant.close_day(u, today) is True  # закрыл пустой сегодня — засчитан
+    assert await assistant.close_day(u, today) is False  # повтор ничего не пишет
+    assert await assistant.close_day(u, today + timedelta(days=1)) is False  # будущее — нет
+    assert (await assistant.streak(u)).days == 4
+    long = await users.get_or_create(telegram_id=22, name="y", locale="ru",
+                                     timezone="Europe/Moscow")
+    _history(fake_container.meals, long.id, days=90, kcal_per_day=2000)
+    s = await assistant.streak(long)
+    assert s.days == 90 and (s.covered, s.of) == (29, 29)  # окно 30, сегодня ещё пусто
+
+
+def test_серия_без_истории_пилюли_нет() -> None:
+    """Ни одной записи — ни серии, ни покрытия: ключа `s` в данных нет."""
+    empty = DayPace(show=False, hour=9, norm_kcal=0, today_kcal=0, days_used=0)
+    d = json.loads(today_data(_stats([]), GOAL, None, empty, Streak(0, False), NOW, 4))
+    assert "s" not in d
+    d = json.loads(today_data(_stats([]), GOAL, None, empty, Streak(0, True, 20, 29), NOW, 4))
+    assert d["s"] == [0, 1, 20, 29]  # серия порвалась, покрытие осталось
+
+
+@pytest.mark.parametrize("path", sorted(WIDGETS.glob("*.html")), ids=lambda p: p.name)
+def test_скрипт_шаблона_разбирается(path: Path, tmp_path: Path) -> None:
+    """Синтаксическая ошибка в `<script>` убивает виджет целиком, а Python-тесты её не видят:
+    повторное `const` в шаблоне уже доходило до проверки. `node --check` — где есть node (CI)."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node нет — синтаксис шаблона проверяет CI")
+    m = re.search(r"<script>(.*)</script>", path.read_text(), re.S)
+    assert m is not None
+    js = tmp_path / f"{path.stem}.js"
+    js.write_text(m.group(1))
+    out = subprocess.run([node, "--check", str(js)], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr

@@ -17,6 +17,7 @@ from app.domain.pace import (
     quiet_enough,
 )
 from app.domain.prefs import day_start
+from app.domain.streak import Streak, logged_streak
 from app.domain.timeframe import day_bounds_utc, local_date, week_bounds_utc
 from app.domain.value_objects import Macros, sum_macros
 from app.domain.week import WeekBalance, balance
@@ -44,6 +45,29 @@ class StatsService:
         start = day_start(user.ui_prefs)
         today = local_date(self._clock(), user.timezone, start)
         return (today - local_date(moment, user.timezone, start)).days
+
+    def today(self, user: User) -> date:
+        """Сегодня по календарю человека (его пояс и начало суток)."""
+        return local_date(self._clock(), user.timezone, day_start(user.ui_prefs))
+
+    async def streak(self, user: User) -> Streak:
+        """Серия записанных дней и покрытие «N из 30» (D-44, D-57): день засчитан, если в нём
+        есть приём или он закрыт «✅ всё записал». Вся история, без окна: серия длиннее любого
+        окна не должна молча упираться в его край.
+
+        ponytail: время КАЖДОЙ записи одним запросом без позиций — тысячи строк за годы двоих;
+        потолок — десятки тысяч записей, апгрейд — группировка по дню в SQL."""
+        user_id = _require_id(user)
+        start = day_start(user.ui_prefs)
+        days = {local_date(t, user.timezone, start) for t in await self._meals.eaten_times(user_id)}
+        days.update(await self._users.closed_days(user_id))
+        return logged_streak(days, self.today(user))
+
+    async def close_day(self, user: User, day: date) -> bool:
+        """«✅ всё записал» (D-57): день полный. Будущее закрыть нельзя; повтор — False."""
+        if day > self.today(user):
+            return False
+        return await self._users.close_day(_require_id(user), day)
 
     async def daily(self, user: User, days_ago: int = 0) -> DailyStats:
         """Статистика дня. days_ago=0 — сегодня; >0 — прошлые дни, <0 — будущие (предзапись).

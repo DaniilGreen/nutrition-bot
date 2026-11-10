@@ -16,8 +16,8 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
+from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -34,13 +34,11 @@ from app.bot.widgets import template
 from app.bot.widgets.transport import AnswerWidgetQuery, EditMessageWidgetData, SendWidget
 from app.config import get_settings
 from app.domain.prefs import day_start
-from app.domain.streak import logged_streak
 from app.domain.timeframe import local_date
 from app.domain.weight_change import kg as wkg
 
 logger = logging.getLogger(__name__)
 
-STREAK_WINDOW = 60  # дней истории для серии (D-49)
 _QUERY = re.compile(r"t:([0-9]{4}-[0-9]{2}-[0-9]{2})")
 _VOLATILE = ("at", "hn")  # меняются сами со временем — правку не оправдывают
 # Виджета больше нет (удалили руками, > 48 ч): забыть, а не биться в API на каждом апдейте.
@@ -114,9 +112,8 @@ async def build(assistant: Assistant, user: User, now: datetime | None = None) -
     goal = await assistant.current_goal(user)
     trend = await assistant.weight_trend(user, limit=1)
     pace = await assistant.day_pace(user)
-    rows, _ = await assistant.daily_series(user, STREAK_WINDOW)
+    streak = await assistant.streak(user)
     day = local_date(now, stats.timezone, start_h)
-    streak = logged_streak([(d, m.kcal) for d, m, _ in rows], goal.daily_kcal, day)
     weight = trend.logs[0].weight_kg if trend.logs else None
     data = today_data(stats, goal, weight, pace, streak, now, start_h)
     return Built(day.isoformat(), data, today_caption(stats, goal))
@@ -324,30 +321,3 @@ async def reply(bot: Bot, qid: str, obj: dict[str, Any]) -> None:
         await bot(AnswerWidgetQuery(widget_query_id=qid, data=_reply(obj)))
     except Exception as exc:  # noqa: BLE001
         logger.warning("widget: ответ на запрос не ушёл: %s", exc)
-
-
-async def answer(
-    bot: Bot, q: dict[str, Any], user: User | None, assistant: Assistant | None
-) -> None:
-    """Ответить на `t:` за 15 с, когда пользователь и сервисы уже под рукой (кривой запрос —
-    сразу `err`), и поправить виджет. Middleware делает то же по шагам, закрывая сессию до HTTP."""
-    qid = q.get("id")
-    if not isinstance(qid, str) or not qid:
-        return
-    parsed = parse_query(q)
-    if parsed is None or user is None or assistant is None:
-        await reply(bot, qid, {"err": "bad"})
-        return
-    try:
-        obj, built = await respond(parsed, user, assistant)
-    except Exception:  # noqa: BLE001
-        logger.exception("widget: сборка данных дня по запросу упала")
-        obj, built = {"err": "fail"}, None
-    await reply(bot, qid, obj)
-    if built is not None:
-
-        @asynccontextmanager
-        async def same() -> AsyncIterator[Assistant]:
-            yield assistant
-
-        await push(bot, user, same)
