@@ -12,7 +12,7 @@ button{font:inherit;font-weight:600;border:0;border-radius:12px;background:var(-
 .tk{grid-column:1/-1;height:4px;border-radius:2px;background:var(--tr);overflow:hidden;margin-top:2px}.tk i{display:block;height:100%}
 #ac{display:flex;gap:8px}#ac button{flex:1 1 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:8px 6px}.un{color:var(--al)}.bk{background:var(--ac);color:var(--at)}
 .rg{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:13px}.rg button{width:34px;height:28px;padding:0;font-size:18px}.rg b{min-width:58px;text-align:center}.pv{color:var(--ac)}
-.bz{opacity:.45;pointer-events:none}#ts{font-size:13px;margin-top:8px;color:var(--m);min-height:17px}
+.bz{opacity:.45;pointer-events:none}#ts{font-size:13px;margin-top:8px;color:var(--m)}#ts:empty{display:none}
 .an .tk i{animation:g .9s ease-out}@keyframes g{from{width:0}}.an .e{animation:fu .4s ease-out both}@keyframes fu{from{opacity:0;transform:translateY(5px)}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
 <header><b id=tt></b><button class=nv data-n=1 aria-label="Предыдущий день">‹</button><button class=nv data-n=-1 aria-label="Следующий день">›</button></header>
 <div id=bd></div><div id=rg></div><div id=ac></div><div id=ts></div>
@@ -33,7 +33,7 @@ if(d.mo&&P==pn-1)h+='<div class=m style="padding:4px 0">Ещё '+d.mo+' — в �
 $('bd').innerHTML='<div class=c>'+h+'</div><div class="c dy">'+d.dy.map((r,i)=>'<div><span>'+(nw&&i==3?'Углев.':L[i])+' · '+(f&&!i?NU(r[0]):r[0])+' / '+r[1]+'</span><b'+(!i&&r[0]>r[1]?' style="color:var(--dg)"':'')+'>'+r[2]+'%</b><div class=tk><i style="width:'+Math.max(0,Math.min(100,r[2]))+'%;background:var('+CL[i]+')"></i></div></div>').join('')+'</div>';
 const x=S&&d.e.find(sel),whole=S&&!S[1];
 const gw=x&&!whole&&x[4];
-$('rg').innerHTML='<div class=rg'+(gw?'':' style="visibility:hidden"')+'><span class=m>вес</span><button data-g=-1>−</button><b>'+RG+' г</b><button data-g=1>+</button><span class=m>≈ '+(gw?Math.round(x[5]*RG/x[4]):0)+' ккал</span></div>';
+$('rg').innerHTML=gw?'<div class=rg><span class=m>вес</span><button data-g=-1>−</button><b>'+RG+' г</b><button data-g=1>+</button><span class=m>≈ '+Math.round(x[5]*RG/x[4])+' ккал</span></div>':'';
 $('ac').innerHTML='<button class="un'+(x?'':' bz')+'" data-q=x style="flex:0 0 44px" aria-label="Убрать">{{ic:trash}}</button><button class="'+(x?'':'bz')+'" data-q=p>{{ic:redo}} '+(whole?'Всю запись':'Повторить')+'</button>'+(d.z?'<button class=bk data-q=r style="flex:0 0 44px" aria-label="Вернуть">{{ic:back}}</button>':'')}
 function flush(){if(B||!S||!S[1])return;const x=D.e.find(sel);if(x&&x[4]&&RG!=x[4])send('h:a:'+D.da+':'+x[0]+':'+x[1]+':'+RG+':'+K(),null)}
 function send(q,el){if(!W||!W.request||B)return;B=1;el&&el.classList.add('bz');

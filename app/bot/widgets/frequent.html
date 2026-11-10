@@ -6,12 +6,12 @@ header{display:flex;align-items:baseline;gap:8px;margin-bottom:10px}header b{fon
 .tl{background:var(--cd);border-radius:16px;padding:10px 12px;min-height:58px;cursor:pointer;transition:transform .15s}
 .tl:active{transform:scale(.97)}.tl b{display:block;font-size:15px;font-weight:600;max-height:2.6em;overflow:hidden;overflow-wrap:anywhere;hyphens:auto}
 .tl span{display:block;margin-top:4px;color:var(--m);font-size:13px}.tl.bz b{color:var(--m)}.tl.ok{animation:ok 1.5s}@keyframes ok{0%,70%{box-shadow:inset 0 0 0 2px var(--ok)}}
-#ts{margin-top:10px;background:var(--cd);border-radius:16px;padding:10px 12px;display:flex;visibility:hidden;align-items:center;gap:10px;font-size:14px}
+#ts{margin-top:10px;background:var(--cd);border-radius:16px;padding:10px 12px;display:none;align-items:center;gap:10px;font-size:14px}
 #ts span{flex:1}#ts button{border:0;border-radius:12px;padding:8px 12px;background:var(--ac);color:var(--at);font:600 14px "Segoe UI",system-ui,sans-serif}
 #ts button[disabled]{background:var(--tr);color:var(--m)}
 @media (prefers-reduced-motion:reduce){.tl{transition:none}.tl.ok{animation:none;box-shadow:inset 0 0 0 2px var(--ok)}}
 @media (max-width:260px){#g{grid-template-columns:minmax(0,1fr);gap:6px}.tl{padding:8px 10px;min-height:0}.tl b{white-space:nowrap;text-overflow:ellipsis}header .m{display:none}}
-.an .tl{animation:fu .45s ease-out both}@keyframes fu{from{opacity:0;transform:translateY(6px)}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}@media (max-width:260px){#ts{display:none}}</style>
+.an .tl{animation:fu .45s ease-out both}@keyframes fu{from{opacity:0;transform:translateY(6px)}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
 <header><b>{{ic:bolt}} Частое</b><span class=m>тап — запишу сразу</span></header>
 <div id=g lang=ru></div><div id=ts><span id=tx></span><button id=ub>{{ic:back}} Вернуть</button></div>
 <script>

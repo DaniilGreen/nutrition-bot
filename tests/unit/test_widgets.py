@@ -1467,3 +1467,18 @@ def test_шапка_по_базовой_линии(path: _Shipped) -> None:
         if row in css and path.stem in ("today", "day"):
             rule = css[css.index(row):css.index("}", css.index(row))]
             assert "align-items:baseline" in rule, f"{path.name}: {row}"
+
+
+@pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.name)
+def test_пустое_место_не_резервируется(path: _Shipped) -> None:
+    """D-86: строка под сообщение, строка правки и плашка «Вернуть» появляются, когда в них есть что
+    показать, — невидимый резерв удлинял виджет и выталкивал его шапку за экран. Нижние 26 px под
+    значок Telegram и стопка часов «Сегодня» — не резерв под будущее, они остаются."""
+    html = path.read_text()
+    css = html[:html.index("</style>")]
+    for sel in ("#ts{", ".ed{"):
+        for m in re.finditer(re.escape(sel) + r"[^}]*\}", css):
+            assert "min-height" not in m.group(0) and "visibility:hidden" not in m.group(0), (
+                f"{path.name}: {m.group(0)[:60]}")
+    assert "class=rg'+(gw?'':' style=\"visibility:hidden\"')" not in html  # «вес − г +» «Истории»
+    assert "e.style.visibility=" not in html  # строка правки «Сегодня»
