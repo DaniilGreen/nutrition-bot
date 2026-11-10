@@ -1192,7 +1192,6 @@ async def on_voice(
     if _asked(result) and await _to_coach(message, transcript, app_user, session, bot, container):
         return
     await _reply_message(message, result, state, app_user, assistant, raw=transcript)
-    await _maybe_weight_chart(message, app_user, assistant, result)
 
 
 @router.message(F.photo)
@@ -1921,7 +1920,6 @@ async def on_text(
     if _asked(result) and await _to_coach(message, text, app_user, session, bot, container):
         return  # FR-45 (г): вопрос, а не еда — ответит ассистент
     await _reply_message(message, result, state, app_user, assistant, raw=message.text or "")
-    await _maybe_weight_chart(message, app_user, assistant, result)
 
 
 @router.message(
@@ -2921,8 +2919,9 @@ def _replied_meal(message: Message) -> int | None:
     return card_meal_id(reply.reply_markup) if reply is not None else None
 
 
-def _fix_trace(r: MealCorrected) -> str:
-    """След правки (без HTML): «✏️ Поправил: гречка → булгур 150 г · запись теперь 420 ккал»."""
+def _fix_trace(r: MealCorrected, *, tail: bool = True) -> str:
+    """След правки (без HTML): «✏️ Поправил: гречка → булгур 150 г · запись теперь 420 ккал».
+    tail=False — без ккал: карточка-виджет показывает их сама (D-60, D-61)."""
     def named(i: MealItem) -> str:
         return f"{i.name_snapshot} {_g(i.grams)} г" if i.grams else i.name_snapshot
 
@@ -2939,8 +2938,10 @@ def _fix_trace(r: MealCorrected) -> str:
         )
     else:
         head = f"✏️ Поправил: {r.old[0].name_snapshot} → {', '.join(named(i) for i in r.new)}"
-    tail = f"запись теперь {round(r.meal.totals.kcal)} ккал" if r.meal else "запись отменена"
-    return f"{head} · {tail}"
+    if not tail:
+        return head
+    rest = f"запись теперь {round(r.meal.totals.kcal)} ккал" if r.meal else "запись отменена"
+    return f"{head} · {rest}"
 
 
 def _fix_refusal(r: CorrectionFailed | Unknown) -> str:
@@ -2963,6 +2964,15 @@ async def _show_fix(
     snapshot — приём до замены/удаления: «⏪ Вернуть», как у 🗑 (FR-41); у веса его нет (FR-43)."""
     bot = message.bot
     assert bot is not None
+    undoable = snapshot if result.kind in ("fix", "delete") else None
+    if (  # D-61: карточка-виджет перерисовывается сама, «⏪ Вернуть» — в ней
+        isinstance(card_id, int) and widgets_live.enabled(user)
+        and await widgets_meal.refresh_fix(bot, user, assistant, card_id, result.meal, undoable)
+    ):
+        trace = escape(_fix_trace(result, tail=False), quote=False)
+        if not await _say_prompt(bot, message.chat.id, prompt_id, trace):
+            await message.answer(trace)
+        return
     restore = None
     if snapshot is not None and result.kind in ("fix", "delete"):  # фиксация уже была
         what = ", ".join(i.name_snapshot for i in result.old)
@@ -3070,7 +3080,6 @@ async def _reply_fix(
         if isinstance(result, MealLogged | ClarificationNeeded | VariantClarificationNeeded):
             await message.answer(_NEW_MEAL)
         await _reply_message(message, result, state, user, assistant, raw=text)
-        await _maybe_weight_chart(message, user, assistant, result)
 
 
 async def _forget_fix(state: FSMContext) -> None:
@@ -3510,13 +3519,17 @@ async def _show_week(
 
 
 async def _show_weight(message: Message, app_user: User, assistant: Assistant) -> None:
+    """FR-8; с флагом и ≥ 2 замерах — один виджет (FR-49.3, D-60): rich-экран с теми же числами
+    перед ним был дублем. Не вышло — rich-экран и PNG (D-55)."""
     ctx = await gather(assistant, app_user)
-    await _rich(message, screens.weight(ctx))
-    if len(ctx.weight_points) >= 2 and message.bot is not None and widgets_live.enabled(app_user):
-        if await widgets_live.show_weight(  # FR-49.3: виджет вместо PNG; не вышло — PNG (D-55)
+    if (
+        len(ctx.weight_points) >= 2 and message.bot is not None and widgets_live.enabled(app_user)
+        and await widgets_live.show_weight(
             message.bot, message.chat.id, ctx.weight_points, ctx.weight.timezone, ctx.goal.target
-        ):
-            return
+        )
+    ):
+        return
+    await _rich(message, screens.weight(ctx))
     if len(ctx.weight_points) >= 2:  # FR-8, D-40: линия через сами замеры — нужно хотя бы два
         png = render_weight_chart(
             ctx.weight_points, tz=ctx.weight.timezone, target=ctx.goal.target
@@ -3727,9 +3740,10 @@ async def _reply_screen(
         await message.answer(
             format_result(result), reply_markup=open_in_app(f"recipe-{result.product.id}")
         )
-    else:  # WeightLogged / CorrectionFailed / Unknown — короткий текст + возможный график веса
+    elif isinstance(result, WeightLogged):
+        await _weight_logged(message, app_user, assistant, result)
+    else:  # CorrectionFailed / Unknown — короткий текст
         await message.answer(format_result(result))
-        await _maybe_weight_chart(message, app_user, assistant, result)
 
 
 async def _ask_clarification(
@@ -3824,24 +3838,27 @@ async def _send_goal_card(
     await _rich(message, head + screens.goal_screen(goal, wkg), goal_target_keyboard(goal.target))
 
 
-async def _maybe_weight_chart(
-    message: Message, app_user: User, assistant: Assistant, result: Result
+async def _weight_logged(
+    message: Message, app_user: User, assistant: Assistant, result: WeightLogged
 ) -> None:
-    """После записи веса — бонусом тот же график, что на «⚖️ Вес» (FR-7, FR-8), если замеров ≥ 2."""
-    if not isinstance(result, WeightLogged):
-        return
+    """Вес записан (FR-7): текст и тот же график, что на «⚖️ Вес» (FR-8), если замеров ≥ 2.
+    С флагом — одним виджетом «⚖️ Вес записан» (FR-49.3, D-60): его «с прошлого» — та же
+    разность, что в тексте. Не вышло — текст и PNG (D-55). Единственное место пути: хендлеры
+    текста, голоса и ответа на карточку график сами не шлют (до 10.11 он уходил дважды)."""
     trend = await assistant.weight_trend(app_user, limit=60)  # глубина — как у экрана (gather)
-    if len(trend.logs) >= 2:
-        goal = await assistant.current_goal(app_user)
-        if (
-            message.bot is not None
-            and widgets_live.enabled(app_user)
-            and await widgets_live.show_weight(
-                message.bot, message.chat.id, _weight_points(trend), trend.timezone, goal.target
-            )
-        ):
-            return  # FR-49.3: виджет вместо PNG (D-55)
-        png = render_weight_chart(_weight_points(trend), tz=trend.timezone, target=goal.target)
+    pts = _weight_points(trend)
+    goal = await assistant.current_goal(app_user) if len(pts) >= 2 else None
+    if (
+        goal is not None and message.bot is not None and widgets_live.enabled(app_user)
+        and await widgets_live.show_weight(
+            message.bot, message.chat.id, pts, trend.timezone, goal.target,
+            caption="⚖️ Вес записан",
+        )
+    ):
+        return
+    await message.answer(format_result(result))
+    if goal is not None:
+        png = render_weight_chart(pts, tz=trend.timezone, target=goal.target)
         await message.answer_photo(BufferedInputFile(png, "weight.png"))
 
 

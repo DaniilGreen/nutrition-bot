@@ -18,7 +18,7 @@ import pytest
 from app.application.entities import Meal, MealItem, User, WeightLog
 from app.application.results import DailyStats, DayPace, WeightTrend
 from app.bot.middlewares import WidgetQueryMiddleware
-from app.bot.ui.widgets import LIMIT, today_caption, today_data
+from app.bot.ui.widgets import LIMIT, today_data
 from app.bot.widgets import live, template
 from app.bot.widgets.transport import AnswerWidgetQuery, EditMessageWidgetData, SendWidget
 from app.domain.goals import Goal, remaining
@@ -132,14 +132,13 @@ def test_без_нормы_нет_кривой_и_серии() -> None:
     assert "n" not in d and "s" not in d and "pk" not in d and d["it"] == [] and d["h"] == []
 
 
-def test_подпись() -> None:
-    meals = [_meal(datetime(2026, 11, 10, 2, 0, tzinfo=UTC), "Овсянка", 1626)]
-    assert today_caption(_stats(meals), GOAL) == (
-        "📊 Сегодня: 1626 из 2200 ккал · осталось 574 · белок 81 из 183 г"
-    )
-    over = [_meal(datetime(2026, 11, 10, 2, 0, tzinfo=UTC), "Пицца", 2400)]
-    assert "перебор 200" in today_caption(_stats(over), GOAL)
-    assert today_caption(_stats([]), GOAL) == "📊 Сегодня: пока пусто · цель 2200 ккал"
+async def test_подпись_дня_без_цифр(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC-290, D-60: подпись не повторяет цифры виджета — ни на обычном, ни на пустом дне."""
+    monkeypatch.setattr(live, "enabled", lambda u, s=None: True)
+    for meals in ([], [_meal(datetime(2026, 11, 10, 2, 0, tzinfo=UTC), "Овсянка", 1626)]):
+        bot = FakeBot()
+        await live.show_today(bot, 351362942, OWNER, FakeAssistant(meals))  # type: ignore[arg-type]
+        assert bot.of(SendWidget)[0].caption == "📊 Сегодня"
 
 
 # --- флаг (D-51) -----------------------------------------------------------------------------
@@ -269,7 +268,7 @@ async def test_show_today_и_повтор_в_тот_же_день(monkeypatch: p
     a = FakeAssistant([_meal(datetime(2026, 11, 10, 2, 0, tzinfo=UTC), "Овсянка", 420)])
     assert await live.show_today(bot, 351362942, OWNER, a)  # type: ignore[arg-type]
     sent = bot.of(SendWidget)[0]
-    assert sent.allow_queries and sent.caption.startswith("📊 Сегодня: 420 из 2200")
+    assert sent.allow_queries and sent.caption == "📊 Сегодня"
     assert sent.html == template("today") and json.loads(sent.chat_data)["e"][0] == 420
     first = live._LIVE[351362942].message_id
     assert await live.show_today(bot, 351362942, OWNER, a)  # type: ignore[arg-type]
@@ -284,7 +283,8 @@ async def test_фолбэк_при_ошибке_sendWidget() -> None:
 
 
 async def test_пуш_после_записи_и_тишина_без_изменений(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-273: запись изменила день — правка данных и подписи; ничего не изменилось — правки нет."""
+    """AC-273: запись изменила день — правка данных, подпись не трогается (D-60); ничего не
+    изменилось — правки нет."""
     monkeypatch.setattr(live, "enabled", lambda u, s=None: True)
     bot = FakeBot()
     a = FakeAssistant([_meal(datetime(2026, 11, 10, 2, 0, tzinfo=UTC), "Овсянка", 420)])
@@ -296,7 +296,7 @@ async def test_пуш_после_записи_и_тишина_без_измен�
     edit = bot.of(EditMessageWidgetData)
     assert len(edit) == 1 and json.loads(edit[0].chat_data)["e"][0] == 1120
     assert edit[0].message_id == live._LIVE[351362942].message_id
-    assert bot.captions and "1120 из 2200" in bot.captions[-1]
+    assert not bot.captions  # W-INV-2: в подписи нет цифр — править нечего
 
 
 async def test_тяга_свежий_вчерашний_старший(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -634,14 +634,42 @@ def test_вес_данные_те_же_числа_что_текст() -> None:
     pts = [(t0 + timedelta(days=1.4 * i), 86.8 - 0.05 * i) for i in range(30)]
     d = json.loads(weight_data(pts, TZ, "cut") or "{}")
     ch = weight_change(pts)
-    assert ch is not None and len(d["p"]) == 30 and d["p"][0] == [0.0, 86.8]
+    assert ch is not None and len(d["p"]) == 30 and d["p"][0] == [0.0, 86.8, 0]
     assert d["dp"] == ch.period_kg and d["dm"] == ch.month_kg and d["l"] == round(ch.last_kg, 1)
-    assert d["st"] == "ok" and d["a0"] == "2026-09-28" and d["h0"] == 8.5
+    assert d["st"] == "ok" and d["a0"] == "2026-09-28" and "h0" not in d
     assert weight_data(pts[:1], TZ, "cut") is None  # один замер — графика нет (FR-8)
     up = json.loads(weight_data(list(reversed([(t, w) for t, w in pts])), TZ, "cut") or "{}")
     assert up["st"] in ("ok", "bad")
     maint = json.loads(weight_data(pts, TZ, "maintain") or "{}")
     assert maint["st"] == "mute"
+
+
+def test_вес_дата_точки_считает_python() -> None:
+    """Дата под тапом по точке — местный день замера из Python (как «📋 Замеры» rich-экрана),
+    а не `floor(h0/24 + x)` в JS: x округлён до 0,1 дня, и замер у полуночи уезжал на соседний
+    день."""
+    from app.bot.ui.widgets import weight_data
+
+    t0 = datetime(2026, 10, 1, 1, 30, tzinfo=UTC)  # 08:30 1.10 по Etc/GMT-7
+    late = datetime(2026, 10, 2, 16, 57, tzinfo=UTC)  # 23:57 2.10
+    early = datetime(2026, 10, 2, 17, 4, tzinfo=UTC)  # 00:04 3.10: x 1,65 → 1,6 → у JS «2 окт»
+    d = json.loads(weight_data([(t0, 86.0), (late, 85.8), (early, 85.7)], TZ, "cut") or "{}")
+    assert [p[2] for p in d["p"]] == [0, 1, 2]
+    assert "D.h0" not in template("weight") and "dt(q[2])" in template("weight")
+
+
+def test_вес_с_прошлого_замера() -> None:
+    """AC-291: «с прошлого» — последний − предпоследний замер, числом Python (W-INV-1): тот же
+    Δ, что писал текст «Вес записан» (`delta_kg`), а не арифметика в шаблоне."""
+    from app.bot.ui.widgets import weight_data
+
+    t0 = datetime(2026, 10, 1, 1, 0, tzinfo=UTC)
+    pts = [(t0, 86.0), (t0 + timedelta(days=3), 85.7), (t0 + timedelta(days=5), 85.3)]
+    d = json.loads(weight_data(pts, TZ, "cut") or "{}")
+    assert d["dd"] == -0.4 and d["dp"] == -0.7
+    html = template("weight")
+    assert "с прошлого" in html and "D.dd" in html
+    assert "id=dp" not in html and ">последний<" not in html  # дубли «за период» и героя
 
 
 def test_вес_120_замеров_в_бюджете() -> None:
@@ -666,36 +694,15 @@ async def test_вес_виджет_или_png(monkeypatch: pytest.MonkeyPatch) -
     bot = FakeBot()
     assert await live.show_weight(bot, 1, pts, TZ, "cut")  # type: ignore[arg-type]
     sent = bot.of(SendWidget)[0]
-    assert sent.html == template("weight") and sent.caption == "⚖️ 85,1 кг · за период −0,9 кг"
+    assert sent.html == template("weight") and sent.caption == "⚖️ Вес"  # AC-290: без цифр
     assert not await live.show_weight(FakeBot(fail=True), 1, pts, TZ, "cut")  # type: ignore[arg-type]
     assert not await live.show_weight(bot, 1, pts[:1], TZ, "cut")  # type: ignore[arg-type]
 
 
 # --- ревью 10.11: гонка, подпись, смена дня, сбой запроса, хуки (Step 1) ---------------------
 
-class _GoneOnCaption(FakeBot):
-    """Данные принимаются, подпись — «сообщение не найдено» (бывает у фолбэк-подписи)."""
-
-    async def edit_message_caption(self, **kw: object) -> None:
-        from aiogram.exceptions import TelegramBadRequest
-
-        raise TelegramBadRequest(method=None, message="Bad Request: message to edit not found")  # type: ignore[arg-type]
-
-
-async def test_подпись_упала_данные_приняты_пуш_живой(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Ошибка правки подписи не выдаёт виджет за пропавший: данные легли — пуш не замолкает."""
-    monkeypatch.setattr(live, "enabled", lambda u, s=None: True)
-    bot = _GoneOnCaption()
-    a = FakeAssistant([])
-    await live.show_today(bot, 351362942, OWNER, a)  # type: ignore[arg-type]
-    a.meals.append(_meal(datetime(2026, 11, 10, 6, 0, tzinfo=UTC), "Курица", 700))
-    await live.push(bot, OWNER, _open(a))  # type: ignore[arg-type]
-    assert live.watching(OWNER) and len(bot.of(EditMessageWidgetData)) == 1
-    assert live._LIVE[351362942].caption.startswith("📊 Сегодня: пока пусто")  # повторим позже
-
-
 async def test_not_modified_не_ошибка(monkeypatch: pytest.MonkeyPatch) -> None:
-    """«message is not modified» у данных и у подписи — запоминаем нарисованное, виджет живой."""
+    """«message is not modified» у данных — запоминаем нарисованное, виджет живой (AC-281)."""
     from aiogram.exceptions import TelegramBadRequest
 
     monkeypatch.setattr(live, "enabled", lambda u, s=None: True)
@@ -708,19 +715,15 @@ async def test_not_modified_не_ошибка(monkeypatch: pytest.MonkeyPatch) -
                     method=method, message="Bad Request: message is not modified")
             return await super().__call__(method)
 
-        async def edit_message_caption(self, **kw: object) -> None:
-            self.captions.append(str(kw["caption"]))
-            raise TelegramBadRequest(method=None, message="Bad Request: message is not modified")  # type: ignore[arg-type]
-
     bot = Same()
     a = FakeAssistant([])
     await live.show_today(bot, 351362942, OWNER, a)  # type: ignore[arg-type]
     a.meals.append(_meal(datetime(2026, 11, 10, 6, 0, tzinfo=UTC), "Курица", 700))
     await live.push(bot, OWNER, _open(a))  # type: ignore[arg-type]
     state = live._LIVE[351362942]
-    assert "700 из 2200" in state.caption and json.loads(state.key)["e"][0] == 700
+    assert json.loads(state.key)["e"][0] == 700
     await live.push(bot, OWNER, _open(a))  # ничего не изменилось — правок больше нет
-    assert len(bot.of(EditMessageWidgetData)) == 1 and len(bot.captions) == 1
+    assert len(bot.of(EditMessageWidgetData)) == 1 and not bot.captions
 
 
 async def test_гонка_пушей_старые_цифры_не_ложатся_поверх(
@@ -832,7 +835,7 @@ async def test_хук_пуша_в_middleware(monkeypatch: pytest.MonkeyPatch) ->
         return "ok"
 
     assert await mw(plain, object(), dict(data)) == "ok" and pushed == []  # виджета нет
-    live._LIVE[OWNER.telegram_id] = live._Live("2026-11-10", 5, "", "")
+    live._LIVE[OWNER.telegram_id] = live._Live("2026-11-10", 5, "")
     await mw(plain, object(), dict(data))
     assert pushed == [OWNER.telegram_id]
 
@@ -888,7 +891,9 @@ async def test_частое_виджет_и_фолбэк_на_клавиатур
     a = _FreqAssistant([long])
     bot = FakeBot()
     assert await frequent.show(bot, 1, OWNER, a)  # type: ignore[arg-type]
-    d = json.loads(bot.of(SendWidget)[0].chat_data)
+    sent = bot.of(SendWidget)[0]
+    assert sent.caption == "⚡ Частое"  # AC-290: «тап — запишу сразу» — уже в шапке виджета
+    d = json.loads(sent.chat_data)
     assert d["t"][0][2] == "p:3:180" and d["t"][0][3] == 720 and d["t"][0][4] == 1
     assert not await frequent.show(FakeBot(fail=True), 1, OWNER, a)  # type: ignore[arg-type]
     assert not await frequent.show(FakeBot(), 1, OWNER, _FreqAssistant([]))  # type: ignore[arg-type]
@@ -906,7 +911,8 @@ async def test_частое_виджет_и_фолбэк_на_клавиатур
 
 
 async def test_вес_хендлеры_виджет_или_png(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FR-49.3: «⚖️ Вес» и запись веса — с флагом виджет без PNG; виджет не ушёл — PNG."""
+    """FR-49.3, AC-291, D-60: «⚖️ Вес» и запись веса с флагом — ОДИН виджет: ни rich-экрана, ни
+    текста «Вес записан», ни PNG рядом. Виджет не ушёл — rich/текст и PNG, как раньше."""
     from unittest.mock import AsyncMock
 
     from app.application.results import WeightLogged
@@ -916,11 +922,13 @@ async def test_вес_хендлеры_виджет_или_png(monkeypatch: pyte
     pts = [(t0 + timedelta(days=i), 86.0 - 0.1 * i) for i in range(5)]
     ctx = SimpleNamespace(weight_points=pts, weight=SimpleNamespace(timezone=TZ),
                           goal=SimpleNamespace(target="cut"))
+    rich: list[str] = []
 
     async def fake_gather(assistant: object, user: object, scans: object = None) -> object:
         return ctx
 
-    async def fake_rich(message: object, html: str, markup: object = None) -> None: ...
+    async def fake_rich(message: object, html: str, markup: object = None) -> None:
+        rich.append(html)
 
     monkeypatch.setattr(handlers, "gather", fake_gather)
     monkeypatch.setattr(handlers, "_rich", fake_rich)
@@ -928,18 +936,20 @@ async def test_вес_хендлеры_виджет_или_png(monkeypatch: pyte
     monkeypatch.setattr(handlers, "render_weight_chart", lambda *a, **k: b"png")
     monkeypatch.setattr(handlers.widgets_live, "enabled", lambda u, s=None: True)
     sent: list[bool] = [True]
+    captions: list[str] = []
 
-    async def show(*a: object) -> bool:
+    async def show(*a: object, caption: str = "⚖️ Вес") -> bool:
+        captions.append(caption)
         return sent[0]
 
     monkeypatch.setattr(handlers.widgets_live, "show_weight", show)
     msg = AsyncMock()
     msg.chat = SimpleNamespace(id=1)
     await handlers._show_weight(msg, OWNER, None)  # type: ignore[arg-type]
-    assert not msg.answer_photo.await_count
+    assert not msg.answer_photo.await_count and rich == []  # rich перед виджетом — дубль
     sent[0] = False
     await handlers._show_weight(msg, OWNER, None)  # type: ignore[arg-type]
-    assert msg.answer_photo.await_count == 1
+    assert msg.answer_photo.await_count == 1 and rich == ["RICH"]
 
     class A:
         async def weight_trend(self, user: User, limit: int = 14) -> WeightTrend:
@@ -949,12 +959,37 @@ async def test_вес_хендлеры_виджет_или_png(monkeypatch: pyte
             return GOAL
 
     logged = WeightLogged(WeightLog(1, NOW, 85.6), -0.1)
+    msg = AsyncMock()
+    msg.chat = SimpleNamespace(id=1)
     sent[0] = True
-    await handlers._maybe_weight_chart(msg, OWNER, A(), logged)  # type: ignore[arg-type]
-    assert msg.answer_photo.await_count == 1
+    await handlers._reply_screen(msg, logged, OWNER, A())  # type: ignore[arg-type]
+    assert not msg.answer.await_count and not msg.answer_photo.await_count
+    assert captions[-1] == "⚖️ Вес записан"
     sent[0] = False
-    await handlers._maybe_weight_chart(msg, OWNER, A(), logged)  # type: ignore[arg-type]
-    assert msg.answer_photo.await_count == 2
+    await handlers._reply_screen(msg, logged, OWNER, A())  # type: ignore[arg-type]
+    assert msg.answer.await_count == 1 and msg.answer_photo.await_count == 1
+
+
+async def test_запись_веса_текстом_один_график(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC-291: «вес 85.2» текстом — график ОДИН. С 15.07 его слали и `_reply_screen`, и хендлер
+    текста (`_maybe_weight_chart` дважды): два PNG, с флагом — два виджета веса."""
+    from unittest.mock import AsyncMock
+
+    from aiogram.methods import SendPhoto
+
+    from app.application.dto import Intent, ParsedMessage
+    from app.bot import handlers
+    from tests.unit.test_bot_reply_fix import _plain, _world
+
+    monkeypatch.setattr(handlers, "render_weight_chart", lambda *a, **k: b"png")
+    w = await _world()
+    for kg in (86.0, 85.6):
+        await w.assistant._weights.log(w.user, kg)
+    w.nlu.queue = [ParsedMessage(intent=Intent.WEIGHT, weight_kg=85.2)]
+    msg = _plain("вес 85.2")
+    await handlers.on_text(msg, msg.bot, w.user, w.assistant, AsyncMock(), w.state)
+    photos = [c for c in msg.bot.await_args_list if isinstance(c.args[0], SendPhoto)]
+    assert len(photos) == 1
 
 
 async def test_ответ_на_t_не_ждёт_замка(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1046,6 +1081,7 @@ async def test_неделя_те_же_числа_что_экран(name: str) ->
     assert await week.show(bot, 1, ctx)  # type: ignore[arg-type]
     sent = bot.of(SendWidget)[0]
     assert sent.html == template("week") and len(sent.chat_data.encode()) <= LIMIT
+    assert sent.caption == "📈 Неделя"  # AC-290: герой и средние — в виджете
     d = json.loads(sent.chat_data)
     v = screens.week_view(ctx)
     assert not isinstance(v, str)

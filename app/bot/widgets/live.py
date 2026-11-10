@@ -29,13 +29,12 @@ from aiogram.exceptions import TelegramBadRequest
 from app.application.assistant import Assistant
 from app.application.entities import User
 from app.bot.keyboards import open_in_app
-from app.bot.ui.widgets import today_caption, today_data, weight_data
+from app.bot.ui.widgets import today_data, weight_data
 from app.bot.widgets import template
 from app.bot.widgets.transport import AnswerWidgetQuery, EditMessageWidgetData, SendWidget
 from app.config import get_settings
 from app.domain.prefs import day_start
 from app.domain.timeframe import local_date
-from app.domain.weight_change import kg as wkg
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +42,7 @@ _QUERY = re.compile(r"t:([0-9]{4}-[0-9]{2}-[0-9]{2})")
 _VOLATILE = ("at", "hn")  # меняются сами со временем — правку не оправдывают
 # Виджета больше нет (удалили руками, > 48 ч): забыть, а не биться в API на каждом апдейте.
 _GONE = ("not found", "can't be edited", "message_id_invalid", "message to edit")
+CAPTION = "📊 Сегодня"  # W-INV-2, D-60: цифры — в самом виджете, подпись их не повторяет
 
 
 @dataclass
@@ -50,7 +50,6 @@ class _Live:
     day: str  # ISO-дата дня виджета
     message_id: int
     key: str  # chat_data без «живых» полей — что сейчас нарисовано
-    caption: str
 
 
 _LIVE: dict[int, _Live] = {}  # telegram id (= id личного чата) → виджет дня
@@ -101,7 +100,6 @@ def _key(data: str) -> str:
 class Built:
     day: str
     data: str
-    caption: str
 
 
 async def build(assistant: Assistant, user: User, now: datetime | None = None) -> Built:
@@ -116,7 +114,7 @@ async def build(assistant: Assistant, user: User, now: datetime | None = None) -
     day = local_date(now, stats.timezone, start_h)
     weight = trend.logs[0].weight_kg if trend.logs else None
     data = today_data(stats, goal, weight, pace, streak, now, start_h)
-    return Built(day.isoformat(), data, today_caption(stats, goal))
+    return Built(day.isoformat(), data)
 
 
 async def show_today(bot: Bot, chat_id: int, user: User, assistant: Assistant) -> bool:
@@ -129,16 +127,14 @@ async def show_today(bot: Bot, chat_id: int, user: User, assistant: Assistant) -
             msg = await bot(
                 SendWidget(
                     chat_id=chat_id, html=template("today"), chat_data=built.data,
-                    caption=built.caption, allow_queries=True, reply_markup=open_in_app("day"),
+                    caption=CAPTION, allow_queries=True, reply_markup=open_in_app("day"),
                 )
             )
         except Exception as exc:  # noqa: BLE001 — любой сбой виджета не должен оставить без «Сегодня»
             logger.warning("widget: sendWidget не прошёл (%s) — фолбэк на rich", exc)
             return False
         old = _LIVE.get(user.telegram_id)
-        _LIVE[user.telegram_id] = _Live(
-            built.day, msg.message_id, _key(built.data), built.caption
-        )
+        _LIVE[user.telegram_id] = _Live(built.day, msg.message_id, _key(built.data))
         mark = _SHOWN.get()
         if mark is not None:
             mark[0] = True
@@ -149,18 +145,17 @@ async def show_today(bot: Bot, chat_id: int, user: User, assistant: Assistant) -
 
 
 async def show_weight(
-    bot: Bot, chat_id: int, points: list[tuple[datetime, float]], tz: str, target: str
+    bot: Bot, chat_id: int, points: list[tuple[datetime, float]], tz: str, target: str,
+    caption: str = "⚖️ Вес",
 ) -> bool:
-    """«⚖️ Вес» графиком (FR-49.3) вместо PNG. False — замеров меньше двух или не вышло:
-    вызывающий шлёт прежний PNG (D-55)."""
+    """«⚖️ Вес» графиком (FR-49.3) — единственное сообщение пути (D-60). False — замеров меньше
+    двух или не вышло: вызывающий шлёт прежние rich/текст и PNG (D-55)."""
     try:
         data = weight_data(points, tz, target)
         if data is None:
             return False
-        last = json.loads(data)
         await bot(SendWidget(
-            chat_id=chat_id, html=template("weight"), chat_data=data,
-            caption=f"⚖️ {wkg(last['l'])} кг · за период {wkg(last['dp'], sign=True)} кг",
+            chat_id=chat_id, html=template("weight"), chat_data=data, caption=caption,
             reply_markup=open_in_app("body"),
         ))
     except Exception as exc:  # noqa: BLE001
@@ -170,34 +165,19 @@ async def show_weight(
 
 
 async def _apply(bot: Bot, chat_id: int, live: _Live, built: Built) -> None:
-    """Правка данных и подписи живого виджета; «not modified» — не ошибка.
-
-    Данные и подпись — раздельно: подпись — фолбэк (W-INV-2), её сбой не должен выдать виджет за
-    пропавший — тогда пуш замолчал бы, хотя данные только что приняты."""
+    """Правка данных живого виджета; «not modified» — не ошибка. Подпись цифр не несёт и не
+    правится (W-INV-2, D-60)."""
     key = _key(built.data)
-    if key != live.key:
-        try:
-            await bot(EditMessageWidgetData(
-                chat_id=chat_id, message_id=live.message_id, chat_data=built.data
-            ))
-        except TelegramBadRequest as exc:
-            if "not modified" not in str(exc).lower():
-                raise
-        live.key = key
-    if built.caption != live.caption:
-        try:
-            await bot.edit_message_caption(
-                chat_id=chat_id, message_id=live.message_id, caption=built.caption,
-                parse_mode=None, reply_markup=open_in_app("day"),
-            )
-        except TelegramBadRequest as exc:
-            if "not modified" not in str(exc).lower():
-                logger.warning("widget: подпись виджета дня не правится: %s", exc)
-                return  # данные приняты; подпись попробуем со следующей правкой
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("widget: подпись виджета дня не правится: %s", exc)
-            return
-        live.caption = built.caption
+    if key == live.key:
+        return
+    try:
+        await bot(EditMessageWidgetData(
+            chat_id=chat_id, message_id=live.message_id, chat_data=built.data
+        ))
+    except TelegramBadRequest as exc:
+        if "not modified" not in str(exc).lower():
+            raise
+    live.key = key
 
 
 def watching(user: User) -> bool:
@@ -314,7 +294,7 @@ async def respond(
         # Вчерашний — «итог дня» (1), старший того же дня — «снимок» (2); не правим (AC-274).
         return {"st": 1 if built.day != day else 2}, None
     if live is None or live.message_id != mid:  # после рестарта: учимся заново
-        _LIVE[uid] = _Live(day, mid, "", "")
+        _LIVE[uid] = _Live(day, mid, "")
     return json.loads(built.data), built
 
 

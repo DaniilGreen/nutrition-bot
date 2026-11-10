@@ -45,12 +45,9 @@ async def show(
     """Отправить вечерний итог виджетом. False — не вышло: вызывающий шлёт rich-итог."""
     try:
         data = evening_data(ctx, day, await assistant.streak(user))
-        c, g = ctx.today.remaining.consumed, ctx.goal
         msg = await bot(SendWidget(
             chat_id=user.telegram_id, html=template("evening"), chat_data=data,
-            caption=f"🌙 Итог дня: {round(c.kcal)} из {round(g.daily_kcal)} ккал · "
-                    f"белок {round(c.protein)} из {round(g.protein_g)} г",
-            allow_queries=True,
+            caption="🌙 Итог дня", allow_queries=True,  # уведомление; цифры — в виджете (D-60)
         ))
     except Exception as exc:  # noqa: BLE001
         logger.warning("widget: вечерний итог не ушёл (%s) — фолбэк на rich", exc)

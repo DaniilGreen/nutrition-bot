@@ -32,7 +32,7 @@ from app.application.results import DailyStats, DayPace
 from app.bot.keyboards import weighable
 from app.bot.quick import Frequent, parse_op
 from app.bot.ui.context import DayContext, est_share
-from app.bot.ui.kit import MON, WD
+from app.bot.ui.kit import MON, WD, macros_rows, pct
 from app.bot.ui.screens import WeekView, week_hits
 from app.domain.goals import Goal, Remaining
 from app.domain.nutrition import macros_for_grams
@@ -125,19 +125,6 @@ def today_data(
     return text
 
 
-def today_caption(stats: DailyStats, g: Goal) -> str:
-    """Подпись (W-INV-2): главная цифра дня текстом — её видят список чатов и старые клиенты."""
-    c = stats.remaining.consumed
-    if not stats.meals:
-        return f"📊 Сегодня: пока пусто · цель {round(g.daily_kcal)} ккал"
-    left = round(stats.remaining.kcal_left)
-    rest = f"осталось {left}" if left >= 0 else f"перебор {-left}"
-    return (
-        f"📊 Сегодня: {round(c.kcal)} из {round(g.daily_kcal)} ккал · {rest} · "
-        f"белок {round(c.protein)} из {round(g.protein_g)} г"
-    )
-
-
 def frequent_data(freq: Frequent) -> str:
     """`chat_data` виджета «⚡ Частое» (FR-49.2): ровно плитки клавиатуры FR-40 — тот же топ,
     те же подписи и граммы (`frequent_tiles`, одна выборка `quick.frequent`), плюс ккал порции.
@@ -166,10 +153,12 @@ def frequent_data(freq: Frequent) -> str:
 def weight_data(points: list[tuple[datetime, float]], tz: str, target: str) -> str | None:
     """`chat_data` виджета «⚖️ Вес» (FR-49.3): записанные замеры как есть (D-40).
 
-    Формат v1: "p" — [[дни от первого замера, кг], …] по настоящему времени; "a0" — ISO-дата
-    первого замера и "h0" — её час (даты точек JS считает от них); "a"/"z" — подписи краёв
-    оси; "l" — последний;
-    "dp" — Δ за период; "dm" — Δ за 4 недели или null; "st" — статус Δ (ok/bad/mute, MA-INV-20).
+    Формат v1: "p" — [[дни от первого замера, кг, номер дня замера от "a0"], …]: первое — место на
+    оси по настоящему времени, третье — местная дата замера, посчитанная здесь, как у списка
+    «📋 Замеры» rich-экрана (JS только прибавляет целые дни к "a0" для подписи тапа);
+    "a0" — ISO-дата первого замера; "a"/"z" — подписи краёв оси; "l" — последний;
+    "dp" — Δ за период; "dm" — Δ за 4 недели или null; "st" — статус Δ (ok/bad/mute, MA-INV-20);
+    "dd" — Δ с прошлого замера (последний − предпоследний: то, что писал текст «Вес записан»).
     Все разности — `weight_change`, как в тексте экрана: числа не разъедутся. None — замеров
     меньше двух (график не нужен, FR-8)."""
     from app.domain.weight_change import weight_change
@@ -189,13 +178,14 @@ def weight_data(points: list[tuple[datetime, float]], tz: str, target: str) -> s
         data = {
             "v": 1,
             "a0": d0.isoformat(),
-            "h0": round(t0.astimezone(zone).hour + t0.astimezone(zone).minute / 60, 1),
             "a": f"{first.day} {MON[first.month - 1]}",
             "z": f"{last.day} {MON[last.month - 1]}",
-            "p": [[round((t - t0).total_seconds() / 86400, 1), round(w, 1)] for t, w in pts],
+            "p": [[round((t - t0).total_seconds() / 86400, 1), round(w, 1),
+                   (t.astimezone(zone).date() - d0).days] for t, w in pts],
             "l": round(ch.last_kg, 1),
             "dp": ch.period_kg,
             "dm": ch.month_kg,
+            "dd": round(pts[-1][1] - pts[-2][1], 1),
             "st": status,
         }
         text = _dump(data)
@@ -209,7 +199,7 @@ MEAL_NAME_STEPS = (28, 18, 12)
 
 
 def meal_data(
-    meal: Meal, left: Remaining, goal: Goal, tz: str, *, session_kcal: float | None = None,
+    meal: Meal, left: Remaining, tz: str, *, session_kcal: float | None = None,
     undo: int = 0, deleted: bool = False,
 ) -> str | None:
     """`chat_data` карточки приёма (FR-49.4). None — не влезла в бюджет: вызывающий шлёт rich.
@@ -217,8 +207,9 @@ def meal_data(
     Формат v1 (ключи короткие — бюджет 1024 байта, ответ на запрос — те же данные + "ok"):
       m   id записи                     at  «13:05» — время записи      dl  «вт, 10 ноя»
       i   [[id позиции, имя, граммы, ккал, ≈ 0/1, вес правится 0/1]] — порядок записи
-      k   записью [ккал, Б, Ж, У]       l   осталось в дне записи [ккал, Б] (`Remaining`)
-      g   цель [ккал, Б]                e   съедено в дне [ккал, Б]
+      k   записью [ккал, Б, Ж, У]
+      dy  день записи [[съедено, цель, %] × Ккал, Б, Ж, У] — те же `macros_rows`/`pct`, что у
+          rich-карточки (MA-INV-1), от `Remaining` дня записи (вчерашняя — вчерашний день)
       ss  ккал приёма пищи (FR-47), если записей в нём больше одной
       z   что можно вернуть этим виджетом: 0 — ничего, 1 — позицию, 2 — запись
       x   1 — запись удалена (карточка показывает «удалена» и «⏪ Вернуть»)
@@ -227,14 +218,13 @@ def meal_data(
     zone = ZoneInfo(tz)
     at = meal.eaten_at.astimezone(zone)
     can = {i.id for i in weighable(meal)}
-    t, c = meal.totals, left.consumed
+    t = meal.totals
     base: dict[str, Any] = {
         "v": 1, "m": meal.id, "at": at.strftime("%H:%M"),
         "dl": f"{WD[at.weekday()].lower()}, {at.day} {MON[at.month - 1]}",
         "k": [round(t.kcal), round(t.protein), round(t.fat), round(t.carb)],
-        "l": [round(left.kcal_left), round(left.protein_left)],
-        "g": [round(goal.daily_kcal), round(goal.protein_g)],
-        "e": [round(c.kcal), round(c.protein)],
+        "dy": [[round(c), round(g), pct(c, g)]
+               for _, c, g in macros_rows(left.consumed, left.goal)],
         "z": undo, "x": int(deleted),
         "rv": time.time_ns() // 1_000_000 % 10**10,  # ревизия: старшая правка не ляжет поверх
     }
@@ -254,18 +244,15 @@ def meal_data(
     return None
 
 
-def meal_caption(meal: Meal, left: Remaining, *, deleted: bool = False) -> str:
-    """Подпись карточки приёма (W-INV-2): что записал и остаток — текстом."""
+def meal_caption(meal: Meal, *, deleted: bool = False) -> str:
+    """Подпись карточки приёма (W-INV-2, D-60): что записал — именами, без граммов и ккал
+    (они в виджете). Видна в уведомлении и списке чатов."""
     if deleted:
         return "↩️ Запись удалена"
-    names = ", ".join(
-        f"{i.name_snapshot} {i.grams:g} г" if i.grams else i.name_snapshot for i in meal.items
-    )
+    names = ", ".join(i.name_snapshot.strip() for i in meal.items)
     if len(names) > 120:
         names = names[:119].rstrip() + "…"
-    rest = round(left.kcal_left)
-    tail = f"осталось {rest}" if rest >= 0 else f"перебор {-rest}"
-    return f"✅ Записал: {names} · {round(meal.totals.kcal)} ккал · {tail}"
+    return f"✅ Записал: {names}"
 
 
 _CELL = {"none": 0, "ok": 1, "low": 2, "over": 3}

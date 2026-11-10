@@ -72,13 +72,12 @@ async def _card(
     """Данные, подпись и приём пищи (FR-47, только из нескольких записей) карточки из базы;
     остаток — дня самой записи, а не сегодняшнего."""
     left = left or await assistant.day_left(user, meal.eaten_at)
-    goal = await assistant.current_goal(user)
     sess = None if deleted or meal.id is None else await assistant.session_of(user, meal.id)
     if sess is not None and len(sess.meals) < 2:
         sess = None
     ss = sum(m.totals.kcal for m in sess.meals) if sess is not None else None
-    data = meal_data(meal, left, goal, user.timezone, session_kcal=ss, undo=undo, deleted=deleted)
-    return data, meal_caption(meal, left, deleted=deleted), sess
+    data = meal_data(meal, left, user.timezone, session_kcal=ss, undo=undo, deleted=deleted)
+    return data, meal_caption(meal, deleted=deleted), sess
 
 
 async def show(
@@ -100,27 +99,64 @@ async def show(
     return True
 
 
+async def _edit(
+    bot: Bot, uid: int, mid: int, data: str, caption: str, meal: Meal | None,
+    sess: MealSession | None,
+) -> bool:
+    """Правка самого сообщения: данные, подпись, кнопки под ним. False — данные не легли (это не
+    виджет или сообщения нет); подпись и кнопки тогда не трогаем."""
+    try:
+        await bot(EditMessageWidgetData(chat_id=uid, message_id=mid, chat_data=data))
+    except Exception as exc:  # noqa: BLE001
+        if "not modified" not in str(exc).lower():
+            logger.warning("widget: данные карточки приёма не правятся: %s", exc)
+            return False
+    try:
+        await bot.edit_message_caption(
+            chat_id=uid, message_id=mid, caption=caption, parse_mode=None,
+            reply_markup=meal_widget_keyboard(meal, sess),
+        )
+    except Exception as exc:  # noqa: BLE001 — данные уже легли: виджет показывает правду
+        if "not modified" not in str(exc).lower():
+            logger.warning("widget: подпись карточки приёма не правится: %s", exc)
+    return True
+
+
 def _refresh(
     uid: int, mid: int, data: str, caption: str, meal: Meal | None, sess: MealSession | None
 ) -> Callable[[Bot], Awaitable[None]]:
-    """Правка самого сообщения после ответа: данные, подпись, кнопки под ним (D-50)."""
+    """Правка самого сообщения после ответа виджету — открытая позже карточка покажет правду."""
 
     async def run(bot: Bot) -> None:
-        try:
-            await bot(EditMessageWidgetData(chat_id=uid, message_id=mid, chat_data=data))
-        except Exception as exc:  # noqa: BLE001 — подпись и кнопки правим всё равно
-            if "not modified" not in str(exc).lower():
-                logger.warning("widget: данные карточки приёма не правятся: %s", exc)
-        try:
-            await bot.edit_message_caption(
-                chat_id=uid, message_id=mid, caption=caption, parse_mode=None,
-                reply_markup=meal_widget_keyboard(meal, sess),
-            )
-        except Exception as exc:  # noqa: BLE001
-            if "not modified" not in str(exc).lower():
-                logger.warning("widget: подпись карточки приёма не правится: %s", exc)
+        await _edit(bot, uid, mid, data, caption, meal, sess)
 
     return run
+
+
+async def refresh_fix(
+    bot: Bot, user: User, assistant: Assistant, mid: int, meal: Meal | None,
+    snapshot: Meal | None,
+) -> bool:
+    """Ответ текстом на карточку-виджет (FR-44, D-61): перерисовать сам виджет из базы. `meal` —
+    запись после правки (None — удалена целиком), `snapshot` — до замены/удаления: тогда
+    «⏪ Вернуть» — кнопкой в виджете (слот `m:r`, отпечаток FR-41); у правки веса снимка нет.
+    False — это не виджет (rich-карточка) или его не править: вызывающий идёт прежним rich-путём.
+    Звать ПОСЛЕ фиксации: слот «Вернуть» не должен пережить откат."""
+    uid = user.telegram_id
+    shown = meal or snapshot
+    if shown is None:
+        return False
+    undo = 0 if snapshot is None else 1 if meal is not None else 2
+    data, caption, sess = await _card(assistant, user, shown, undo=undo, deleted=meal is None)
+    if data is None or not await _edit(
+        bot, uid, mid, data, caption, None if meal is None else meal, sess
+    ):
+        return False
+    if snapshot is not None:
+        _undo[(uid, mid)] = _Undo(_now(), snapshot, meal_fingerprint(meal), undo)
+    else:
+        _undo.pop((uid, mid), None)  # вес поправили — прежний «Вернуть» устарел
+    return True
 
 
 async def _answer(

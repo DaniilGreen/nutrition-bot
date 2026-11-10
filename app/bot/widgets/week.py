@@ -8,7 +8,6 @@ from aiogram import Bot
 
 from app.bot.keyboards import open_in_app
 from app.bot.ui.context import DayContext
-from app.bot.ui.kit import k
 from app.bot.ui.screens import week_view
 from app.bot.ui.widgets import LIMIT, size, week_data
 from app.bot.widgets import template
@@ -30,7 +29,7 @@ async def show(bot: Bot, chat_id: int, ctx: DayContext) -> bool:
             return False
         await bot(SendWidget(
             chat_id=chat_id, html=template("week"), chat_data=data,
-            caption=f"📈 Неделя {v.title}: {v.hero} · в среднем {k(v.avg.kcal)} ккал",
+            caption="📈 Неделя",  # W-INV-2, D-60: цифры — в виджете
             reply_markup=open_in_app("tot-week"),
         ))
     except Exception as exc:  # noqa: BLE001

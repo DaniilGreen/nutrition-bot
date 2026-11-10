@@ -1,31 +1,30 @@
 <style>
 :root{color-scheme:light dark;--t:light-dark(#0e1013,#fff);--m:light-dark(#4e5560,#a7abb2);--b1:light-dark(#f7f9fc,#22262c);--b2:light-dark(#e2e8f0,#131518);--cd:light-dark(rgba(255,255,255,.72),rgba(255,255,255,.055));--da:light-dark(#1d2833,#c3cbd5);--ok:light-dark(#1d7a3a,#34c759);--wa:light-dark(#835600,#ffd426)}
 body{margin:0;padding:12px 14px max(12px,env(safe-area-inset-bottom));font:15px/1.3 system-ui,sans-serif;color:var(--t);background:linear-gradient(165deg,var(--b1),var(--b2));font-variant-numeric:tabular-nums}
-.r{display:flex;align-items:center;gap:8px}.sp{flex:1}.m{color:var(--m);font-size:13px}
+.r{display:flex;align-items:center;gap:8px}.m{color:var(--m);font-size:13px}
 header b{font-size:20px}.bg{font-size:clamp(30px,12vw,44px);font-weight:700;letter-spacing:-1px;margin:6px 0 2px}.bg small{font-size:15px;color:var(--m);font-weight:500;margin-left:3px}
-.p{font-size:13px;font-weight:600;padding:3px 9px;border-radius:99px;background:var(--cd)}
 .c{background:var(--cd);border-radius:18px;padding:10px 12px;margin-top:10px}
 svg{display:block;width:100%;height:auto}.ax{display:flex;justify-content:space-between;font-size:11px;color:var(--m);margin-top:2px}
 #tp{min-height:18px;font-size:13px;margin-top:4px}
 .ft{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px}.ft div{font-size:12px;color:var(--m)}.ft b{display:block;font-size:16px;color:var(--t);white-space:nowrap}
-@media (max-width:260px){.ft{grid-template-columns:minmax(0,1fr);gap:4px}.ft div{display:flex;justify-content:space-between;align-items:baseline;gap:6px}.ft b{font-size:15px}header .p{font-size:12px}}
+@media (max-width:260px){.ft{grid-template-columns:minmax(0,1fr);gap:4px}.ft div{display:flex;justify-content:space-between;align-items:baseline;gap:6px}.ft b{font-size:15px}}
 </style>
-<header class=r><b>⚖️ Вес</b><span class=sp></span><span class=p id=dp></span></header>
+<header class=r><b>⚖️ Вес</b></header>
 <div class=bg id=l></div><div class=m id=sb></div>
 <div class=c><svg id=sv viewBox="0 0 300 120"></svg><div class=ax><span id=a></span><span id=z></span></div><div id=tp class=m>Тап по точке — дата и вес</div></div>
-<div class=ft><div>последний<b id=f1></b></div><div>за период<b id=f2></b></div><div>за 4 недели<b id=f3></b></div></div>
+<div class=ft><div>с прошлого<b id=f1></b></div><div>за период<b id=f2></b></div><div>за 4 недели<b id=f3></b></div></div>
 <script>
 const W=window.TelegramWidget,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
 K=v=>v==null?'—':(v>0?'+':'')+(v.toFixed(1)).replace('.',',').replace('-','−'),A=v=>K(v).replace('+',''),M=['янв','фев','мар','апр','мая','июн','июл','авг','сен','окт','ноя','дек'];
 let D=null;
-function dt(x){const d=new Date(D.a0+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+Math.floor(D.h0/24+x));return d.getUTCDate()+' '+M[d.getUTCMonth()]}
+function dt(n){const d=new Date(D.a0+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.getUTCDate()+' '+M[d.getUTCMonth()]}
 function draw(){D=J(W&&W.chatData);if(!D||D.v!=1)return;const p=D.p,xs=p.map(q=>q[0]),ws=p.map(q=>q[1]),x1=Math.max(...xs)||1,lo=Math.min(...ws),hi=Math.max(...ws),pad=Math.max(.3,(hi-lo)*.15),
 X=x=>(8+x/x1*284).toFixed(1),Y=w=>(10+(hi+pad-w)/(hi-lo+2*pad)*92).toFixed(1),line=p.map(q=>X(q[0])+','+Y(q[1])).join(' '),
 c=D.st=='ok'?'--ok':D.st=='bad'?'--wa':'--m',il=ws.indexOf(lo),ih=ws.indexOf(hi),n=p.length-1,
 lab=(i,s,dy)=>{const x=+X(p[i][0]);return i==n?'':'<text x='+x+' y='+(+Y(p[i][1])+dy)+' text-anchor='+(x<50?'start':x>250?'end':'middle')+' font-size=10 fill="var(--m)">'+s+' '+A(p[i][1])+'</text>'};
-$('l').innerHTML=A(D.l)+'<small>кг</small>';$('sb').textContent='последний замер, '+D.z;$('dp').textContent=K(D.dp)+' кг';$('dp').style.color='var('+c+')';
+$('l').innerHTML=A(D.l)+'<small>кг</small>';$('sb').textContent='последний замер, '+D.z;$('f2').style.color='var('+c+')';
 $('sv').innerHTML='<defs><linearGradient id=g x1=0 y1=0 x2=0 y2=1><stop offset=0 stop-color="var(--da)" stop-opacity=.22 /><stop offset=1 stop-color="var(--da)" stop-opacity=0 /></linearGradient></defs><polygon points="'+X(xs[0])+',112 '+line+' '+X(xs[n])+',112" fill="url(#g)"/><polyline points="'+line+'" fill=none stroke="var(--da)" stroke-width=2.5 stroke-linejoin=round />'+p.map((q,i)=>'<circle cx='+X(q[0])+' cy='+Y(q[1])+' r='+(i==n?5:3)+' fill="var(--da)"/>').join('')+p.map((q,i)=>'<circle data-i='+i+' cx='+X(q[0])+' cy='+Y(q[1])+' r=11 fill="var(--da)" fill-opacity=0 />').join('')+(lo<hi?lab(il,'мин',14)+lab(ih,'макс',-8):'');
-$('a').textContent=D.a;$('z').textContent=D.z;$('f1').textContent=A(D.l)+' кг';$('f2').textContent=K(D.dp)+' кг';$('f3').textContent=D.dm==null?'—':K(D.dm)+' кг'}
-document.addEventListener('click',e=>{const t=e.target.closest('[data-i]');if(!t||!D)return;const q=D.p[+t.dataset.i];$('tp').innerHTML=dt(q[0])+' · <b style="color:var(--t)">'+A(q[1])+' кг</b>';try{W.HapticFeedback.selectionChanged()}catch(x){}});
+$('a').textContent=D.a;$('z').textContent=D.z;$('f1').textContent=D.dd==null?'—':K(D.dd)+' кг';$('f2').textContent=K(D.dp)+' кг';$('f3').textContent=D.dm==null?'—':K(D.dm)+' кг'}
+document.addEventListener('click',e=>{const t=e.target.closest('[data-i]');if(!t||!D)return;const q=D.p[+t.dataset.i];$('tp').innerHTML=dt(q[2])+' · <b style="color:var(--t)">'+A(q[1])+' кг</b>';try{W.HapticFeedback.selectionChanged()}catch(x){}});
 if(W){W.onEvent('chatDataChanged',draw);draw();try{W.ready&&W.ready()}catch(e){}}else draw();
 </script>

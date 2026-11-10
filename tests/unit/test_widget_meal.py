@@ -78,16 +78,38 @@ def test_данные_карточки_в_бюджете_и_снапшоты() -
     goal = Goal(2200, 183, 80, 200)
     m = _rec(1)
     m.id, m.items[0].id, m.items[1].id = 9, 1, 2
-    d = json.loads(meal_data(m, remaining(m.totals, goal), goal, "UTC") or "{}")
-    assert d["m"] == 9 and d["k"] == [505, 54, 15, 38] and d["l"][0] == 2200 - 505
+    d = json.loads(meal_data(m, remaining(m.totals, goal), "UTC") or "{}")
+    assert d["m"] == 9 and d["k"] == [505, 54, 15, 38]
+    # AC-292, D-60: день записи — четыре строки rich-карточки «Ккал · 505 / 2200 · 23%» и т.д.
+    assert d["dy"] == [[505, 2200, 23], [54, 183, 30], [15, 80, 19], [38, 200, 19]]
+    assert "l" not in d and "e" not in d and "g" not in d  # «осталось» заменено строками дня
     assert d["i"][1] == [2, "рис", 150, 175, 1, 1] and d["z"] == 0 and d["x"] == 0
     long = _rec(1)
     long.id = 9
     long.items = [MealItem(name_snapshot="Очень длинное название блюда " * 4, grams=100 + i,
                            macros=Macros(100, 1, 1, 1), id=i) for i in range(14)]
-    text = meal_data(long, remaining(m.totals, goal), goal, "UTC", session_kcal=900, undo=2)
+    text = meal_data(long, remaining(m.totals, goal), "UTC", session_kcal=900, undo=2)
     assert text is not None and len(text.encode()) <= LIMIT - 8
-    assert "перебор" in meal_caption(m, remaining(Macros(3000, 1, 1, 1), goal))
+    # AC-290: подпись — что записал, без граммов и ккал (они в виджете)
+    assert meal_caption(m) == "✅ Записал: курица гриль, рис"
+    assert meal_caption(m, deleted=True) == "↩️ Запись удалена"
+
+
+def test_все_числа_карточки_целые() -> None:
+    """AC-292: ккал и БЖУ в `chat_data` — целые, как у rich-карточки («+40», а не «+40.3»;
+    «946», а не «946.77»). Дробь допустима только у граммов (до 0,1 г)."""
+    from app.domain.goals import Goal, remaining
+
+    goal = Goal(1635.4, 125.2, 55.6, 160.3)
+    items = [MealItem(name_snapshot="молоко 1%", grams=95.5, macros=Macros(40.13, 3.12, 1.49, 4.77),
+                      id=1, is_estimate=True)]
+    m = Meal(user_id=1, eaten_at=datetime.now(UTC), input_type="text", raw_input="молоко",
+             items=items, source_confidence=0.9, totals=Macros(40.33, 3.12, 1.49, 4.77), id=9)
+    d = json.loads(meal_data(m, remaining(Macros(688.23, 48.1, 13.7, 70.2), goal), "UTC",
+                             session_kcal=130.6) or "{}")
+    ints = d["k"] + [x for row in d["dy"] for x in row] + [d["ss"], d["i"][0][3]]
+    assert all(isinstance(x, int) for x in ints), ints
+    assert d["k"][0] == 40 and d["dy"][0] == [688, 1635, 42] and d["i"][0][2] == 95.5
 
 
 async def test_показ_и_фолбэк(world) -> None:  # noqa: ANN001
@@ -98,7 +120,7 @@ async def test_показ_и_фолбэк(world) -> None:  # noqa: ANN001
     assert await wmeal.show(bot, 5, u, assistant, MealLogged(meal, left))  # type: ignore[arg-type]
     sent = bot.calls[0]
     assert isinstance(sent, SendWidget) and sent.html == template("meal") and sent.allow_queries
-    assert sent.caption.startswith("✅ Записал: курица гриль 200 г, рис 150 г · 505 ккал")
+    assert sent.caption == "✅ Записал: курица гриль, рис"  # AC-290: цифры — в виджете
     kb = [b.callback_data for r in sent.reply_markup.inline_keyboard for b in r]
     assert f"meal_repeat:{meal.id}" in kb and f"dish_save:{meal.id}" in kb
     assert not any(c and c.startswith(("meal_undo", "item_del", "iw:")) for c in kb)
@@ -168,7 +190,7 @@ async def test_после_правки_сообщение_поправлено(w
     edit = bot.calls[0]
     assert isinstance(edit, EditMessageWidgetData) and edit.message_id == 77
     assert json.loads(edit.chat_data)["i"][0][2] == 180
-    assert "курица гриль 180 г" in str(bot.captions[0]["caption"])
+    assert bot.captions[0]["caption"] == "✅ Записал: курица гриль, рис"
     out = await wmeal.on_meal(5, 77, f"m:u:{meal.id}:z2z2", u, assistant)  # type: ignore[arg-type]
     bot = Bot()
     await out.after(bot)  # type: ignore[arg-type]
@@ -239,3 +261,81 @@ async def test_правка_граммов_прячет_вернуть(world) ->
     a = await _do(assistant, u, f"m:a:{meal.id}:{r['i'][0][0]}:190:p2p2")
     assert a["ok"] == 1 and a["z"] == 0
     assert (await _do(assistant, u, f"m:r:{meal.id}:p3p3"))["err"] == "old"
+
+
+# --- ответ текстом на карточку-виджет (FR-44, AC-293, D-61) ----------------------------------
+
+async def test_ответ_на_виджет_правит_виджет_и_вернуть_в_нём(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """«удали рис» ответом на виджет: виджет перерисован из базы (rich-правки нет — виджет её не
+    примет), «⏪ Вернуть» — внутри (z=1) и работает тем же `m:r`; след — строка без кнопок и ккал.
+    До D-61 виджет оставался со старыми граммами, а след шёл с полной rich-клавиатурой."""
+    from aiogram.methods import SendMessage
+
+    from app.bot import handlers
+    from app.bot.keyboards import meal_widget_keyboard
+    from tests.unit import test_bot_reply_fix as rf
+
+    monkeypatch.setattr(handlers.widgets_live, "enabled", lambda u, s=None: True)
+    wmeal._undo.clear()
+    w = await rf._world()
+    a = await w.meals.add(rf._meal(w.user.id, rf._BUCK, rf._RICE))
+    w.nlu.queue = [rf._fix("delete", rf._food("рис", kcal=0))]
+    msg = await rf._say(w, rf._reply("удали рис", meal_widget_keyboard(a)))
+    assert rf._items(a) == [("гречка", 150)]
+    [edit] = [c.args[0] for c in msg.bot.await_args_list
+              if isinstance(c.args[0], EditMessageWidgetData)]
+    d = json.loads(edit.chat_data)
+    assert edit.message_id == 5 and [x[1] for x in d["i"]] == ["гречка"] and d["z"] == 1
+    assert not msg.bot.edit_message_text.await_count  # rich-правки виджета нет
+    [trace] = [c.args[0] for c in msg.bot.await_args_list if isinstance(c.args[0], SendMessage)]
+    assert trace.text == "🗑 Убрал: рис" and trace.reply_markup is None
+    back = await _do(w.assistant, w.user, f"m:r:{a.id}:rb01", mid=5)
+    assert back["ok"] == 1 and [x[1] for x in back["i"]] == ["гречка", "рис"]
+
+
+async def test_ответ_весом_на_виджет_без_вернуть(monkeypatch: pytest.MonkeyPatch) -> None:
+    """«гречки было 120» — вес правится, виджет перерисован, «Вернуть» нет (у веса его нет, FR-43);
+    прежний слот «Вернуть» этого виджета снят: он откатил бы и правку веса."""
+    from app.bot import handlers
+    from app.bot.keyboards import meal_widget_keyboard
+    from tests.unit import test_bot_reply_fix as rf
+
+    monkeypatch.setattr(handlers.widgets_live, "enabled", lambda u, s=None: True)
+    wmeal._undo.clear()
+    w = await rf._world()
+    a = await w.meals.add(rf._meal(w.user.id, rf._BUCK))
+    wmeal._undo[(w.user.telegram_id, 5)] = wmeal._Undo(0, a, None, 1)
+    msg = await rf._say(w, rf._reply("120 г", meal_widget_keyboard(a)))
+    assert rf._items(a) == [("гречка", 120)]
+    [edit] = [c.args[0] for c in msg.bot.await_args_list
+              if isinstance(c.args[0], EditMessageWidgetData)]
+    assert json.loads(edit.chat_data)["z"] == 0 and (w.user.telegram_id, 5) not in wmeal._undo
+
+
+async def test_ответ_на_rich_карточку_прежним_путём(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Флаг есть, но карточка — rich (старше раскатки): `editMessageWidgetData` отказывает —
+    прежняя rich-правка со «⏪ Вернуть» на карточке (D-61)."""
+    from aiogram.exceptions import TelegramBadRequest
+
+    from app.bot import handlers
+    from app.bot.keyboards import meal_actions_keyboard
+    from tests.unit import test_bot_reply_fix as rf
+
+    monkeypatch.setattr(handlers.widgets_live, "enabled", lambda u, s=None: True)
+    w = await rf._world()
+    a = await w.meals.add(rf._meal(w.user.id, rf._BUCK, rf._RICE))
+    w.nlu.queue = [rf._fix("delete", rf._food("рис", kcal=0))]
+    msg = rf._reply("удали рис", meal_actions_keyboard(a))
+
+    async def bot(method: object, *a: object, **k: object) -> object:
+        if isinstance(method, EditMessageWidgetData):
+            raise TelegramBadRequest(method=method, message="Bad Request: message is not a widget")  # type: ignore[arg-type]
+        return SimpleNamespace(message_id=11)
+
+    msg.bot.side_effect = bot
+    await rf._say(w, msg)
+    [card] = rf._edits(msg)
+    assert card["message_id"] == 5 and card["rich_message"].html.startswith("<h3>✏️ Поправил")
+    assert rf._texts(card["reply_markup"])[0] == "⏪ Вернуть: рис"

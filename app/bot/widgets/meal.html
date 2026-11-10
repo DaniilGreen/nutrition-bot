@@ -11,10 +11,10 @@ button{font:600 15px system-ui,sans-serif;border:0;border-radius:12px;background
 .st{display:flex;align-items:center;gap:4px}.st button{width:34px;height:30px;padding:0;border-radius:10px;background:var(--tr);font-size:18px;line-height:1}.st b{min-width:62px;text-align:center;font-weight:600}.st b.pv{color:var(--ac)}
 .dl{background:none;color:var(--al);padding:4px 6px;justify-self:end}.bz{opacity:.45;pointer-events:none}
 .tk{height:6px;border-radius:3px;background:var(--tr);margin:5px 0 8px;overflow:hidden}.tk i{display:block;height:100%}
-.dy{padding:10px 12px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.dy .m b{display:block;color:var(--t);font-size:17px;margin-top:2px}.dy .tk{margin-bottom:0}
+.dy{padding:10px 12px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px}.dy>div{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;font-size:13px}.dy>div>b{grid-column:1/3;font-size:16px;font-weight:600}.dy s{text-decoration:none;color:var(--m);font-weight:400;font-size:13px}.dy>div>i{font-style:normal;font-weight:600}.dy .tk{grid-column:1/-1;margin:4px 0 0}
 #ac{display:flex;gap:8px;flex-wrap:wrap}#ac button{flex:1 1 120px;white-space:nowrap;padding:8px}.un{color:var(--al)}.bk{background:var(--ac);color:var(--at)}
-#ts{font-size:13px;margin-top:8px;color:var(--m);min-height:17px}
-@media (max-width:260px){.st b{min-width:50px}.st button{width:28px}.bg{font-size:26px}.it{padding:6px 0}}
+#ts{font-size:13px;margin-top:8px;color:var(--m)}#ts:empty{display:none}
+@media (max-width:260px){.st b{min-width:50px}.st button{width:28px}.bg{font-size:26px}.it{padding:6px 0}.dy{grid-template-columns:minmax(0,1fr);gap:4px;padding:8px 10px}.dy>div{grid-template-columns:auto minmax(0,1fr) auto;column-gap:5px;font-size:12px}.dy>div>b{grid-column:auto;order:1;font-size:12px;white-space:nowrap}.dy s{font-size:12px}.dy>div>i{order:2}.dy .tk{order:3}}
 </style>
 <header class=r><b>Записал</b><span class=m id=at></span><span class=sp></span></header>
 <div id=bd></div><div id=ac></div><div id=ts></div>
@@ -25,17 +25,16 @@ M={busy:'Ещё пишу предыдущее…',gone:'Записи уже не
 let D=null,B=0,P={},S=0,F={};
 const hp=t=>{try{t?W.HapticFeedback.notificationOccurred(t):W.HapticFeedback.selectionChanged()}catch(e){}},
 G=x=>P[x[0]]!=null?P[x[0]]:x[2],
-bar=(v,g,c)=>'<div class=tk><i style="width:'+(g>0?Math.min(100,v/g*100):0)+'%;background:var('+c+')"></i></div>',
+L=['Ккал','Белок','Жир','Углеводы'],CL=['--br','--pr','--fa','--ca'],
 toast=s=>{$('ts').textContent=s||''};
-function draw(){const d=D;if(!d||d.v!=1)return;if(d.i[0]&&!d.i.some(x=>x[0]==S))S=d.i[0][0];const k=d.k,l=d.l;$('at').textContent=d.at+' · '+d.dl;
+function draw(){const d=D;if(!d||d.v!=1)return;if(d.i[0]&&!d.i.some(x=>x[0]==S))S=d.i[0][0];const k=d.k;$('at').textContent=d.at+' · '+d.dl;
 if(d.x){$('bd').innerHTML='<div class=c style="padding:10px 12px"><b>Запись удалена</b><div class=m>'+T(d.i.map(x=>x[1]).join(', '))+' · '+k[0]+' ккал</div></div>';$('ac').innerHTML=d.z?'<button class=bk data-q=r>⏪ Вернуть</button>':'';return}
-const n=document.body.clientWidth<260?3:4,V=d.i.length>n+1?d.i.slice(0,n):d.i;if(V!=d.i&&!V.some(x=>x[0]==S))V[n-1]=d.i.find(x=>x[0]==S);
+const nw=document.body.clientWidth<260,n=nw?3:4,V=d.i.length>n+1?d.i.slice(0,n):d.i;if(V!=d.i&&!V.some(x=>x[0]==S))V[n-1]=d.i.find(x=>x[0]==S);
 $('bd').innerHTML='<div class=bg>+'+k[0]+'<small>ккал</small></div><div class=mc><span><i class=d style="background:var(--pr)"></i>Б <b>'+k[1]+'</b></span><span><i class=d style="background:var(--fa)"></i>Ж <b>'+k[2]+'</b></span><span><i class=d style="background:var(--ca)"></i>У <b>'+k[3]+'</b></span>'+(d.ss?'<span>приём пищи <b>'+d.ss+'</b></span>':'')+'</div><div class=c>'+
 V.map(x=>{const g=G(x),p=g!=x[2],o=d.i.length<4||x[0]==S;return'<div class=it data-i='+x[0]+'><div class=nm>'+T(x[1])+(x[4]?' <s>≈</s>':'')+'</div><div class=m>'+(o||!x[2]?'':C(g)+' г')+'</div><div class="kc'+(p?' pv':'')+'">'+(p?R(x[3]*g/x[2]):x[3])+'</div>'+
 (o?(x[5]?'<div class="st ed"><button data-s=-1>−</button><b'+(p?' class=pv':'')+'>'+C(g)+' г</b><button data-s=1>+</button></div>':'<div class="m ed" style="text-align:left">'+(x[2]?C(x[2])+' г · вес не правится':'без веса')+'</div>')+
 (d.i.length>1?'<button class=dl data-q=d>🗑</button>':'<span></span>'):'')+'</div>'}).join('')+(V.length<d.i.length?'<div class="it m" style="cursor:default;display:block">+'+(d.i.length-V.length)+' — правка в приложении ↓</div>':'')+'</div>'+
-'<div class="c dy"><div class=m>'+(l[0]<0?'Перебор':'Осталось')+'<b'+(l[0]<0?' style="color:var(--dg)"':'')+'>'+Math.abs(l[0])+' ккал</b>'+bar(d.e[0],d.g[0],'--br')+'</div>'+
-'<div class=m>Белка ещё<b>'+Math.max(0,l[1])+' г</b>'+bar(d.e[1],d.g[1],'--pr')+'</div></div>';
+'<div class="c dy">'+d.dy.map((r,i)=>'<div><span class=m>'+(nw&&i==3?'Углев.':L[i])+'</span><i'+(!i&&r[0]>r[1]?' style="color:var(--dg)"':'')+'>'+r[2]+'%</i><b>'+r[0]+'<s>'+(nw?'/':' / ')+r[1]+'</s></b><div class=tk><i style="width:'+Math.min(100,r[2])+'%;background:var('+CL[i]+')"></i></div></div>').join('')+'</div>';
 $('ac').innerHTML=(d.z==1?'<button class=bk data-q=r>⏪ Вернуть</button>':'')+'<button class=un data-q=u>↩️ Отменить всё</button>'}
 function send(q,el){if(!W||!W.request)return;B=1;el&&el.classList.add('bz');toast('');
 const fin=(r,e)=>{B=0;el&&el.classList.remove('bz');if(r&&r.v){D=r;for(const id in P){const x=D.i.find(x=>x[0]==id);if(!x||x[2]==P[id])delete P[id]}hp('success')}else{P={};F={};hp('error');toast(M[r?r.err:e&&e.code]||'Не вышло — попробуй ещё раз.')}draw();flush()};
