@@ -1234,3 +1234,11 @@ def test_низ_под_значок_telegram(path: Path) -> None:
     """В правом нижнем углу виджета Telegram рисует свой значок ↗ — он закрывал последнее число.
     Нижний отступ — не меньше 26 px."""
     assert "max(26px,env(safe-area-inset-bottom))" in path.read_text()
+
+
+def test_вес_линия_растёт_от_точки_к_точке() -> None:
+    """D-71: линия веса рисуется rAF от точки к точке, заливка и точки — следом. `pathLength` в
+    профиле виджетов не описан, и прорисовка через него в Telegram не шла."""
+    html = template("weight")
+    assert "pathLength" not in html and "function grow(){" in html
+    assert "if(document.body.className=='an')grow()" in html
