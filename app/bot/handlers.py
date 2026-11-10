@@ -83,11 +83,13 @@ from app.bot.formatters import (  # текстовые подсказки вну
 )
 from app.bot.keyboards import (
     BTN_BUG,
+    BTN_DIARY,
     BTN_FREQUENT,
     BTN_GOAL,
     BTN_HISTORY,
     BTN_PROFILE,
     BTN_TODAY,
+    BTN_TOTALS,
     BTN_UNDO,
     BTN_WEEK,
     BTN_WEIGHT,
@@ -102,6 +104,8 @@ from app.bot.keyboards import (
     GOAL_TARGET_PREFIX,
     ITEM_WEIGHT_PREFIX,
     LABEL_G_PREFIX,
+    LEGACY_BUTTONS,
+    NAV_PREFIX,
     ONBOARD_PREFIX,
     PHOTO_PREFIX,
     PROD_RENAME_PREFIX,
@@ -111,6 +115,7 @@ from app.bot.keyboards import (
     activity_keyboard,
     card_meal_id,
     day_nav_keyboard,
+    diary_nav_keyboard,
     fix_pick_keyboard,
     goal_target_keyboard,
     goal_type_keyboard,
@@ -580,21 +585,36 @@ async def cmd_profile(message: Message, state: FSMContext) -> None:
 # --- кнопки постоянного меню (приходят как обычный текст) ----------------------
 
 
-@router.message(F.text == BTN_TODAY)
+_MENU_MOVED = (
+    "Меню стало короче: «История» и «Частое» — внутри «📊 Дневника», цель и баг — в «⚙️ Профиле», "
+    "неделя — «📈 Итоги»."
+)
+
+
+async def _menu_moved(message: Message) -> None:
+    """D-87: нажата кнопка прежнего меню — она сработала, а следом одной строкой приходит новое
+    меню (клавиатура у человека обновляется только сообщением бота)."""
+    if message.text in LEGACY_BUTTONS:
+        await message.answer(_MENU_MOVED, reply_markup=main_menu_keyboard())
+
+
+@router.message(F.text.in_({BTN_DIARY, BTN_TODAY}))
 async def btn_today(
     message: Message, app_user: User, assistant: Assistant, state: FSMContext
 ) -> None:
     await state.clear()
     await _show_today(message, app_user, assistant)
+    await _menu_moved(message)
 
 
-@router.message(F.text == BTN_WEEK)
+@router.message(F.text.in_({BTN_TOTALS, BTN_WEEK}))
 async def btn_week(
     message: Message, app_user: User, assistant: Assistant, state: FSMContext,
     scans: BodyScanService,
 ) -> None:
     await state.clear()
     await _show_week(message, app_user, assistant, scans)
+    await _menu_moved(message)
 
 
 @router.message(F.text == BTN_HISTORY)
@@ -603,6 +623,7 @@ async def btn_history(
 ) -> None:
     await state.clear()
     await _show_history(message, app_user, assistant)
+    await _menu_moved(message)
 
 
 @router.message(F.text == BTN_WEIGHT)
@@ -613,18 +634,16 @@ async def btn_weight(
     await _show_weight(message, app_user, assistant)
 
 
-@router.message(F.text == BTN_GOAL)
-async def btn_goal(
+@router.message(F.text.in_({BTN_PROFILE, BTN_GOAL}))
+async def btn_profile(
     message: Message, app_user: User, assistant: Assistant, state: FSMContext
 ) -> None:
+    """D-87: «Профиль» — это цель (мастер профиля её и считает); настройка и баг — кнопками
+    в ней."""
     await state.clear()
     goal = await assistant.current_goal(app_user)
-    await _send_goal_card(message, goal, app_user, assistant, header="🎯 Твоя дневная норма")
-
-
-@router.message(F.text == BTN_PROFILE)
-async def btn_profile(message: Message, state: FSMContext) -> None:
-    await _start_profile(message, state, app=True)
+    await _send_goal_card(message, goal, app_user, assistant, header="Твоя дневная норма")
+    await _menu_moved(message)
 
 
 @router.message(F.text == BTN_UNDO)
@@ -647,9 +666,14 @@ _FREQ_EMPTY = (
 async def btn_frequent(
     message: Message, app_user: User, assistant: Assistant, state: FSMContext
 ) -> None:
+    await state.clear()
+    await _show_frequent(message, app_user, assistant)
+    await _menu_moved(message)
+
+
+async def _show_frequent(message: Message, app_user: User, assistant: Assistant) -> None:
     """FR-40: наборы и частое кнопками. Данные — те же, что у чипов аппки (`sets`, `frequent`).
     С флагом виджетов — плитками в виджете (FR-49.2); не вышло — прежняя клавиатура."""
-    await state.clear()
     if (
         message.bot is not None
         and widgets_live.enabled(app_user)
@@ -693,6 +717,30 @@ async def cmd_bug(
 async def btn_bug(message: Message, state: FSMContext) -> None:
     await state.set_state(MealStates.awaiting_bug)
     await message.answer(_BUG_PROMPT)
+    await _menu_moved(message)
+
+
+@router.callback_query(F.data.startswith(f"{NAV_PREFIX}:"))
+async def on_nav(
+    callback: CallbackQuery, app_user: User, assistant: Assistant, state: FSMContext
+) -> None:
+    """D-87: вложенные экраны — кнопками в виджетах (`k:nav:…`) и под их rich-фолбэками: те же
+    функции показа, что были у кнопок меню."""
+    await callback.answer()
+    message = callback.message
+    if not isinstance(message, Message):
+        return
+    what = (callback.data or "").split(":", 1)[1]
+    await state.clear()
+    if what == "hist":
+        await _show_history(message, app_user, assistant)
+    elif what == "freq":
+        await _show_frequent(message, app_user, assistant)
+    elif what == "prof":
+        await _start_profile(message, state, app=True)
+    elif what == "bug":
+        await state.set_state(MealStates.awaiting_bug)
+        await message.answer(_BUG_PROMPT)
 
 
 @router.message(F.text.in_({"🧪 Демо", "🅰 Дашборд", "🅱 Тренер", "🅲 Лента"}))
@@ -3560,7 +3608,7 @@ async def _show_today(message: Message, app_user: User, assistant: Assistant) ->
         and await widgets_live.show_today(bot, message.chat.id, app_user, assistant)
     ):
         return
-    await _rich(message, screens.today(await gather(assistant, app_user)))
+    await _rich(message, screens.today(await gather(assistant, app_user)), diary_nav_keyboard())
 
 
 async def _show_week(

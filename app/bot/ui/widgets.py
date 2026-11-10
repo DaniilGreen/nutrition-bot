@@ -144,7 +144,7 @@ def today_data(
     if weight_kg:
         base["pk"] = f"{c.protein / weight_kg:.1f}".replace(".", ",")  # готовой строкой (D-85)
     if streak is not None and streak.of > 0:
-        base["s"] = streak_pill(streak)
+        base["s"] = streak_pill(streak).replace("🔥 ", "")  # в «Сегодня» — текстом (D-87)
 
     text = ""
     for limit in NAME_STEPS:

@@ -110,12 +110,14 @@ def _buttons(kb):
 # --- клавиатура ---------------------------------------------------------------
 
 
-def test_кнопка_в_меню_третьим_рядом_и_старые_ряды_на_месте():
+def test_меню_два_ряда_частое_внутри_дневника():
+    """D-87: меню — два ряда по смыслу; «Частое» ушло внутрь «Дневника», но его прежняя подпись
+    ловится (у людей старая клавиатура)."""
+    from app.bot.keyboards import LEGACY_BUTTONS
+
     rows = [[b.text for b in row] for row in main_menu_keyboard().keyboard]
-    assert BTN_FREQUENT in MENU_BUTTONS
-    assert rows[0] == ["📊 Сегодня", "📈 Неделя", "🗒 История"]
-    assert rows[1] == ["⚖️ Вес", "🎯 Цель", "⚙️ Профиль"]
-    assert rows[2] == ["⚡ Частое", "🐛 Баг"]  # «↩️ Отменить» снята (D-73)
+    assert rows == [["📊 Дневник", "📈 Итоги"], ["⚖️ Вес", "⚙️ Профиль"]]
+    assert BTN_FREQUENT not in MENU_BUTTONS and BTN_FREQUENT in LEGACY_BUTTONS
 
 
 def test_потолки_по_одной_в_ряд_и_callback_в_лимите():

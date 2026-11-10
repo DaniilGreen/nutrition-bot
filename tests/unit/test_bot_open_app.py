@@ -125,7 +125,7 @@ async def test_неделя_ведёт_в_итоги_за_неделю(entry):
     assert _screen(msg.bot.send_rich_message.await_args.kwargs["reply_markup"]) == "tot-week"
 
 
-@pytest.mark.parametrize("entry", [handlers.btn_profile, handlers.cmd_profile])
+@pytest.mark.parametrize("entry", [handlers.cmd_profile])  # кнопка «Профиль» — теперь цель (D-87)
 async def test_профиль_ведёт_в_настройки_вопрос_на_месте(entry):
     msg = AsyncMock()
     await entry(msg, _State())

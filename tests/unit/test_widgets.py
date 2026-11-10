@@ -155,7 +155,7 @@ def test_данные_обычного_дня() -> None:
     # последнее — id позиции: запись из одной позиции с весом правится прямо в «Сегодня» (D-74)
     assert d["it"][0] == [9, "05", "Курица", 700, 0, 100, 35, 23, 88, meals[1].id, 0]
     assert d["it"][1] == [5, "12", "Овсянка", 420, 1, 100, 21, 14, 52, meals[0].id, 0]
-    assert d["s"] == "🔥 3 дн. подряд" and d["pk"] == f"{d['e'][1] / 91.5:.1f}".replace(".", ",")
+    assert d["s"] == "3 дн. подряд" and d["pk"] == f"{d['e'][1] / 91.5:.1f}".replace(".", ",")
 
 
 def test_имя_записи_не_режется_без_нужды() -> None:
@@ -458,7 +458,7 @@ async def test_build_на_настоящем_ассистенте(fake_container
     built = await live.build(assistant, u)
     d = json.loads(built.data)
     assert "n" not in d
-    assert d["s"] == "🔥 8 дн. подряд"  # восемь дней подряд; сегодня ещё пусто — не рвёт и не считается
+    assert d["s"] == "8 дн. подряд"  # восемь дней подряд; сегодня ещё пусто — не рвёт и не считается
     today = await assistant.today(u)
     assert d["l"][0] == round(today.remaining.kcal_left)
 

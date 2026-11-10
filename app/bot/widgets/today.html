@@ -8,6 +8,7 @@ header{margin-bottom:10px;flex-wrap:wrap}header b{font-size:20px}.sp{flex:1}#dl{
 .c{background:var(--cd);border-radius:18px;padding:12px 14px;margin-bottom:8px}
 .tk{height:6px;border-radius:3px;background:var(--tr);margin-top:8px;overflow:hidden}.tk i{display:block;height:100%}.an .tk i{animation:g .8s ease-out}@keyframes g{from{width:0}}
 .wk{align-items:center;flex-wrap:wrap;margin-top:12px;padding:8px 12px;border:1px solid var(--ac);border-radius:14px}.wk b{display:block;font-size:20px}.wo{color:var(--wa)}.wr{margin-left:auto;text-align:right;font-size:12px;color:var(--m);white-space:pre-line}
+.nb{display:flex;gap:6px;margin-top:8px}.nb .ch{flex:1;font-size:13px;color:var(--t)}
 #hs{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .ch{min-width:40px;padding:5px 6px;border-radius:12px;background:var(--cd);text-align:center;font-size:11px;color:var(--m);cursor:pointer}.ch b{display:block;font-size:13px;color:var(--t)}
 .ch.on{background:var(--ac)}.ch.on,.ch.on b{color:var(--at)}
@@ -17,7 +18,7 @@ header{margin-bottom:10px;flex-wrap:wrap}header b{font-size:20px}.sp{flex:1}#dl{
 .ed{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:13px}.ed button{border:0;border-radius:10px;background:var(--cd);color:var(--t);min-width:34px;height:30px;font:inherit;font-size:16px;cursor:pointer}.ed b{min-width:56px;text-align:center}.it.sl{background:var(--cd);border-radius:8px}</style>
 <header class=r><b>Сегодня</b><span class=m id=dl></span><span class=sp></span><span class="p lv" id=lv></span><span class=p id=sk></span></header>
 <section class=c id=hc><div id=hero></div><div id=wk></div><div class=ft id=ft></div></section>
-<div id=hs></div><div id=ls></div><div class=ed id=ed></div>
+<div id=hs></div><div id=ls></div><div class=ed id=ed></div><div class=nb><div class=ch data-k=nav:hist>История</div><div class=ch data-k=nav:freq>Частое</div></div>
 <!--P-->
 <script>
 {{boot}}const W=TW,$=i=>document.getElementById(i);
@@ -34,10 +35,10 @@ e.innerHTML=x?'<span class=m>вес</span><button data-e=-1>−</button><b>'+RG+
 function SD(q){if(Q||!W||!W.request)return;Q=1;try{W.request(q+':'+(Date.now()%1e6+1e6)).then(a=>{Q=0;const r=J(a&&a.result);if(r&&r.v){UZ=r.z||0;if(q[2]!='a')SM=0;draw(a.result)}ed();FL()},()=>Q=0)}catch(e){Q=0}}
 function FL(){const x=(D.it||[]).find(x=>x[9]==SM);if(!Q&&x&&RG!=x[5])SD('s:a:'+SM+':'+SI+':'+RG)}
 function draw(s=W&&W.chatData){const d=J(s);if(!d||d.v!=1)return;const k=JSON.stringify({...d,at:0}),sm=K==k;K=k;D=d;
-$('dl').textContent=d.dl;$('lv').innerHTML=ST?'итог дня':d.at;$('sk').innerHTML=(d.s||'').replace('🔥','{{ic:fire}}');
+$('dl').textContent=d.dl;$('lv').innerHTML=ST?'итог дня':d.at;$('sk').textContent=d.s||'';
 if(sm&&!A1)return;AN();hero();hours();
 }
-document.addEventListener('click',ev=>{const t=ev.target.closest('[data-h]');if(t){S=+t.dataset.h;hours()}else{const b=ev.target.closest('[data-e]');if(b){const a=b.dataset.e;if(a=='x')SD('s:x:'+SM);else if(a=='r')SD('s:r');else if(a){RG=Math.min(2000,Math.max(1,RG+10*a));ed();FL()}return}
+document.addEventListener('click',ev=>{const k=ev.target.closest('[data-k]');if(k){try{W.request('k:'+k.dataset.k)}catch(e){}return}const t=ev.target.closest('[data-h]');if(t){S=+t.dataset.h;hours()}else{const b=ev.target.closest('[data-e]');if(b){const a=b.dataset.e;if(a=='x')SD('s:x:'+SM);else if(a=='r')SD('s:r');else if(a){RG=Math.min(2000,Math.max(1,RG+10*a));ed();FL()}return}
 const m=ev.target.closest('[data-m]');if(!m||!(m.dataset.m>0))return;const x=D.it.find(x=>x[9]==m.dataset.m);
 if(x&&x[10]&&x[5]){SM=SM==x[9]?0:x[9];SI=x[10];RG=x[5];UZ=0;hours()}else if(W.request)try{W.request('o:'+m.dataset.m+':'+(Date.now()%1e6+1e6))}catch(e){}}});
 

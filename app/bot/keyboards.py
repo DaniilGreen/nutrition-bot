@@ -57,7 +57,9 @@ FREQ_TOP = 10  # тот же топ, что у чипов аппки (`/api/freq
 FREQ_NAME_MAX = 24  # режем ИМЯ, хвост «· 180 г» / «· 420 ккал» остаётся целым (320 px)
 
 # Тексты кнопок постоянного меню (они же приходят как обычные сообщения).
-BTN_TODAY = "📊 Сегодня"
+BTN_DIARY = "📊 Дневник"   # D-87: меню — два ряда по смыслу
+BTN_TOTALS = "📈 Итоги"
+BTN_TODAY = "📊 Сегодня"  # прежние подписи ловятся: у людей старая клавиатура
 BTN_WEEK = "📈 Неделя"
 BTN_HISTORY = "🗒 История"
 BTN_WEIGHT = "⚖️ Вес"
@@ -69,10 +71,10 @@ BTN_FREQUENT = "⚡ Частое"
 
 # FR-40: «Частое» — в третьем ряду (D-73: «Отменить» снята): первые два ряда не сдвигаются,
 # привычные кнопки остаются под пальцем, а ряд записи (частое · баг) собирается рядом.
-MENU_BUTTONS = (
-    BTN_TODAY, BTN_WEEK, BTN_HISTORY, BTN_WEIGHT, BTN_GOAL, BTN_PROFILE,
-    BTN_FREQUENT, BTN_BUG,
-)
+MENU_BUTTONS = (BTN_DIARY, BTN_TOTALS, BTN_WEIGHT, BTN_PROFILE)
+# Кнопки прежнего меню (до D-87): работают, а бот в ответ присылает новое меню.
+LEGACY_BUTTONS = (BTN_TODAY, BTN_WEEK, BTN_HISTORY, BTN_GOAL, BTN_FREQUENT, BTN_BUG)
+NAV_PREFIX = "nav"  # вложенные экраны из виджетов: `k:nav:hist|freq|prof|bug` (D-87)
 
 
 OPEN_APP_TEXT = "📱 Открыть в приложении"
@@ -110,11 +112,19 @@ def open_in_app(
     return InlineKeyboardMarkup(inline_keyboard=[*rows, [button]])
 
 
+def diary_nav_keyboard() -> InlineKeyboardMarkup:
+    """D-87: под rich-экраном «Сегодня» (виджет не ушёл) — то, что в виджете лежит кнопками."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🗒 История", callback_data=f"{NAV_PREFIX}:hist")
+    builder.button(text="⚡ Частое", callback_data=f"{NAV_PREFIX}:freq")
+    return builder.as_markup()
+
+
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     for text in MENU_BUTTONS:
         builder.button(text=text)
-    builder.adjust(3, 3, 3)
+    builder.adjust(2, 2)
     return builder.as_markup(resize_keyboard=True, is_persistent=True)
 
 
@@ -606,7 +616,10 @@ def goal_target_keyboard(current: str) -> InlineKeyboardMarkup:
     for key, label in options:
         mark = "✓ " if key == current else ""
         builder.button(text=f"{mark}{label}", callback_data=f"{GOAL_TARGET_PREFIX}:{key}")
-    builder.adjust(3)
+    # D-87: «Профиль» — это цель + настройка + баг; у rich-экрана (виджет не ушёл) — кнопками
+    builder.button(text="⚙️ Настроить профиль", callback_data=f"{NAV_PREFIX}:prof")
+    builder.button(text="🐛 Баг", callback_data=f"{NAV_PREFIX}:bug")
+    builder.adjust(3, 2)
     return builder.as_markup()
 
 

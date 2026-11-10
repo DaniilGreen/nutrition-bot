@@ -8,11 +8,11 @@ button{font:inherit;font-weight:600;border:0;border-radius:12px;background:var(-
 .dn{position:relative;width:112px;height:112px;flex:0 0 112px}.dn svg{width:112px;height:112px;transform:rotate(-90deg)}
 .dn div{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}.dn b{font-size:24px;font-weight:700;letter-spacing:-.5px}
 .lg{flex:1 1 140px;min-width:0}.lg div{padding:4px 0;font-size:14px}.lg b{font-weight:600}.lg .m{white-space:nowrap}.lg i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
-.nt{font-size:12px;color:var(--m);margin-top:10px;line-height:1.4}code{font:12px ui-monospace,monospace}
-.bz{opacity:.45;pointer-events:none}#ts{font-size:13px;margin-top:8px;color:var(--m)}#ts:empty{display:none}
+.nt{font-size:12px;color:var(--m);margin-top:10px;line-height:1.4}@media (max-width:260px){.nt{display:none}}code{font:12px ui-monospace,monospace}
+.nb{display:flex;gap:6px;margin-top:8px}.nb b{flex:1;padding:8px;border-radius:12px;background:var(--cd);text-align:center;font-size:13px;cursor:pointer}.bz{opacity:.45;pointer-events:none}#ts{font-size:13px;margin-top:8px;color:var(--m)}#ts:empty{display:none}
 @media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
-<div id=hd></div><header><b>{{ic:goal}} Цель</b></header>
-<div class=tg id=tg></div><div id=bd></div><div id=ts></div>
+<div id=hd></div><header><b>{{ic:goal}} Профиль</b></header>
+<div class=tg id=tg></div><div id=bd></div><div id=ts></div><div class=nb><b data-k=nav:prof>Настроить профиль</b><b data-k=nav:bug>Сообщить о баге</b></div>
 <div class=nt>Белок — якорь на твой вес, жир — не ниже 0,8 г/кг, углеводы — что осталось.<br><code>/goal 1800</code> — калории, разложу сам · <code>/goal Б Ж У</code> — калории посчитаю</div>
 <script>
 {{boot}}const W=TW,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
@@ -28,7 +28,7 @@ $('bd').innerHTML='<div class=c><div class=dn><svg viewBox="0 0 112 112"><circle
 d.m.map((r,i)=>'<div><i style="background:var('+CL[i]+')"></i>'+L[i]+' <b>'+r[0]+' г</b><span class=m>'+r[1]+' · '+r[2]+'%</span></div>').join('')+'</div></div>';
 if(!d.wk)$('ts').textContent='Сменить цель — после первого веса: «вес 86.8».';
 if(f&&document.body.className=='an')try{requestAnimationFrame(t0=>{const c=document.querySelectorAll('.ar'),g=t=>{const q=1-(1-Math.min(1,(t-t0)/900))**3;c.forEach(x=>{x.setAttribute('stroke-dasharray',x.dataset.l*q+' 264');x.setAttribute('stroke-dashoffset',x.dataset.o*q)});q<1&&requestAnimationFrame(g)};g(t0)})}catch(e){}}
-document.addEventListener('click',ev=>{const b=ev.target.closest('[data-g]');if(!b||!D||B||b.dataset.g==D.tg||!W||!W.request)return;B=1;b.classList.add('bz');$('ts').textContent='';
+document.addEventListener('click',ev=>{const k=ev.target.closest('[data-k]');if(k){try{W.request('k:'+k.dataset.k)}catch(e){}return}const b=ev.target.closest('[data-g]');if(!b||!D||B||b.dataset.g==D.tg||!W||!W.request)return;B=1;b.classList.add('bz');$('ts').textContent='';
 const fin=(r,e)=>{B=0;b.classList.remove('bz');if(r&&r.v){hp('success');draw(r)}else{hp('error');$('ts').textContent=r&&r.err=='noweight'?'Сначала запиши вес — «вес 86.8».':'Не вышло — попробуй ещё раз.'}};
 try{W.request('g:t:'+b.dataset.g+':'+K()).then(a=>fin(J(a&&a.result)),e=>fin(null,e))}catch(e){fin(null,null)}});
 if(W){W.onEvent('chatDataChanged',()=>{if(!B){D=null;draw()}});draw();try{W.ready&&W.ready()}catch(e){}}else draw();

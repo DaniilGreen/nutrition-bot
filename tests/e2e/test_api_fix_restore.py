@@ -40,7 +40,9 @@ def _meal(uid: int, *items: tuple[str, float, float], template: str | None = Non
           for nm, g, k in items]
     tot = Macros(sum(i.macros.kcal for i in ms), sum(i.macros.protein for i in ms),
                  sum(i.macros.fat for i in ms), sum(i.macros.carb for i in ms))
-    return Meal(user_id=uid, eaten_at=datetime.now(UTC) - timedelta(hours=1), input_type="text",
+    # минуту назад, не час: в первый час после местной полуночи запись уезжала во «вчера», и
+    # тесты про «сегодня» падали каждый день с 00:00 до 00:59 (ловил CI 11.11)
+    return Meal(user_id=uid, eaten_at=datetime.now(UTC) - timedelta(minutes=1), input_type="text",
                 raw_input="x", items=ms, source_confidence=0.9, totals=tot, template_name=template)
 
 

@@ -176,7 +176,10 @@ async def test_чипы_берут_вечернюю_еду(client, fake_containe
     assert pace is not None, "норма 2000, сегодня пусто — карточка обязана быть"
     names = [ch["name"] for ch in pace["chips"]]
     assert "Фо бо" in names, f"вечерней еды нет в чипах: {names}"
-    assert "Овсянка" not in names, "обед в чипы добора попадать не должен"
+    # В первый местный час суток обед в 00:10 — это ещё текущий час, и приложение справедливо
+    # считает его возможным; тест падал каждый день с 00:00 до 00:59 (ловил CI 11.11 в 21:14 UTC).
+    if now_local.hour > 0:
+        assert "Овсянка" not in names, "обед в чипы добора попадать не должен"
     # Чип пишется без модели, значит нужен product_id и вес.
     chip = next(ch for ch in pace["chips"] if ch["name"] == "Фо бо")
     assert chip["product_id"] == supper.id
