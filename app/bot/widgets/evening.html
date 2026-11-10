@@ -1,0 +1,36 @@
+<style>
+:root{color-scheme:light dark;--t:light-dark(#0e1013,#fff);--m:light-dark(#4e5560,#a7abb2);--b1:light-dark(#f7f9fc,#22262c);--b2:light-dark(#e2e8f0,#131518);--cd:light-dark(rgba(255,255,255,.72),rgba(255,255,255,.055));--tr:light-dark(#d3dae3,#32363d);--br:light-dark(#5f6b7b,#7c8899);--pr:light-dark(#0b7d91,#3ac8e0);--fa:light-dark(#b25500,#ff9f45);--ca:light-dark(#6650d6,#9a87f4);--wa:light-dark(#835600,#ffd426);--dg:light-dark(#c4281c,#ff453a);--ok:light-dark(#1d7a3a,#34c759);--ac:light-dark(#2d6a93,#5e9ac1);--at:light-dark(#fff,#0e1013)}
+body{margin:0;padding:12px 14px max(12px,env(safe-area-inset-bottom));font:15px/1.3 system-ui,sans-serif;color:var(--t);background:linear-gradient(165deg,var(--b1),var(--b2));font-variant-numeric:tabular-nums}
+.r{display:flex;align-items:center;gap:6px}.sp{flex:1}.m{color:var(--m);font-size:13px}header{flex-wrap:wrap;margin-bottom:8px}header b{font-size:20px}
+.p{font-size:12px;padding:3px 8px;border-radius:99px;background:var(--cd);font-weight:600;white-space:nowrap}
+.c{background:var(--cd);border-radius:18px;padding:10px 12px;margin-bottom:8px}
+.hr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.bg{font-size:clamp(22px,9vw,32px);font-weight:700;letter-spacing:-.5px}.bg small{font-size:13px;color:var(--m);font-weight:500;margin-left:3px}
+.tk{height:6px;border-radius:3px;background:var(--tr);margin-top:6px;overflow:hidden}.tk i{display:block;height:100%}
+.ft{font-size:13px;color:var(--m);margin-top:8px}.ft b{color:var(--t)}.d{display:inline-block;width:7px;height:7px;border-radius:50%;margin:0 4px 0 8px}
+#nt div{font-size:14px;padding:6px 0;border-top:1px solid var(--tr)}#nt div:first-child{border:0;padding-top:0}
+button{font:600 15px system-ui,sans-serif;border:0;border-radius:14px;padding:11px 14px;width:100%;background:var(--ac);color:var(--at);cursor:pointer;margin-top:8px}
+button[disabled]{background:var(--tr);color:var(--m)}.dn{color:var(--ok);font-weight:600}
+@media (max-width:260px){.bg{font-size:20px}.bg small{display:block;margin:0}.hr{gap:8px}#cl .m{display:none}#nt div{font-size:13px}}
+</style>
+<header class=r><b>🌙 Итог дня</b><span class=m id=dl></span><span class=sp></span><span class=p id=sk></span></header>
+<div class=c><div class=hr id=hr></div><div class=ft id=ft></div></div>
+<div class=c id=nt></div>
+<div class=c id=cl></div>
+<script>
+const W=window.TelegramWidget,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
+T=s=>(s+'').replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';'),K=()=>Math.random().toString(36).slice(2,8).padEnd(6,'0'),
+bar=(v,g,c)=>'<div class=tk><i style="width:'+(g>0?Math.min(100,v/g*100):0)+'%;background:var('+c+')"></i></div>',
+M={TIMEOUT:'Бот не ответил — попробуй ещё раз.',RATE_LIMITED:'Слишком часто — секунду.'};
+let D=null,B=0;
+function pill(){const s=D.s;$('sk').style.display=s?'':'none';$('sk').textContent=s?(s[0]?'🔥 '+s[0]+(s[1]?' ❄':'')+' · ':'')+s[2]+' из '+s[3]:''}
+function close_(t){$('cl').innerHTML=D.c?'<div class=dn>✓ День закрыт — записан полностью</div><div class=m>Отмечен как полный. Вспомнишь ещё — просто напиши в чат.</div>':
+'<div><b>Всё записал за день?</b></div><div class=m>Отметка, что записано всё: без неё неполный день не отличить от полного.</div><button id=bt>✅ Всё записал</button>'+(t?'<div class=m style="margin-top:6px">'+T(t)+'</div>':'')}
+function draw(){D=J(W&&W.chatData);if(!D||D.v!=1)return;const e=D.e,g=D.g,ov=e[0]>g[0];$('dl').textContent=D.dl;pill();
+$('hr').innerHTML='<div><div class=m>Ккал</div><div class=bg'+(ov?' style="color:var(--dg)"':'')+'>'+e[0]+'<small>из '+g[0]+'</small></div>'+bar(e[0],g[0],'--br')+'</div><div><div class=m>Белок</div><div class=bg>'+e[1]+'<small>из '+g[1]+' г</small></div>'+bar(e[1],g[1],'--pr')+'</div>';
+$('ft').innerHTML='<i class=d style="background:var(--fa);margin-left:0"></i>Жир <b>'+e[2]+'</b>/'+g[2]+'<i class=d style="background:var(--ca)"></i>Углев. <b>'+e[3]+'</b>/'+g[3];
+const nt=(D.lo?['Записано '+e[0]+' ккал — похоже, не всё попало в бота. Кинь текстом, что ещё ел.']:[]).concat(D.nt||[]);$('nt').style.display=nt.length?'':'none';$('nt').innerHTML=nt.map(x=>'<div>'+T(x)+'</div>').join('');close_()}
+document.addEventListener('click',ev=>{if(ev.target.id!='bt'||!W||!W.request||B||!D)return;const b=ev.target;B=1;b.disabled=true;b.textContent='Закрываю…';
+const fin=(r,e)=>{B=0;if(r&&r.ok){D.c=1;D.s=r.s;pill();close_();try{W.HapticFeedback.notificationOccurred('success')}catch(x){}}else close_(M[e&&e.code]||'Не вышло — попробуй ещё раз.')};
+try{W.request('e:c:'+D.d+':'+K()).then(a=>fin(J(a&&a.result)),e=>fin(null,e))}catch(e){fin(null,null)}});
+if(W){W.onEvent('chatDataChanged',draw);draw();try{W.ready&&W.ready()}catch(e){}}else draw();
+</script>

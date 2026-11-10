@@ -20,8 +20,10 @@ from aiogram.types import InputRichMessage
 
 from app.application.body_scans import FRESH_DAYS
 from app.bot.ui import gather, screens
+from app.bot.widgets import evening, live
 from app.container import Container
-from app.domain.timeframe import reminder_due
+from app.domain.prefs import day_start
+from app.domain.timeframe import local_date, reminder_due
 
 
 def _local_date(moment: datetime | None, tzname: str) -> date | None:
@@ -99,6 +101,12 @@ async def _tick(
             if ctx.today.meals_count == 0:
                 continue  # нечего подытоживать — не дёргаем
             sent[user.telegram_id] = today
+            # FR-49.6: с флагом — виджетом с «✅ Всё записал»; не вышло — rich, как раньше.
+            if live.enabled(user) and await evening.show(
+                bot, user, assistant, ctx,
+                local_date(now, user.timezone, day_start(user.ui_prefs)),
+            ):
+                continue
             with suppress(Exception):  # вечерний итог единым Rich-стилем, как экран «Итог дня»
                 await bot.send_rich_message(
                     chat_id=user.telegram_id,

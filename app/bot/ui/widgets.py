@@ -20,8 +20,10 @@ rich-экранов (MA-INV-1). Полный `gather()` виджету не ну
 from __future__ import annotations
 
 import json
+import re
 import time
 from datetime import date, datetime
+from html import unescape
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -29,7 +31,7 @@ from app.application.entities import Meal
 from app.application.results import DailyStats, DayPace
 from app.bot.keyboards import weighable
 from app.bot.quick import Frequent, parse_op
-from app.bot.ui.context import est_share
+from app.bot.ui.context import DayContext, est_share
 from app.bot.ui.kit import MON, WD
 from app.bot.ui.screens import WeekView, week_hits
 from app.domain.goals import Goal, Remaining
@@ -296,3 +298,42 @@ def week_data(v: WeekView, macros: dict[date, Macros], today: date) -> str:
         "al": v.avg_label, "cap": v.cap, "k": [hit, logged], "tl": v.tail,
     })
 
+
+def _plain(html: str) -> str:
+    """Строка rich-блока текстом для виджета: те же слова, что в rich-итоге, без разметки."""
+    text = re.sub(r"<br\s*/?>", " ", html)
+    return unescape(re.sub(r"<[^>]+>", "", text)).strip()
+
+
+def evening_data(
+    d: DayContext, day: date, streak: Streak | None, *, closed: bool = False
+) -> str:
+    """`chat_data` вечернего итога (FR-49.6): цифры дня и те же слова, что у rich-итога
+    (`screens.evening`: перебор, добор белка, неделя, якорь 7 дней) — текстом.
+
+    Формат v1:
+      d   ISO-дата дня (запрос `e:c:<d>`)   dl  «вт, 10 ноя»   c  1 — день закрыт «всё записал»
+      e   съедено [ккал, Б, Ж, У]            g   цель [ккал, Б, Ж, У]
+      nt  строки итога (режутся с хвоста под бюджет)    s  серия, как у «Сегодня» (D-57)
+      lo  1 — записано меньше 40 % цели (похоже, не всё попало в бота)"""
+    from app.bot.ui import blocks
+
+    c, g = d.today.remaining.consumed, d.goal
+    low = c.kcal < g.daily_kcal * 0.4
+    notes = [] if low else [blocks.over_note(d), blocks.advice(d)]
+    notes += [blocks.week_balance(d), blocks.anchor(d)]
+    base: dict[str, Any] = {
+        "v": 1, "d": day.isoformat(),
+        "dl": f"{WD[day.weekday()].lower()}, {day.day} {MON[day.month - 1]}",
+        "c": int(closed), "lo": int(low),
+        "e": [round(c.kcal), round(c.protein), round(c.fat), round(c.carb)],
+        "g": [round(g.daily_kcal), round(g.protein_g), round(g.fat_g), round(g.carb_g)],
+    }
+    if streak is not None and streak.of > 0:
+        base["s"] = [streak.days, int(streak.frozen), streak.covered, streak.of]
+    lines = [p for p in (_plain(x) for x in notes) if p]
+    text = _dump({**base, "nt": lines})
+    while size(text) > LIMIT and lines:
+        lines.pop()
+        text = _dump({**base, "nt": lines})
+    return text
