@@ -1029,3 +1029,31 @@ def test_скрипт_шаблона_разбирается(path: Path, tmp_path
     js.write_text(m.group(1))
     out = subprocess.run([node, "--check", str(js)], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
+
+
+# --- «📈 Неделя» виджетом (FR-49.5, AC-287) ---------------------------------------------------
+
+@pytest.mark.parametrize("name", ["пятница в плане", "утро среды"])
+async def test_неделя_те_же_числа_что_экран(name: str) -> None:
+    """AC-287: семь дней, клетки и «в цели K из M» — те же, что у rich-экрана; КБЖУ дня — из
+    `macros7`; данные ≤ 1024 байт; sendWidget упал — False (rich)."""
+    from app.bot.ui import screens
+    from app.bot.widgets import week
+    from tests.unit.test_ui_widths import WEEK
+
+    ctx = WEEK[name]
+    bot = FakeBot()
+    assert await week.show(bot, 1, ctx)  # type: ignore[arg-type]
+    sent = bot.of(SendWidget)[0]
+    assert sent.html == template("week") and len(sent.chat_data.encode()) <= LIMIT
+    d = json.loads(sent.chat_data)
+    v = screens.week_view(ctx)
+    assert not isinstance(v, str)
+    assert len(d["c"]) == 7 and d["k"] == list(screens.week_hits(v))
+    assert [c[1] for c in d["c"]] == [{"none": 0, "ok": 1, "low": 2, "over": 3}[x] for x in v.cells]
+    rows = dict(ctx.macros7)
+    for c, day in zip(d["c"], v.days, strict=True):
+        if day in rows:
+            assert c[2] == round(rows[day].kcal)
+    assert f"в цели {d['k'][0]} из {d['k'][1]}" in screens.week(ctx)
+    assert not await week.show(FakeBot(fail=True), 1, ctx)  # type: ignore[arg-type]

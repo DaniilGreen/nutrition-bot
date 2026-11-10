@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -31,10 +31,12 @@ from app.bot.keyboards import weighable
 from app.bot.quick import Frequent, parse_op
 from app.bot.ui.context import est_share
 from app.bot.ui.kit import MON, WD
+from app.bot.ui.screens import WeekView, week_hits
 from app.domain.goals import Goal, Remaining
 from app.domain.nutrition import macros_for_grams
 from app.domain.streak import Streak
 from app.domain.timeframe import local_date
+from app.domain.value_objects import Macros
 
 LIMIT = 1024  # байт UTF-8 на chat_data / ответ запроса (Bot API 10.4)
 NAME_STEPS = (22, 16, 12)  # имя записи режется по ступеням, прежде чем выкидывать записи
@@ -262,3 +264,35 @@ def meal_caption(meal: Meal, left: Remaining, *, deleted: bool = False) -> str:
     rest = round(left.kcal_left)
     tail = f"осталось {rest}" if rest >= 0 else f"перебор {-rest}"
     return f"✅ Записал: {names} · {round(meal.totals.kcal)} ккал · {tail}"
+
+
+_CELL = {"none": 0, "ok": 1, "low": 2, "over": 3}
+
+
+def week_data(v: WeekView, macros: dict[date, Macros], today: date) -> str:
+    """`chat_data` виджета «📈 Неделя» (FR-49.5): те же числа, что у rich-экрана (`week_view`).
+
+    Формат v1:
+      t   «3–9 ноя»          h  герой словами          hs  строка под ним     ov  1 — перебор
+      c   [[«пн 3», клетка 0…3 (нет/в цели/меньше половины/перебор), ккал, Б, Ж, У, цель ккал,
+           сегодня 0/1, будущее 0/1]] — семь дней
+      a   средние [ккал, Б, Ж, У] вошедших дней      g  цели [ккал, Б, Ж, У]
+      al  «В среднем за 5 дн.»   cap  «Пн → Вс»   k  [в цели, судимых дней]   tl  подвал
+    Клетка — правило баланса (§6.23): сегодня не судим, пока не перебор (D-29)."""
+    hit, logged = week_hits(v)
+    days = []
+    for day, goal, cell in zip(v.days, v.goals, v.cells, strict=True):
+        m = macros.get(day, Macros(0, 0, 0, 0))
+        days.append([
+            f"{WD[day.weekday()].lower()} {day.day}", _CELL[cell], round(m.kcal),
+            round(m.protein), round(m.fat), round(m.carb), round(goal),
+            int(day == today), int(day > today),
+        ])
+    a, g = v.avg, v.goal
+    return _dump({
+        "v": 1, "t": v.title, "h": v.hero, "hs": v.sub, "ov": int(v.over), "c": days,
+        "a": [round(a.kcal), round(a.protein), round(a.fat), round(a.carb)],
+        "g": [round(g.daily_kcal), round(g.protein_g), round(g.fat_g), round(g.carb_g)],
+        "al": v.avg_label, "cap": v.cap, "k": [hit, logged], "tl": v.tail,
+    })
+

@@ -145,6 +145,7 @@ from app.bot.ui.kit import plural
 from app.bot.widgets import frequent as widgets_frequent
 from app.bot.widgets import live as widgets_live
 from app.bot.widgets import meal as widgets_meal
+from app.bot.widgets import week as widgets_week
 from app.domain.goals import (
     Goal,
     Remaining,
@@ -3497,9 +3498,15 @@ async def _show_today(message: Message, app_user: User, assistant: Assistant) ->
 async def _show_week(
     message: Message, app_user: User, assistant: Assistant, scans: object | None = None
 ) -> None:
-    await _rich(
-        message, screens.week(await gather(assistant, app_user, scans)), open_in_app("tot-week")
-    )
+    """FR-48; с флагом — виджетом (FR-49.5), не вышло или показывать нечего — rich-экран."""
+    ctx = await gather(assistant, app_user, scans)
+    if (
+        message.bot is not None
+        and widgets_live.enabled(app_user)
+        and await widgets_week.show(message.bot, message.chat.id, ctx)
+    ):
+        return
+    await _rich(message, screens.week(ctx), open_in_app("tot-week"))
 
 
 async def _show_weight(message: Message, app_user: User, assistant: Assistant) -> None:
