@@ -591,7 +591,7 @@ async def test_маршрут_пишущего_запроса(freq, monkeypatch:
 
     container = SimpleNamespace(
         db=SimpleNamespace(session_factory=factory),
-        assistant_for=lambda s: (FakeAssistant([]), Users()),
+        assistant_for=lambda s: (FakeAssistant([]), Users()), body_scans_for=lambda s: None,
         settings=SimpleNamespace(default_timezone=TZ),
     )
 

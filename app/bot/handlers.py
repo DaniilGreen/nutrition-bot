@@ -144,6 +144,7 @@ from app.bot.widgets import burn as widgets_burn
 from app.bot.widgets import confirm as widgets_confirm
 from app.bot.widgets import day as widgets_day
 from app.bot.widgets import frequent as widgets_frequent
+from app.bot.widgets import goal as widgets_goal
 from app.bot.widgets import live as widgets_live
 from app.bot.widgets import meal as widgets_meal
 from app.bot.widgets import week as widgets_week
@@ -3886,6 +3887,12 @@ async def _send_goal_card(
 
     Кнопки цели — под сообщением: сменить одно поле, не проходя весь визард заново.
     """
+    if (  # FR-49.9: с флагом — виджетом; не вышло — прежний rich-экран с кнопками
+        message.bot is not None and widgets_live.enabled(app_user)
+        and await widgets_goal.show(message.bot, message.chat.id, app_user, assistant, goal,
+                                    header)
+    ):
+        return
     wkg = await _latest_weight(assistant, app_user)
     head = f"<p><b>{header}</b></p>" if header else ""
     await _rich(message, head + screens.goal_screen(goal, wkg), goal_target_keyboard(goal.target))

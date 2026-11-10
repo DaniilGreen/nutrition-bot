@@ -274,7 +274,7 @@ def meal_caption(meal: Meal, *, deleted: bool = False) -> str:
 _CELL = {"none": 0, "ok": 1, "low": 2, "over": 3}
 
 
-def week_data(v: WeekView, macros: dict[date, Macros], today: date) -> str:
+def week_data(v: WeekView, macros: dict[date, Macros], today: date, weeks_ago: int = 0) -> str:
     """`chat_data` виджета «📈 Неделя» (FR-49.5): те же числа, что у rich-экрана (`week_view`).
 
     Формат v1:
@@ -283,6 +283,7 @@ def week_data(v: WeekView, macros: dict[date, Macros], today: date) -> str:
            сегодня 0/1, будущее 0/1]] — семь дней
       a   средние [ккал, Б, Ж, У] вошедших дней      g  цели [ккал, Б, Ж, У]
       al  «В среднем за 5 дн.»   k  [в цели, судимых дней]   tl  подвал
+      wa  недель назад (0 — текущая; листание ‹ › — запрос `k:<wa>`)
     Клетка — правило баланса (§6.23): сегодня не судим, пока не перебор (D-29)."""
     hit, logged = week_hits(v)
     days = []
@@ -298,7 +299,7 @@ def week_data(v: WeekView, macros: dict[date, Macros], today: date) -> str:
         "v": 1, "t": v.title, "h": v.hero, "hs": v.sub, "ov": int(v.over), "c": days,
         "a": [round(a.kcal), round(a.protein), round(a.fat), round(a.carb)],
         "g": [round(g.daily_kcal), round(g.protein_g), round(g.fat_g), round(g.carb_g)],
-        "al": v.avg_label, "k": [hit, logged], "tl": v.tail,
+        "al": v.avg_label, "k": [hit, logged], "tl": v.tail, "wa": weeks_ago,
     })
 
 
@@ -492,3 +493,20 @@ def day_data(dv: Any, rem: Remaining, *, undo: int = 0) -> str:
         if len(keep) == len(rows):
             break
     return text
+
+
+def goal_data(goal: Goal, weight_kg: float | None, head: str = "") -> str:
+    """`chat_data` «🎯 Цели» (FR-49.9): те же числа и г/кг, что у rich-экрана (`goal_screen`).
+
+    Формат v1: hd шапка · tg цель (cut/maintain/bulk) · k ккал · m [[г, «1.9 г/кг» или "", доля ккал
+    %] × Б, Ж, У] · wk 1 — вес есть (без веса цель кнопкой не сменить: раскладка — от веса)."""
+    p, f, c = goal.protein_g, goal.fat_g, goal.carb_g
+    kc = [p * 4, f * 9, c * 4]
+    tot = sum(kc) or 1
+    per = [f" ({round(p / weight_kg, 1)}\u00a0г/кг)" if weight_kg else "",
+           f" ({round(f / weight_kg, 2)}\u00a0г/кг)" if weight_kg else "", ""]
+    return _dump({
+        "v": 1, "hd": head, "tg": goal.target, "k": round(goal.daily_kcal),
+        "wk": int(bool(weight_kg)),
+        "m": [[round(g), per[i], round(100 * kc[i] / tot)] for i, g in enumerate((p, f, c))],
+    })

@@ -173,6 +173,8 @@ class WidgetQueryMiddleware(BaseMiddleware):
                 if not live.enabled(user):
                     reply = {"err": "bad"}
                 else:
+                    live.EXTRA.set({"users": users,
+                                    "scans": self._container.body_scans_for(session)})
                     out = await route(uid, mid, data, user, assistant)
                     try:
                         await session.commit()  # «записал» в ответе не должен врать

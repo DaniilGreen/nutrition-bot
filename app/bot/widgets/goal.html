@@ -1,0 +1,36 @@
+<style>
+:root{color-scheme:light dark;--t:light-dark(#0e1013,#fff);--m:light-dark(#4e5560,#a7abb2);--b1:light-dark(#f7f9fc,#22262c);--b2:light-dark(#e2e8f0,#131518);--cd:light-dark(#ffffffb8,#ffffff0e);--tr:light-dark(#d3dae3,#32363d);--pr:light-dark(#0b7d91,#3ac8e0);--fa:light-dark(#b25500,#ff9f45);--ca:light-dark(#6650d6,#9a87f4);--ac:light-dark(#2d6a93,#5e9ac1);--at:light-dark(#fff,#0e1013)}
+body{margin:0;padding:12px 14px max(26px,env(safe-area-inset-bottom));font:15px/1.3 system-ui,sans-serif;overflow-wrap:anywhere;color:var(--t);background:linear-gradient(165deg,var(--b1),var(--b2));font-variant-numeric:tabular-nums}
+.m{color:var(--m);font-size:13px}header b{font-size:20px}#hd{font-size:13px;color:var(--m);font-weight:600;margin-bottom:2px}
+.tg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:10px 0}
+button{font:inherit;font-weight:600;border:0;border-radius:12px;background:var(--cd);color:var(--t);cursor:pointer;padding:6px 2px;font-size:12px;line-height:1.25}button.on{background:var(--ac);color:var(--at)}button span{display:block;font-size:17px}
+.c{background:var(--cd);border-radius:18px;padding:12px;display:flex;flex-wrap:wrap;align-items:center;gap:14px}
+.dn{position:relative;width:112px;height:112px;flex:0 0 112px}.dn svg{width:112px;height:112px;transform:rotate(-90deg)}
+.dn div{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}.dn b{font-size:24px;font-weight:700;letter-spacing:-.5px}
+.lg{flex:1 1 140px;min-width:0}.lg div{padding:4px 0;font-size:14px}.lg b{font-weight:600}.lg .m{white-space:nowrap}.lg i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.nt{font-size:12px;color:var(--m);margin-top:10px;line-height:1.4}code{font:12px ui-monospace,monospace}
+.bz{opacity:.45;pointer-events:none}#ts{font-size:13px;margin-top:8px;color:var(--m);min-height:17px}
+.an .ar{animation:ar .9s ease-out both}@keyframes ar{from{stroke-dasharray:0 264}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
+<div id=hd></div><header><b>🎯 Цель</b></header>
+<div class=tg id=tg></div><div id=bd></div><div id=ts></div>
+<div class=nt>Белок — якорь на твой вес, жир — не ниже 0,8 г/кг, углеводы — что осталось.<br><code>/goal 1800</code> — калории, разложу сам · <code>/goal Б Ж У</code> — калории посчитаю</div>
+<script>
+let A1=1;const TW=window.TelegramWidget;try{TW.setResizeAnchor('bottom')}catch(e){}const NU=v=>'<span class=cu data-n='+v+'>'+v+'</span>',AN=()=>{const v=!TW||TW.isActive!==!1;document.body.className=A1&&v?'an':'';if(A1&&v){A1=0;try{requestAnimationFrame(t0=>{const e=document.querySelectorAll('.cu'),f=t=>{const k=Math.min(1,(t-t0)/900);e.forEach(x=>x.textContent=Math.round(x.dataset.n*(1-(1-k)**3)));k<1&&requestAnimationFrame(f)};f(t0)})}catch(e){}}};try{TW.onEvent('activated',()=>{A1&&(window.RD||draw)()})}catch(e){}
+const W=TW,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
+K=()=>Math.random().toString(36).slice(2,8).padEnd(6,'0'),
+TG=[['cut','🔻','Похудение',''],['maintain','⚖️','Поддержание',''],['bulk','🔺','Набор','']],
+L=['Белок','Жир','Углеводы'],CL=['--pr','--fa','--ca'];
+let D=null,B=0;
+const hp=t=>{try{t?W.HapticFeedback.notificationOccurred(t):W.HapticFeedback.selectionChanged()}catch(e){}};
+function draw(n){D=n||D||J(W&&W.chatData);if(!D||D.v!=1)return;const d=D,f=A1;AN();$('hd').textContent=d.hd||'';
+$('tg').innerHTML=TG.map(t=>'<button class="'+(t[0]==d.tg?'on':'')+(d.wk?'':' bz')+'" data-g='+t[0]+'><span>'+t[1]+'</span>'+t[document.body.clientWidth<260?3:2]+'</button>').join('');
+let o=0;const arcs=d.m.map((r,i)=>{const len=264*r[2]/100,s='<circle class=ar cx=56 cy=56 r=42 fill=none stroke="var('+CL[i]+')" stroke-width=14 stroke-dasharray="'+len.toFixed(1)+' 264" stroke-dashoffset="'+(-o).toFixed(1)+'"/>';o+=len;return s}).join('');
+$('bd').innerHTML='<div class=c><div class=dn><svg viewBox="0 0 112 112"><circle cx=56 cy=56 r=42 fill=none stroke="var(--tr)" stroke-width=14 />'+arcs+'</svg><div><b>'+(f?NU(d.k):d.k)+'</b><span class=m>ккал</span></div></div><div class=lg>'+
+d.m.map((r,i)=>'<div><i style="background:var('+CL[i]+')"></i>'+L[i]+' <b>'+r[0]+' г</b><span class=m>'+r[1]+' · '+r[2]+'%</span></div>').join('')+'</div></div>';
+if(!d.wk)$('ts').textContent='Сменить цель — после первого веса: «вес 86.8».'}
+document.addEventListener('click',ev=>{const b=ev.target.closest('[data-g]');if(!b||!D||B||b.dataset.g==D.tg||!W||!W.request)return;B=1;b.classList.add('bz');$('ts').textContent='';
+const fin=(r,e)=>{B=0;b.classList.remove('bz');if(r&&r.v){hp('success');draw(r)}else{hp('error');$('ts').textContent=r&&r.err=='noweight'?'Сначала запиши вес — «вес 86.8».':'Не вышло — попробуй ещё раз.'}};
+try{W.request('g:t:'+b.dataset.g+':'+K()).then(a=>fin(J(a&&a.result)),e=>fin(null,e))}catch(e){fin(null,null)}});
+if(W){W.onEvent('chatDataChanged',()=>{if(!B){D=null;draw()}});draw();try{W.ready&&W.ready()}catch(e){}}else draw();
+if(!D)document.body.insertAdjacentHTML('beforeend','<p class=m>Нет данных.</p>');
+</script>

@@ -279,6 +279,9 @@ class Outcome:
 # фиксацию, ответ и пуш виджета дня делает middleware (`app/bot/middlewares.py`).
 Route = Callable[[int, int, str, User, Assistant], Awaitable[Outcome]]
 ROUTES: dict[str, Route] = {}
+# Что ещё нужно маршрутам сверх Assistant (`users` — сменить цель, `scans` — пол недели по обмену);
+# кладёт middleware перед вызовом маршрута, в той же сессии БД.
+EXTRA: ContextVar[dict[str, Any] | None] = ContextVar("widget_extra", default=None)
 
 
 async def respond(
