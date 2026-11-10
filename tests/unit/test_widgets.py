@@ -103,6 +103,8 @@ _OUT_OF_PROFILE = [
     r":has\(", r"clip-path", r"text-shadow", r"src=[\"']?https?:", r"@import", r"@font-face",
     r"position:\s*sticky", r"overflow:\s*(auto|scroll)", r"\bfetch\(", r"XMLHttpRequest",
     r"-webkit-line-clamp", r"<foreignObject", r"<animate",
+    # D-79: рантайм Telegram не знает `display:contents` — строки колец встали в ряд, а не столбиком
+    r"display:\s*contents",
     # профиль виджетов (core.telegram.org/bots/widgets): `@property` — вне; таймеры есть, но
     # анимации — CSS и rAF (D-70), таймеры не нужны
     r"@property", r"setTimeout", r"setInterval",
