@@ -413,3 +413,24 @@ def burn_data(ov: Any, today: date) -> str:
     if ov.diary is not None:
         data["dt"], data["dx"], data["da"] = _diary_words(ov.diary, ov.diary_since)
     return _dump(data)
+
+
+def confirm_data(items: list[Any]) -> str | None:
+    """`chat_data` подтверждения разбора (FR-49.7). None — не влезло: вызывающий задаёт вопросы
+    прежней цепочкой.
+
+    Формат v1: {"v":1,"i":[[имя, граммы, к, б, ≈ 0/1, [S,M,L] граммы или 0, режим], …]}
+      режим 0 — граммы правятся, к/б — ккал и белок на грамм (та плотность, что запишется)
+            1 — вес назван в имени: граммы не правятся, к/б на грамм
+            2 — свои КБЖУ (FR-22): к/б — на всю позицию
+      граммы 0 — размер не выбран (есть [S,M,L]): «Записать» не пишет, пока не выбран (FR-21)."""
+    rows = []
+    for p in items:
+        mode = 2 if not p.per_gram else 1 if p.fixed else 0
+        sizes = [p.sizes["small"], p.sizes["medium"], p.sizes["large"]] if p.sizes else 0
+        k, b = (round(p.kcal, 4), round(p.protein, 4)) if p.per_gram else (round(p.kcal),
+                                                                           round(p.protein))
+        rows.append([p.name if len(p.name) <= 30 else p.name[:29].rstrip() + "…", p.grams, k, b,
+                     int(p.estimate), sizes, mode])
+    text = _dump({"v": 1, "i": rows})
+    return text if size(text) <= LIMIT else None

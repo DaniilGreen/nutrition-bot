@@ -1,0 +1,47 @@
+<style>
+:root{color-scheme:light dark;--t:light-dark(#0e1013,#fff);--m:light-dark(#4e5560,#a7abb2);--b1:light-dark(#f7f9fc,#22262c);--b2:light-dark(#e2e8f0,#131518);--cd:light-dark(#ffffffb8,#ffffff0e);--tr:light-dark(#d3dae3,#32363d);--ac:light-dark(#2d6a93,#5e9ac1);--at:light-dark(#fff,#0e1013);--wa:light-dark(#835600,#ffd426);--al:light-dark(#9c4a2f,#e0a58f);--ok:light-dark(#1d7a3a,#34c759)}
+body{margin:0;padding:12px 14px max(12px,env(safe-area-inset-bottom));font:15px/1.3 system-ui,sans-serif;overflow-wrap:anywhere;color:var(--t);background:linear-gradient(165deg,var(--b1),var(--b2));font-variant-numeric:tabular-nums}
+.m{color:var(--m);font-size:13px}header b{font-size:20px}header{margin-bottom:8px}
+.c{background:var(--cd);border-radius:18px;padding:4px 12px;margin-bottom:8px}
+.it{padding:8px 0;border-top:1px solid var(--tr)}.it:first-child{border:0}.it.nd{box-shadow:inset 3px 0 0 var(--wa);padding-left:8px}
+.hd{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:baseline}.hd span{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.hd s{text-decoration:none;color:var(--m);font-weight:400}.hd b{font-weight:600}
+.ch{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center}
+button{font:inherit;font-weight:600;border:0;border-radius:12px;background:var(--tr);color:var(--t);padding:5px 10px;cursor:pointer}
+.sz{font-size:13px;padding:4px 9px;border-radius:99px}.sz.on{background:var(--ac);color:var(--at)}
+.st button{width:32px;height:28px;padding:0;font-size:18px;line-height:1}.st b{min-width:58px;text-align:center;font-weight:600}
+.tt{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 6px;margin:4px 2px 10px}.tt b{white-space:nowrap;font-size:clamp(24px,10vw,34px);font-weight:700;letter-spacing:-1px}
+#ac{display:flex;gap:8px;flex-wrap:wrap}#ac button{flex:1 1 120px;padding:9px}.go{background:var(--ac);color:var(--at)}.no{background:var(--cd);color:var(--al)}
+.st{white-space:nowrap}@media (max-width:260px){.c{padding:4px 8px}.sz{font-size:11px;padding:3px 5px}.ch{gap:4px}#ac button{flex-basis:60px;font-size:13px;padding:8px 4px}}
+.bz{opacity:.45;pointer-events:none}#ts{font-size:13px;margin-top:8px;color:var(--m)}#ts:empty{display:none}.dn{font-weight:600;color:var(--ok)}
+.cu{counter-reset:n var(--n)}.cu::after{content:counter(n)}.an .cu{animation:cu .9s ease-out}@keyframes cu{from{--n:0}}.an .it{animation:fu .4s ease-out both}@keyframes fu{from{opacity:0;transform:translateY(6px)}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
+<header><b>🍽 Проверь и запиши</b><div class=m>размер — тапом, граммы — ± 10</div></header>
+<div id=bd></div><div id=ac></div><div id=ts></div>
+<script>
+let A1=1,CU=0;try{CSS.registerProperty({name:'--n',syntax:'<integer>',inherits:!1,initialValue:'0'});CU=1}catch(e){}const NU=v=>CU?'<span class=cu style="--n:'+v+'"></span>':v,AN=()=>{document.body.className=A1?'an':'';A1=0};
+const W=window.TelegramWidget,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},R=Math.round,
+T=s=>(s+'').replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';'),K=()=>Math.random().toString(36).slice(2,8).padEnd(6,'0'),
+M={need:'Выбери размер у отмеченных.',old:'Разбор устарел — пришли еду заново.',bad:'Так не записать — пришли еду заново.',busy:'Уже записываю…',TIMEOUT:'Бот не ответил — проверь в «Сегодня».',RATE_LIMITED:'Слишком часто — секунду.'};
+let D=null,G=[],B=0,ND=0,DONE='';
+const hp=t=>{try{t?W.HapticFeedback.notificationOccurred(t):W.HapticFeedback.selectionChanged()}catch(e){}},
+kc=(x,i)=>x[6]==2?x[2]:G[i]?R(x[2]*G[i]):null,pr=(x,i)=>x[6]==2?x[3]:G[i]?x[3]*G[i]:0;
+function draw(){const d=D;if(!d||d.v!=1)return;const f=A1,nw=document.body.clientWidth<260;AN();
+if(d.x||DONE){$('bd').innerHTML='<div class=c style="padding:10px 12px">'+(DONE?'<span class=dn>'+DONE+'</span>':'<b>Отменено</b><div class=m>Ничего не записал.</div>')+'</div>';$('ac').innerHTML='';return}
+let t=0,p=0,miss=[];
+$('bd').innerHTML='<div class=c>'+d.i.map((x,i)=>{const k=kc(x,i),s=x[5];if(k==null)miss.push(i);else{t+=k;p+=pr(x,i)}
+return'<div class="it'+(ND&&k==null?' nd':'')+'" data-i='+i+' style="animation-delay:'+i*50+'ms"><div class=hd><span>'+T(x[0])+(x[4]?' <s>≈</s>':'')+'</span><b>'+(k==null?'—':k)+'</b></div><div class=ch>'+
+(s?s.map((g,j)=>'<button class="sz'+(G[i]==g?' on':'')+'" data-g='+g+'>'+'SML'[j]+(nw?'·'+g:' · '+g+' г')+'</button>').join(''):'')+
+(x[6]==0&&G[i]?'<span class=st><button data-s=-1>−</button><b>'+G[i]+' г</b><button data-s=1>+</button></span>':x[6]==1?'<span class=m>'+G[i]+' г · вес из названия</span>':x[6]==2?'<span class=m>свои цифры</span>':'')+'</div></div>'}).join('')+'</div>'+
+'<div class=tt><span class=m>Итого ≈</span><b>'+(f?NU(R(t)):R(t))+'</b><span class=m>ккал · Б '+R(p)+(miss.length?' · без размера: '+miss.length:'')+'</span></div>';
+$('ac').innerHTML='<button class=go data-q=w>✅ Записать</button><button class=no data-q=x'+(nw?' style="flex:0 0 44px" aria-label=Отмена>✖️':'>✖️ Отмена')+'</button>';
+if(miss.length&&ND)$('ts').textContent=M.need}
+function send(q,el){if(!W||!W.request||B)return;B=1;el.classList.add('bz');$('ts').textContent='';
+const fin=(r,e)=>{B=0;el.classList.remove('bz');if(r&&r.ok){hp('success');if(r.x)D={v:1,x:1};else DONE='✓ Записал — карточка ниже'}else{hp('error');if(r&&r.err=='need')ND=1;$('ts').textContent=M[r?r.err:e&&e.code]||'Не вышло — попробуй ещё раз.'}draw()};
+try{W.request(q+':'+K()).then(a=>fin(J(a&&a.result)||{err:'fail'}),e=>fin(null,e))}catch(e){fin(null,null)}}
+document.addEventListener('click',ev=>{const b=ev.target.closest('button');if(!b||!D||B)return;const row=b.closest('[data-i]'),i=row&&+row.dataset.i;
+if(b.dataset.g){G[i]=+b.dataset.g;hp();draw();return}
+if(b.dataset.s){const g=Math.min(2000,Math.max(1,G[i]+10*b.dataset.s));if(g!=G[i]){G[i]=g;hp();draw()}return}
+if(b.dataset.q=='x')send('c:x',b);else if(b.dataset.q=='w'){if(D.i.some((x,j)=>x[6]==0&&!G[j])){ND=1;hp('error');draw();return}send('c:w:'+D.i.map((x,j)=>x[6]==0?G[j]:0).join(','),b)}});
+function load(){D=J(W&&W.chatData);G=D&&D.i?D.i.map(x=>x[1]):[];draw()}
+if(W){W.onEvent('chatDataChanged',()=>{const d=J(W.chatData);if(d&&d.x){D=d;draw()}});load();try{W.ready&&W.ready()}catch(e){}}else load();
+if(!D)document.body.insertAdjacentHTML('beforeend','<p class=m>Нет данных.</p>');
+</script>

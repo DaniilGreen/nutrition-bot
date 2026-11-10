@@ -22,6 +22,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import Bot
+from aiogram.types import InlineKeyboardMarkup
 
 from app.application.assistant import Assistant
 from app.application.entities import Meal, User
@@ -143,6 +144,15 @@ async def _put(
         if "not modified" not in str(exc).lower():
             logger.warning("widget: подпись карточки приёма не правится: %s", exc)
     return True
+
+
+async def card(
+    assistant: Assistant, user: User, result: MealLogged
+) -> tuple[str | None, str, InlineKeyboardMarkup | None]:
+    """Данные, подпись и кнопки свежей карточки — для того, кто шлёт её позже, без сессии БД
+    (подтверждение разбора, FR-49.7)."""
+    data, caption, sess = await _card(assistant, user, result.meal, left=result.remaining)
+    return data, caption, meal_widget_keyboard(result.meal, sess)
 
 
 def _refresh(

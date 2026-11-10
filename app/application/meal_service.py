@@ -16,6 +16,7 @@ import operator
 import re
 from collections import Counter
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from functools import reduce
 
@@ -140,33 +141,8 @@ class MealService:
                 continue
             product = await self._resolve_product(parsed_item)
             estimated = estimated or product.is_estimate
-            # INV-7, шаг «явный вес»: объём или вес, названный прямо в имени,
-            # старше любой оценки модели. Реальный случай — «Пиво Сайгон 0.3 л»
-            # записалось как 500 г: модель поставила объём в имя, а граммовку
-            # взяла свою «кружку пива», и цифра вышла вдвое больше названной.
-            said = stated_grams(parsed_item.name)
-            if said is not None and said != parsed_item.grams:
-                resolution = GramsResolution(grams=said, assumed=False)
-            else:
-                resolution = resolve_grams(
-                    unit=parsed_item.unit.value,
-                    quantity=parsed_item.quantity,
-                    grams_estimate=parsed_item.grams,
-                    portion_hint=parsed_item.portion_hint,
-                    parsed_unit_weight_g=parsed_item.unit_weight_g,
-                    product_unit_weight_g=product.unit_weight_g,
-                    product_default_portion_g=product.default_portion_g,
-                    product_portion_sizes=product.portion_sizes,
-                    parsed_portion_sizes=parsed_item.portion_options,
-                )
-            grams = clamp_grams(resolution.grams)  # INV-11.2: граммы в санитарные границы
-            raw_macros = macros_for_grams(product.density, grams)
-            # INV-14: алкоголь — ккал от этанола, доверяем (только границы); иначе Атвотер-сверка
-            macros = (
-                clamp_macros(raw_macros)
-                if is_alcoholic(parsed_item.name)
-                else vet_macros(raw_macros)
-            )
+            grams = _grams_for(parsed_item, product)
+            macros = _item_macros(parsed_item, product, grams)
             # Для выверенного каталога показываем чистое имя продукта, а не искажённый ввод/STT
             # («суп фубуо большой» → «Фо бо»). НО не когда пользователь конкретнее каталога:
             # если его имя содержит каталожное целиком, он добавил бренд/вкус/линейку, и стирать
@@ -909,6 +885,37 @@ class MealService:
             )
         )
 
+    async def preview(self, parsed: ParsedMessage) -> list[ItemPreview]:
+        """Подтверждение разбора (FR-49.7): по каждой позиции — граммы и ккал/белок на грамм ТОЙ
+        плотности, которой она запишется. Тот же выбор продукта, что у `log` (`_resolve_product`
+        пиннит его в каталог — INV-2: так предпросмотр и запись не разойдутся), та же цепочка
+        граммов (INV-7). Позиция без размера — граммы S/M/L той же цепочкой."""
+        out: list[ItemPreview] = []
+        for item in parsed.items:
+            if item.total_kcal:  # FR-22: свои цифры — без каталога и без правки граммов
+                g = clamp_grams(item.grams) if item.grams else 0.0
+                out.append(ItemPreview(item.name, round(g), item.total_kcal,
+                                       item.total_protein or 0.0, fixed=True))
+                continue
+            product = await self._resolve_product(item)
+            sizes: dict[str, int] = {}
+            if item.unit is Unit.PORTION and item.portion_hint is None:
+                for hint in ("small", "medium", "large"):
+                    item.portion_hint = hint
+                    sizes[hint] = round(_grams_for(item, product))
+                item.portion_hint = None
+                probe = sizes["medium"]
+            else:
+                probe = round(_grams_for(item, product))
+            m = _item_macros(item, product, float(probe or 100))
+            per = float(probe or 100)
+            out.append(ItemPreview(
+                item.name, 0 if sizes else probe, m.kcal / per, m.protein / per,
+                estimate=product.is_estimate, sizes=sizes,
+                fixed=stated_grams(item.name) is not None, per_gram=True,
+            ))
+        return out
+
     async def _resolve_product(self, parsed_item: ParsedItem) -> Product:
         key = _canonical_key(parsed_item.canonical_key, parsed_item.name)
         existing = await self._products.get_by_key(key)
@@ -973,6 +980,52 @@ class MealService:
             key = f"{base}_{suffix}"
             suffix += 1
         return key
+
+
+@dataclass
+class ItemPreview:
+    """Позиция подтверждения разбора: `per_gram` — kcal/protein на грамм (иначе — на всю позицию,
+    FR-22); `grams` 0 — размер ещё не выбран, есть `sizes`; `fixed` — граммы не правятся."""
+
+    name: str
+    grams: int
+    kcal: float
+    protein: float
+    estimate: bool = False
+    sizes: dict[str, int] = field(default_factory=dict)
+    fixed: bool = False
+    per_gram: bool = False
+
+
+def _grams_for(parsed_item: ParsedItem, product: Product) -> float:
+    """Граммы позиции — одна цепочка для записи и предпросмотра (INV-7).
+
+    Шаг «явный вес»: объём или вес, названный прямо в имени, старше любой оценки модели. Реальный
+    случай — «Пиво Сайгон 0.3 л» записалось как 500 г: модель поставила объём в имя, а граммовку
+    взяла свою «кружку пива», и цифра вышла вдвое больше названной."""
+    said = stated_grams(parsed_item.name)
+    if said is not None and said != parsed_item.grams:
+        resolution = GramsResolution(grams=said, assumed=False)
+    else:
+        resolution = resolve_grams(
+            unit=parsed_item.unit.value,
+            quantity=parsed_item.quantity,
+            grams_estimate=parsed_item.grams,
+            portion_hint=parsed_item.portion_hint,
+            parsed_unit_weight_g=parsed_item.unit_weight_g,
+            product_unit_weight_g=product.unit_weight_g,
+            product_default_portion_g=product.default_portion_g,
+            product_portion_sizes=product.portion_sizes,
+            parsed_portion_sizes=parsed_item.portion_options,
+        )
+    return clamp_grams(resolution.grams)  # INV-11.2: граммы в санитарные границы
+
+
+def _item_macros(parsed_item: ParsedItem, product: Product, grams: float) -> Macros:
+    """КБЖУ позиции из запиннутой плотности (INV-1/2). INV-14: алкоголь — ккал от этанола,
+    доверяем (только границы); иначе Атвотер-сверка."""
+    raw = macros_for_grams(product.density, grams)
+    return clamp_macros(raw) if is_alcoholic(parsed_item.name) else vet_macros(raw)
 
 
 def best_product_match(

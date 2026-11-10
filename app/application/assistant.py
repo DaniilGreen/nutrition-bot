@@ -36,6 +36,7 @@ from app.application.entities import (
     WeightLog,
 )
 from app.application.meal_service import (
+    ItemPreview,
     MealService,
     RecipeRejected,
     SnapshotStale,
@@ -471,6 +472,10 @@ class Assistant:
         return await self._handle_meal(
             user, draft, raw_input=raw_input, input_type=input_type, day_offset=day_offset
         )
+
+    async def preview_meal(self, draft: ParsedMessage) -> list[ItemPreview]:
+        """FR-49.7: позиции разбора с граммами и плотностью, которой они запишутся."""
+        return await self._meals.preview(draft)
 
     async def resolve_clarification(
         self, user: User, draft: ParsedMessage, item_index: int, new_name: str, *,

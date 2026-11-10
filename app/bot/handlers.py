@@ -141,6 +141,7 @@ from app.bot.states import MealStates, ProfileStates
 from app.bot.ui import gather, screens
 from app.bot.ui.kit import plural
 from app.bot.widgets import burn as widgets_burn
+from app.bot.widgets import confirm as widgets_confirm
 from app.bot.widgets import frequent as widgets_frequent
 from app.bot.widgets import live as widgets_live
 from app.bot.widgets import meal as widgets_meal
@@ -3775,9 +3776,24 @@ async def _reply_screen(
 
 
 async def _ask_clarification(
-    message: Message, result: Result, state: FSMContext, *, raw: str, edit: bool
+    message: Message, result: Result, state: FSMContext, *, raw: str, edit: bool,
+    user: User | None = None, assistant: Assistant | None = None,
 ) -> None:
-    """Вопрос-уточнение (порция/вариант) — короткий текст с клавиатурой. edit: править или слать."""
+    """Вопрос-уточнение (порция/вариант) — короткий текст с клавиатурой. edit: править или слать.
+
+    Размер порции с флагом — одним виджетом подтверждения на все позиции (FR-49.7): вопросов по
+    одной позиции нет; виджет не ушёл — прежняя цепочка. Вариант состава (D-19) — как раньше."""
+    if (
+        isinstance(result, ClarificationNeeded) and user is not None and assistant is not None
+        and message.bot is not None and widgets_live.enabled(user)
+        and await widgets_confirm.show(message.bot, message.chat.id, user, assistant,
+                                       result.draft, raw)
+    ):
+        await state.clear()  # висящего вопроса нет: ответ текстом — обычная запись
+        if edit:  # прежний вопрос (вариант состава) отработал — виджет занял его место
+            with suppress(TelegramBadRequest):
+                await message.delete()
+        return
     if isinstance(result, ClarificationNeeded):
         await state.set_state(MealStates.awaiting_portion)
         await state.update_data(draft=result.draft, item_index=result.item_index, raw=raw)
@@ -3819,7 +3835,8 @@ async def _reply_message(
     raw: str,
 ) -> None:
     if isinstance(result, ClarificationNeeded | VariantClarificationNeeded):
-        await _ask_clarification(message, result, state, raw=raw, edit=False)
+        await _ask_clarification(message, result, state, raw=raw, edit=False,
+                                 user=app_user, assistant=assistant)
     else:
         await _reply_screen(message, result, app_user, assistant)
 
@@ -3839,7 +3856,8 @@ async def _render_after_continue(
     удаляем и шлём карточку заново.
     """
     if isinstance(result, ClarificationNeeded | VariantClarificationNeeded):
-        await _ask_clarification(message, result, state, raw=raw, edit=True)
+        await _ask_clarification(message, result, state, raw=raw, edit=True,
+                                 user=app_user, assistant=assistant)
         return
     await state.clear()
     if isinstance(result, MealLogged | DailyStats | ItemRemoved | ItemAdjusted):
