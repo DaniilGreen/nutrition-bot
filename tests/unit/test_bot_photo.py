@@ -902,3 +902,80 @@ async def test_двойной_тап_записать_отдельно_пише�
     await handlers.on_photo_btn(first, object(), assistant, AsyncMock(), state)
     assert assistant.process.await_count == 1
     assert "уже снят" in second.bot.await_args_list[0].args[0].text
+
+
+# --- карточка блюда виджетом (D-88) -----------------------------------------------------------
+
+def test_данные_карточки_виджета_те_же_строки_и_действия():
+    """D-88: виджет `card` несёт те же позиции, пометку веса и действия, что текст и клавиатура:
+    убрать/вернуть — чипом строки, «Записать»/«Отмена» — кнопками; убранная — зачёркнута и не в
+    итоге; имена экранированы; всё влезает в 1024 байта и на длинной тарелке."""
+    import json
+
+    from app.bot.ui.widgets import LIMIT, photo_card_data
+
+    plate = _plate()
+    raw = [c.name for c in plate.components]
+    d = json.loads(photo_card_data(plate, raw, [250.0, 100.0], weighed=False, off=[1],
+                                   guessed=[True, True], peeled=[]))
+    assert d["hd"] == "паста с курицей" and d["mk"] == "вес на глаз"
+    assert d["r"][0][:4] == ["макароны отварные", "250 г", "", 0]
+    assert d["r"][0][4] == [["убрать", "ph:off:0"]]
+    assert d["r"][1][3] == 1 and d["r"][1][4] == [["вернуть", "ph:off:1"]]
+    assert d["n"][0] == "Всего 250 г" and any("Взвешивал" in n for n in d["n"])
+    assert d["kb"] == [["Записать", "ph:ok", "go"], ["Отмена", "wiz_cancel", "no"]]
+    evil = _plate(dish="<b>x</b>", components=[Component("<i>рис</i> " * 30, 1.0, 100)] * 9)
+    text = photo_card_data(evil, [c.name for c in evil.components], [100.0] * 9, weighed=True,
+                           off=[], guessed=[False] * 9, peeled=[])
+    assert text is not None and len(text.encode()) <= LIMIT and "<i>" not in text
+    assert json.loads(text)["mk"] == "взвешено" and "Взвешивал" not in text
+
+
+async def test_карточка_уходит_виджетом_и_правится_данными(monkeypatch):
+    """С флагом карточка блюда — виджет `card`, в состоянии `card_w`; тап «убрать» правит ДАННЫЕ
+    этого сообщения (не текст); без флага и при сбое виджета — прежний текст с кнопками."""
+    import json
+    from types import SimpleNamespace
+
+    from app.bot.widgets import template
+    from app.bot.widgets.transport import EditMessageWidgetData, SendWidget
+
+    sent: list[object] = []
+
+    class B:
+        def __init__(self, fail: bool = False) -> None:
+            self.fail = fail
+
+        async def __call__(self, method: object) -> object:
+            if self.fail:
+                raise RuntimeError("400")
+            sent.append(method)
+            return SimpleNamespace(message_id=77)
+
+    monkeypatch.setattr(handlers.widgets_live, "enabled", lambda u, s=None: True)
+    msg = AsyncMock()
+    msg.bot, msg.chat = B(), SimpleNamespace(id=1)
+    state = _State()
+    await handlers._photo_send(msg, state, _data(), object())  # type: ignore[arg-type]
+    [w] = sent
+    assert isinstance(w, SendWidget) and w.html == template("card") and w.allow_queries
+    assert state.data["card_id"] == 77 and state.data["card_w"] is True
+    assert not msg.answer.await_count
+
+    cb = _callback("ph:off:1", message_id=77)
+    object.__setattr__(cb.message, "__pydantic_extra__", {"widget": {}})
+    bot = B()
+    cb.message.as_(bot)  # type: ignore[union-attr]
+    state = _State(_data(card_id=77, card_w=True))
+    await handlers.on_photo_btn(cb, object(), _assistant(), AsyncMock(), state)
+    edit = sent[-1]
+    assert isinstance(edit, EditMessageWidgetData) and edit.message_id == 77
+    assert json.loads(edit.chat_data)["r"][1][3] == 1 and state.data["off"] == [1]
+
+    for bot in (B(fail=True), None):  # виджет не ушёл / без бота — текст с кнопками
+        msg = AsyncMock()
+        msg.bot, msg.chat = bot, SimpleNamespace(id=1)
+        msg.answer.return_value = SimpleNamespace(message_id=9)
+        state = _State()
+        await handlers._photo_send(msg, state, _data(), object())  # type: ignore[arg-type]
+        assert msg.answer.await_count == 1 and state.data["card_w"] is False

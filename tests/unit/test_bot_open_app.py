@@ -104,7 +104,9 @@ def test_кнопка_аппки_не_делает_сообщение_карто
 
 
 @pytest.mark.parametrize("found", [[_product(1)], []])
-async def test_products_ведёт_в_каталог(found):
+async def test_products_ведёт_в_каталог(found, monkeypatch):
+    # rich-путь (без флага виджетов); карточку-виджет проверяет test_bot_menu (D-88)
+    monkeypatch.setattr(handlers.widgets_live, "enabled", lambda u, s=None: False)
     assistant = AsyncMock()
     assistant.fixable_products.return_value = found
     msg = AsyncMock()

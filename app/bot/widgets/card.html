@@ -1,0 +1,26 @@
+<style>
+:root{color-scheme:light dark;--t:light-dark(#0e1013,#fff);--m:light-dark(#4e5560,#a7abb2);--b1:light-dark(#f7f9fc,#22262c);--b2:light-dark(#e2e8f0,#131518);--cd:light-dark(#ffffffb8,#ffffff0e);--tr:light-dark(#d3dae3,#32363d);--ac:light-dark(#2d6a93,#5e9ac1);--at:light-dark(#fff,#0e1013);--al:light-dark(#9c4a2f,#e0a58f)}
+body{margin:0;padding:12px 14px max(26px,env(safe-area-inset-bottom));font:15px/1.3 "Segoe UI",system-ui,sans-serif;overflow-wrap:anywhere;color:var(--t);background:{{sheen}}linear-gradient(165deg,var(--b1),var(--b2));font-variant-numeric:tabular-nums}
+.r{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;margin-bottom:8px}.r b{font-size:20px}.m{color:var(--m);font-size:13px}
+.c{background:var(--cd);border-radius:18px;padding:2px 12px;margin-bottom:8px}.c:empty{display:none}
+.w{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;padding:8px 0;border-top:1px solid var(--tr);align-items:baseline;cursor:pointer}.w:first-child{border:0}
+.w span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.w b{font-weight:600;white-space:nowrap}.w small{grid-column:1/3;color:var(--m);font-size:12px}.w.x span,.w.x b{color:var(--m);text-decoration:line-through}.dn .w{padding:3px 0;font-size:14px;border:0}
+.ch{grid-column:1/3;display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}.ch i{font-style:normal;font-size:12px;font-weight:600;padding:4px 10px;border-radius:99px;background:var(--tr)}
+#nt{line-height:1.4}#nt:empty,#ms:empty{display:none}
+.nb{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.nb b{flex:1 1 120px;padding:9px;border-radius:12px;background:var(--cd);text-align:center;font-size:14px;cursor:pointer}.nb:empty{display:none}
+.go{background:var(--ac)!important;color:var(--at)}.no{color:var(--al)}#ms{margin-top:8px}
+.an .w{animation:fu .4s ease-out both}@keyframes fu{from{transform:translateY(6px)}}@media (max-width:260px){.r b{font-size:15px}#nt{font-size:11px;line-height:1.3}.nb b{padding:6px}.dn .w{font-size:12px;padding:2px 0}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
+<header class=r><b id=hd></b><span class=m id=mk></span></header>
+<div class=c id=rw></div><div class=m id=nt></div><div class=nb id=kb></div><div class=m id=ms></div>
+<script>
+{{boot}}const W=TW,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}};
+let D=null,O=-1;
+function draw(){const d=J(W&&W.chatData)||D;if(!d||d.v!=1)return;D=d;AN();$('hd').innerHTML=d.hd;$('mk').textContent=d.mk||'';
+$('rw').className='c'+(d.dn?' dn':'');$('rw').innerHTML=d.r.map((x,i)=>'<div class="w'+(x[3]?' x':'')+'" data-i='+i+'><span>'+x[0]+'</span><b>'+x[1]+'</b>'+(x[2]?'<small>'+x[2]+'</small>':'')+(i==O&&x[4]?'<div class=ch>'+(x[4].map?x[4]:d.ch.map(c=>[c[0],c[1]+x[4]])).map(c=>'<i data-k="'+c[1]+'">'+c[0]+'</i>').join('')+'</div>':'')+'</div>').join('');
+$('nt').innerHTML=(d.n||[]).join('<br>');
+$('kb').innerHTML=(d.kb||[]).map(b=>'<b class="'+(b[2]||'')+'" data-k="'+b[1]+'">'+b[0]+'</b>').join('')}
+document.addEventListener('click',ev=>{const k=ev.target.closest('[data-k]'),w=ev.target.closest('[data-i]');
+if(k){$('ms').textContent='';try{W.request('k:'+k.dataset.k).then(a=>{$('ms').textContent=(J(a&&a.result)||{}).t||''},()=>{$('ms').textContent='Не вышло — попробуй ещё раз.'})}catch(e){}return}
+if(w&&D){O=O==w.dataset.i?-1:+w.dataset.i;draw()}});
+if(W){try{W.onEvent('chatDataChanged',draw)}catch(e){}draw();try{W.ready&&W.ready()}catch(e){}}else draw();
+</script>

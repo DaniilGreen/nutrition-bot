@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Sequence
 from datetime import date, datetime, timedelta
 from html import escape, unescape
 from typing import Any
@@ -31,12 +32,20 @@ from zoneinfo import ZoneInfo
 
 from app.application.entities import Meal
 from app.application.results import DailyStats, MealSession
-from app.bot.keyboards import weighable
+from app.bot.formatters import scan_notes, scan_rows
+from app.bot.keyboards import (
+    PHOTO_PREFIX,
+    PROD_FIX_PREFIX,
+    PROD_RENAME_PREFIX,
+    WIZ_CANCEL,
+    weighable,
+)
 from app.bot.quick import Frequent, parse_op
 from app.bot.ui.context import DayContext
 from app.bot.ui.kit import MON, WD, macros_rows, pct
 from app.bot.ui.screens import WeekView, week_hits
 from app.domain.goals import Goal, Remaining
+from app.domain.inedible import edible_grams, edible_ratio
 from app.domain.nutrition import macros_for_grams
 from app.domain.streak import Streak
 from app.domain.timeframe import local_date
@@ -62,6 +71,113 @@ def _dump(data: dict[str, Any]) -> str:
 
 def size(text: str) -> int:
     return len(text.encode())
+
+
+def card_data(
+    title: str, rows: Sequence[Sequence[Any]], *, mark: str = "", notes: Sequence[str] = (),
+    kb: Sequence[Sequence[str]] = (), keep_notes: bool = False,
+    chips: Sequence[Sequence[str]] = (), dense: bool = False,
+) -> str | None:
+    """`chat_data` общей карточки `card` (D-88). None — не влезла в бюджет: вызывающий шлёт текст.
+
+    Формат v1:
+      hd  заголовок            mk  пометка рядом (мелко)
+      r   [[название, значение, подстрока, зачёркнута 0/1, чипы [[текст, callback_data]]]] —
+          либо вместо чипов id строки: тогда чипы общие, из `ch`, и код = префикс + id
+      ch  общие чипы строк [[текст, префикс callback_data]] (список однотипных строк)
+      dn  1 — плотные строки
+      n   строки под списком   kb  кнопки экрана [[текст, callback_data, стиль go|no|""]]
+    Всё текстовое — HTML-безопасным (шаблон кладёт в innerHTML). Не влезает — режутся названия,
+    потом уходят подстроки и подсказки; позиции и кнопки остаются до конца. `keep_notes` —
+    строки под списком несут предупреждения (бланк InBody): их не режем, не влезло — None."""
+    base: dict[str, Any] = {"v": 1, "hd": escape(title), "mk": mark,
+                            "n": [escape(n) for n in notes], "kb": [list(b) for b in kb]}
+    if chips:
+        base["ch"] = [list(c) for c in chips]
+    if dense:
+        base["dn"] = 1  # плотные строки: длинный список показателей (бланк) — в потолок 600 px
+    for limit, subs, keep in ((60, True, 9), (32, True, 9), (22, True, 9), (22, False, 1),
+                              (16, False, 1), (12, False, 0)):
+        if keep_notes and keep < len(notes):
+            return None
+        base["n"] = [escape(n) for n in notes][:keep]  # подсказки уходят раньше позиций
+        out = []
+        for name, value, sub, off, own in rows:
+            name = name if len(name) <= limit else name[: limit - 1].rstrip() + "…"
+            own = own if isinstance(own, int | str) else [list(c) for c in own]
+            out.append([escape(name), escape(str(value)), escape(sub) if subs else "",
+                        int(bool(off)), own])
+        text = _dump({**base, "r": out})
+        if size(text) <= LIMIT:
+            return text
+    return None
+
+
+def photo_card_data(
+    plate: Any, raw_names: Sequence[str], grams: Sequence[float], *, weighed: bool,
+    off: Sequence[int], guessed: Sequence[bool], peeled: Sequence[int],
+) -> str | None:
+    """Карточка блюда по фото виджетом (FR-34, D-88) — те же строки, что `format_photo_card`, и те
+    же действия, что `photo_keyboard`: убрать/вернуть позицию, вычет несъедобного, «Записать»."""
+    comps = plate.components
+    kept = [guessed[i] for i in range(len(comps)) if i not in off]
+    mark = ("вес на глаз" if kept and all(kept)
+            else "вес частично на глаз" if any(kept) else "взвешено")
+    rows = []
+    for i, (c, g) in enumerate(zip(comps, grams, strict=True)):
+        edible = edible_grams(c.name, g)
+        eats = edible is not None and edible < g and i not in off
+        sub = f"съедобно ≈{edible:g} г" if eats else ""
+        note = getattr(c, "note", "")
+        chips = [["вернуть" if i in off else "убрать", f"{PHOTO_PREFIX}:off:{i}"]]
+        if i not in off and edible_ratio(raw_names[i]) is not None:
+            chips.append(["вычитать несъедобное" if i in peeled else "без вычета — уже чищено",
+                          f"{PHOTO_PREFIX}:peel:{i}"])
+        name = c.name + (f" · {note}" if note else "")
+        rows.append([name, f"{g:g}\u00a0г", sub, i in off, chips])
+    total = sum(g for i, g in enumerate(grams) if i not in off)
+    notes = [f"Всего {total:g} г"]
+    if not weighed:
+        notes.append("Взвешивал? Пришли вес тарелки числом — пересчитаю.")
+    notes.append("Поправь словами — «курица 150», «без риса» — или тапни позицию.")
+    return card_data(plate.dish or "Блюдо", rows, mark=mark, notes=notes,
+                     kb=[["Записать", f"{PHOTO_PREFIX}:ok", "go"], ["Отмена", WIZ_CANCEL, "no"]])
+
+
+def scan_card_data(check: Any, tz: str, kb: Sequence[Sequence[str]]) -> str | None:
+    """Бланк InBody карточкой-виджетом (FR-36, D-88): те же показатели и предупреждения, что у
+    текста (`scan_rows`, `scan_notes`). Предупреждения не режутся: не влезло — None, уходит
+    текст."""
+    s = check.scan
+    local = s.measured_at.astimezone(ZoneInfo(tz))
+    who = " · ".join(x for x in (f"{s.height_cm:g} см" if s.height_cm else "",
+                                 f"{s.age} лет" if s.age else "") if x)
+    title = f"{s.device or 'InBody'} · {local:%d.%m.%Y %H:%M}"
+    # общий совет «сравнивай в одинаковых условиях» — только в текстовой карточке: виджету
+    # важнее влезть в 600 px высоты, предупреждения при этом остаются все
+    return card_data(title, scan_rows(check), mark=who, notes=scan_notes(check), kb=kb,
+                     keep_notes=True, dense=True)
+
+
+def products_card_data(products: Sequence[Any], query: str | None) -> str | None:
+    """`/products` карточкой-виджетом (FR-15.1, D-88): продукты с моей оценкой КБЖУ; тап по строке —
+    «исправить КБЖУ» / «переименовать» (те же `prod_fix:` / `prod_rename:`; числа и имя бот
+    спрашивает сообщением)."""
+    rows = []
+    for p in products:
+        if p.id is None:
+            continue
+        d = p.density
+        rows.append([p.display_name, f"{d.kcal_per_100g:g}\u00a0ккал",
+                     f"Б{d.protein_per_100g:g} Ж{d.fat_per_100g:g} У{d.carb_per_100g:g}", 0, p.id])
+    title = f"Поиск: {query}" if query else "Продукты"
+    notes = ["На 100 г. Тапни продукт — исправить КБЖУ или переименовать.",
+             "Старый продукт найдёт поиск: /products тофу"]
+    return card_data(
+        title, rows, mark="" if query else "моя оценка (≈)", notes=notes,
+        chips=[["исправить КБЖУ", f"{PROD_FIX_PREFIX}:"],
+               ["переименовать", f"{PROD_RENAME_PREFIX}:"]],
+    )
 
 
 def streak_pill(streak: Streak) -> str:

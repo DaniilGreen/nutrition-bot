@@ -437,6 +437,57 @@ def _fat(v: float) -> str:
     return f"{v:.1f}".replace(".", ",")
 
 
+SCAN_TIP = ("Сравнивай замеры, сделанные в одинаковых условиях: утром, натощак, "
+            "без тренировки накануне.")
+
+
+def scan_rows(check: object) -> list[list[object]]:
+    """Строки бланка для карточки-виджета (D-88): те же показатели и тот же отбор, что у текста."""
+    s, bad = check.scan, check.bad  # type: ignore[attr-defined]
+    rows: list[list[object]] = []
+    for key, label, unit in _SCAN_LINES:
+        v = getattr(s, key)
+        if v is None or (key not in _ALWAYS and key not in bad):
+            continue
+        rows.append([("⚠ " if key in bad else "") + label, f"{_num(v)}\u00a0{unit}", "", 0, []])
+    if s.inbody_score is not None:
+        rows.append(["Балл InBody", f"{_num(s.inbody_score)} из 100", "", 0, []])
+    if s.lean_trunk_kg is not None:
+        seg = (f"руки {_num(s.lean_arm_l_kg)} ({_fat(s.fat_arm_l_kg)}) · "
+               f"{_num(s.lean_arm_r_kg)} ({_fat(s.fat_arm_r_kg)}) · "
+               f"ноги {_num(s.lean_leg_l_kg)} ({_fat(s.fat_leg_l_kg)}) · "
+               f"{_num(s.lean_leg_r_kg)} ({_fat(s.fat_leg_r_kg)}) · "
+               f"туловище {_num(s.lean_trunk_kg)} ({_fat(s.fat_trunk_kg)})")
+        rows.append(["Сегменты, безжировая (жир), кг", "", seg, 0, []])
+    return rows
+
+
+def scan_notes(check: object) -> list[str]:
+    """Предупреждения карточки бланка (MA-INV-50) — одни и те же у текста и у виджета (D-88)."""
+    notes = []
+    bad = check.bad  # type: ignore[attr-defined]
+    if getattr(check, "dropped_segments", False):
+        notes.append("Сегментный анализ не сошёлся с безжировой массой — сохраню без него. "
+                     "На цели он не влияет.")
+    if bad:
+        notes.append("Отмеченные числа не сходятся с остальными — сверь с бланком. Поправить "
+                     "их можно в мини-аппе: сними бланк там.")
+    if check.foreign:  # type: ignore[attr-defined]
+        notes.append("Похоже, бланк не твой: рост, пол, возраст или вес не сходятся с прошлыми.")
+    if check.date_ambiguous:  # type: ignore[attr-defined]
+        notes.append("Дату можно прочитать двумя способами — проверь её.")
+    if check.date_problem == "unread":  # type: ignore[attr-defined]
+        notes.append("Дату на бланке не разобрал — поставил сегодняшнюю. Другая дата — "
+                     "поправь её в мини-аппе.")
+    if check.date_problem == "old":  # type: ignore[attr-defined]
+        notes.append("Замеру больше двух лет — точно этот?")
+    if check.date_problem == "future":  # type: ignore[attr-defined]
+        notes.append("Дата замера в будущем — так сохранить нельзя.")
+    if check.existing is not None:  # type: ignore[attr-defined]
+        notes.append("Такой замер уже есть — сохраню поверх.")
+    return notes
+
+
 def format_scan_card(check: object, tz: str) -> str:
     """FR-36: что прочитали с бланка; несошедшееся — с ⚠️ (MA-INV-50)."""
     s = check.scan  # type: ignore[attr-defined]
@@ -466,30 +517,10 @@ def format_scan_card(check: object, tz: str) -> str:
             f"{_num(s.lean_leg_r_kg)} ({_fat(s.fat_leg_r_kg)})",
             f"Туловище {_num(s.lean_trunk_kg)} ({_fat(s.fat_trunk_kg)})",
         ]
-    notes = []
-    if getattr(check, "dropped_segments", False):
-        notes.append("Сегментный анализ не сошёлся с безжировой массой — сохраню без него. "
-                     "На цели он не влияет.")
-    if bad:
-        notes.append("Отмеченные числа не сходятся с остальными — сверь с бланком. Поправить "
-                     "их можно в мини-аппе: сними бланк там.")
-    if check.foreign:  # type: ignore[attr-defined]
-        notes.append("Похоже, бланк не твой: рост, пол, возраст или вес не сходятся с прошлыми.")
-    if check.date_ambiguous:  # type: ignore[attr-defined]
-        notes.append("Дату можно прочитать двумя способами — проверь её.")
-    if check.date_problem == "unread":  # type: ignore[attr-defined]
-        notes.append("Дату на бланке не разобрал — поставил сегодняшнюю. Другая дата — "
-                     "поправь её в мини-аппе.")
-    if check.date_problem == "old":  # type: ignore[attr-defined]
-        notes.append("Замеру больше двух лет — точно этот?")
-    if check.date_problem == "future":  # type: ignore[attr-defined]
-        notes.append("Дата замера в будущем — так сохранить нельзя.")
-    if check.existing is not None:  # type: ignore[attr-defined]
-        notes.append("Такой замер уже есть — сохраню поверх.")
+    notes = scan_notes(check)
     if notes:
         lines += [""] + notes
-    lines += ["", "<i>Сравнивай замеры, сделанные в одинаковых условиях: утром, натощак, "
-              "без тренировки накануне.</i>"]
+    lines += ["", f"<i>{SCAN_TIP}</i>"]
     return "\n".join(lines)
 
 

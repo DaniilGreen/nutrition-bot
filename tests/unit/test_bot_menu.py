@@ -109,3 +109,52 @@ def test_кнопки_внутри_виджетов() -> None:
     assert "data-k=nav:prof" in goal and "data-k=nav:bug" in goal
     for html in (today, goal):
         assert "W.request('k:'+k.dataset.k)" in html
+
+
+async def test_products_карточкой_виджетом(monkeypatch: pytest.MonkeyPatch) -> None:
+    """D-88: `/products` с флагом — виджет `card`: продукт строкой, ккал и БЖУ на 100 г, по тапу
+    чипы с теми же `prod_fix:` / `prod_rename:`; под сообщением только аппка; 10 длинных имён
+    влезают в 1024 байта; без флага и при сбое — прежний rich со списком кнопок."""
+    import json
+
+    from app.application.entities import Product
+    from app.bot.ui.widgets import LIMIT, products_card_data
+    from app.bot.widgets import template
+    from app.bot.widgets.transport import SendWidget
+    from app.domain.value_objects import Density
+
+    items = [Product(canonical_key=f"k{i}", display_name=f"Очень длинное название продукта {i} " * 3,
+                     id=i + 1, is_estimate=True, density=Density(165.5, 31, 3.6, 0))
+             for i in range(10)]
+    text = products_card_data(items, None)
+    assert text is not None and len(text.encode()) <= LIMIT
+    d = json.loads(text)
+    assert d["hd"] == "Продукты" and len(d["r"]) == 10 and d["r"][0][1] == "165.5 ккал"
+    assert d["r"][0][4] == 1  # id строки; чипы общие — подписи не повторяются в каждой строке
+    assert d["ch"] == [["исправить КБЖУ", "prod_fix:"], ["переименовать", "prod_rename:"]]
+    assert json.loads(products_card_data(items[:2], "тофу"))["hd"] == "Поиск: тофу"
+
+    sent: list[object] = []
+
+    class B:
+        async def __call__(self, method: object) -> object:
+            sent.append(method)
+            return SimpleNamespace(message_id=5)
+
+    class A:
+        async def fixable_products(self, limit: int = 10, query: str | None = None) -> list:
+            return items[:3]
+
+    monkeypatch.setattr(handlers.widgets_live, "enabled", lambda u, s=None: True)
+    rich = AsyncMock()
+    monkeypatch.setattr(handlers, "_rich", rich)
+    msg = AsyncMock()
+    msg.bot, msg.chat = B(), SimpleNamespace(id=1)
+    await handlers.cmd_products(msg, SimpleNamespace(args=None), SimpleNamespace(id=1), A())  # type: ignore[arg-type]
+    [w] = sent
+    assert isinstance(w, SendWidget) and w.html == template("card") and not rich.await_count
+    under = w.reply_markup
+    assert under is None or not any(b.callback_data for r in under.inline_keyboard for b in r)
+    monkeypatch.setattr(handlers.widgets_live, "enabled", lambda u, s=None: False)
+    await handlers.cmd_products(msg, SimpleNamespace(args=None), SimpleNamespace(id=1), A())  # type: ignore[arg-type]
+    assert rich.await_count == 1

@@ -138,6 +138,7 @@ from app.bot.keyboards import (
     scan_apply_keyboard,
     scan_keyboard,
     sex_keyboard,
+    styled_buttons,
     tiles_keyboard,
     undo_picker_keyboard,
     variant_keyboard,
@@ -146,7 +147,9 @@ from app.bot.keyboards import (
 from app.bot.states import MealStates, ProfileStates
 from app.bot.ui import gather, screens
 from app.bot.ui.kit import plural
+from app.bot.ui.widgets import photo_card_data, products_card_data, scan_card_data
 from app.bot.widgets import burn as widgets_burn
+from app.bot.widgets import card as widgets_card
 from app.bot.widgets import confirm as widgets_confirm
 from app.bot.widgets import day as widgets_day
 from app.bot.widgets import frequent as widgets_frequent
@@ -315,7 +318,10 @@ async def on_wizard_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     if isinstance(callback.message, Message):
         with suppress(Exception):
-            await callback.message.edit_reply_markup(reply_markup=None)
+            if widgets_card.is_widget(callback.message):  # D-88: кнопки — в самой карточке,
+                await callback.message.delete()           # снять их нечем — убираем её
+            else:
+                await callback.message.edit_reply_markup(reply_markup=None)
         await callback.message.answer(
             "Ок, отменил. Меню — снизу 👇", reply_markup=main_menu_keyboard()
         )
@@ -529,6 +535,13 @@ async def cmd_products(
     products = await assistant.fixable_products(limit=10, query=query)
     if not products:  # пустой экран сам объяснит; каталог целиком — в аппке (FR-46)
         await _rich(message, screens.products(products, query), open_in_app("cat"))
+        return
+    if (  # D-88: список — карточкой-виджетом; не вышло — прежний rich с кнопками
+        message.bot is not None and widgets_live.enabled(app_user)
+        and await widgets_card.show(message.bot, message.chat.id,
+                                    products_card_data(products, query),
+                                    open_in_app("cat")) is not None
+    ):
         return
     await _rich(
         message, screens.products(products, query),
@@ -1334,8 +1347,13 @@ async def on_photo(
         check = await scans.check(app_user, scan, date_state=date_state)
         await state.set_state(MealStates.awaiting_scan)
         await state.update_data(scan=check.scan, date_state=date_state)
-        await message.answer(format_scan_card(check, app_user.timezone),
-                             reply_markup=scan_keyboard(check))
+        kb = scan_keyboard(check)
+        if widgets_live.enabled(app_user):  # D-88: бланк — карточкой-виджетом, не вышло — текстом
+            wdata = scan_card_data(check, app_user.timezone, styled_buttons(kb))
+            if await widgets_card.show(bot, message.chat.id, wdata) is not None:
+                await state.update_data(scan_w=wdata)
+                return
+        await message.answer(format_scan_card(check, app_user.timezone), reply_markup=kb)
         return
     if isinstance(result, PlateRead):
         await state.set_state(MealStates.awaiting_photo)
@@ -1347,10 +1365,7 @@ async def on_photo(
             "peeled": [],  # FR-34.2: «Без вычета — уже чищено»
         }
         await state.update_data(**data)
-        sent = await message.answer(
-            _photo_text(data), reply_markup=_photo_kb(data)
-        )
-        await state.update_data(card_id=sent.message_id)
+        await _photo_send(message, state, data, app_user)
         return
     if isinstance(result, LabelRead):
         item = result.draft.items[result.item_index]
@@ -1411,6 +1426,36 @@ def _photo_kb(data: dict) -> InlineKeyboardMarkup:
     )
 
 
+def _photo_widget(data: dict) -> str | None:
+    """Те же строки и действия карточки блюда — данными виджета `card` (D-88)."""
+    return photo_card_data(
+        _named_plate(data), [c.name for c in data["plate"].components], data["grams"],
+        weighed=bool(data.get("weighed")), off=data.get("off") or [],
+        guessed=_photo_guessed(data), peeled=data.get("peeled") or [],
+    )
+
+
+async def _photo_send(message: Message, state: FSMContext, data: dict, user: User) -> None:
+    """Карточка блюда: с флагом виджетов — виджетом (D-88), не вышло — текстом с кнопками.
+    `card_w` помнит, чем она ушла: править её потом нужно тем же способом."""
+    if message.bot is not None and widgets_live.enabled(user):
+        mid = await widgets_card.show(message.bot, message.chat.id, _photo_widget(data))
+        if mid is not None:
+            await state.update_data(card_id=mid, card_w=True)
+            return
+    sent = await message.answer(_photo_text(data), reply_markup=_photo_kb(data))
+    await state.update_data(card_id=sent.message_id, card_w=False)
+
+
+async def _photo_refresh(message: Message, data: dict) -> None:
+    """Перерисовать карточку, на которой нажали кнопку: виджет — данными, текст — текстом."""
+    if data.get("card_w") and message.bot is not None:
+        await widgets_card.edit(message.bot, message.chat.id, message.message_id,
+                                _photo_widget(data))
+        return
+    await _safe_edit(message, _photo_text(data), _photo_kb(data))
+
+
 @router.callback_query(F.data.startswith(f"{SCAN_PREFIX}:"))
 async def on_scan_btn(
     callback: CallbackQuery,
@@ -1459,7 +1504,14 @@ async def on_scan_btn(
     await session.commit()
     await state.clear()
     with suppress(TelegramBadRequest):
-        await callback.message.edit_reply_markup(reply_markup=None)
+        wdata = data.get("scan_w")
+        if wdata and widgets_card.is_widget(callback.message) and callback.message.bot is not None:
+            # карточка-виджет (D-88): кнопки — в её данных, снимаем их там же
+            await widgets_card.edit(callback.message.bot, callback.message.chat.id,
+                                    callback.message.message_id,
+                                    json.dumps({**json.loads(wdata), "kb": []}, ensure_ascii=False))
+        else:
+            await callback.message.edit_reply_markup(reply_markup=None)
     overview = await scans.overview(app_user)
     head = "💾 Замер обновлён." if updated else "💾 Замер сохранён — он в «Итогах» мини-аппа."
     prop = overview.proposal
@@ -1712,7 +1764,14 @@ async def _drop_photo_pick(bot: Bot | None, chat_id: int, state: FSMContext, dat
 async def _redraw_photo(message: Message, bot: Bot, state: FSMContext, data: dict) -> None:
     """Карточка правится на месте; не вышло (старая, удалена) — присылаем заново."""
     card_id = data.get("card_id")
-    if card_id:
+    if card_id and data.get("card_w"):  # карточка-виджет (D-88): правим её данные
+        if await widgets_card.edit(bot, message.chat.id, card_id, _photo_widget(data)):
+            return
+        mid = await widgets_card.show(bot, message.chat.id, _photo_widget(data))
+        if mid is not None:
+            await state.update_data(card_id=mid)
+            return
+    elif card_id:
         with suppress(TelegramBadRequest):
             await bot.edit_message_text(
                 _photo_text(data), chat_id=message.chat.id, message_id=card_id,
@@ -1720,7 +1779,7 @@ async def _redraw_photo(message: Message, bot: Bot, state: FSMContext, data: dic
             )
             return
     sent = await message.answer(_photo_text(data), reply_markup=_photo_kb(data))
-    await state.update_data(card_id=sent.message_id)
+    await state.update_data(card_id=sent.message_id, card_w=False)
 
 
 async def _keep_card(
@@ -1818,7 +1877,7 @@ async def on_photo_btn(
             data["peeled"] = peeled
             await state.update_data(peeled=peeled)
         await callback.answer()
-        await _safe_edit(callback.message, _photo_text(data), _photo_kb(data))
+        await _photo_refresh(callback.message, data)
         return
     if parts[1] != "ok" and parts[1] != "off":
         await callback.answer()
@@ -1830,7 +1889,7 @@ async def on_photo_btn(
             data["off"] = off
             await state.update_data(off=off)
         await callback.answer()
-        await _safe_edit(callback.message, _photo_text(data), _photo_kb(data))
+        await _photo_refresh(callback.message, data)
         return
     if len(off) >= len(plate.components):
         await callback.answer("Всё убрано — нечего записывать.", show_alert=True)
@@ -3923,8 +3982,12 @@ async def _render_after_continue(
     Rich нельзя вклеить в старое сообщение-вопрос (нет editRichMessage), поэтому на финале вопрос
     удаляем и шлём карточку заново.
     """
+    widget = widgets_card.is_widget(message)  # карточка-виджет (D-88): текст в неё не вклеить
     if isinstance(result, ClarificationNeeded | VariantClarificationNeeded):
-        await _ask_clarification(message, result, state, raw=raw, edit=True,
+        if widget:
+            with suppress(TelegramBadRequest):
+                await message.delete()
+        await _ask_clarification(message, result, state, raw=raw, edit=not widget,
                                  user=app_user, assistant=assistant)
         return
     await state.clear()
@@ -3932,6 +3995,10 @@ async def _render_after_continue(
         with suppress(TelegramBadRequest):
             await message.delete()  # сообщение-вопрос убираем — rich не вклеить в него
         await _reply_screen(message, result, app_user, assistant)
+    elif widget:
+        with suppress(TelegramBadRequest):
+            await message.delete()
+        await message.answer(format_result(result))
     else:
         await _safe_edit(message, format_result(result))
 

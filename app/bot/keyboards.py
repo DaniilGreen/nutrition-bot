@@ -446,6 +446,16 @@ def widget_buttons(markup: InlineKeyboardMarkup | None) -> list[list[str]]:
             for row in markup.inline_keyboard for b in row if b.callback_data]
 
 
+def styled_buttons(markup: InlineKeyboardMarkup | None) -> list[list[str]]:
+    """Те же кнопки со стилем для карточки `card` (D-88): «Отмена» — приглушённая (`no`), первое
+    действие — акцентом (`go`)."""
+    out = []
+    for text, code in widget_buttons(markup):
+        style = "no" if code == WIZ_CANCEL else "" if any(b[2] == "go" for b in out) else "go"
+        out.append([text, code, style])
+    return out
+
+
 def weighable(meal: Meal) -> list[MealItem]:
     """Позиции, вес которых можно поправить (FR-43): сохранённые и с граммами. Стейтед без веса
     масштабировать не от чего — `adjust_item` его и не возьмёт."""

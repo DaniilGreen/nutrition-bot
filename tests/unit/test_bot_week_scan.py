@@ -189,3 +189,51 @@ async def test_напоминание_о_замере_по_возрасту_и_�
     later = replace(users._users[1], scan_nudged_at=now - timedelta(days=31))  # noqa: SLF001
     svc, _ = _scan_service([stale], later, now)
     assert await svc.nudge_due(later) is not None
+
+
+def test_бланк_карточкой_виджетом_те_же_числа_и_предупреждения():
+    """D-88: виджет `card` несёт те же показатели и кнопки, что текст; несошедшееся помечено и
+    предупреждение не режется; будущая дата — без «Сохранить»; всё в бюджете 1024 байта."""
+    import json
+
+    from app.bot.keyboards import styled_buttons
+    from app.bot.ui.widgets import LIMIT, scan_card_data
+
+    d = json.loads(scan_card_data(_check(), "Etc/GMT-7", styled_buttons(scan_keyboard(_check()))))
+    assert d["hd"] == "InBody270 · 03.05.2026 15:44" and d["mk"] == "180 см · 30 лет"
+    assert ["Вес", "91,8 кг", "", 0, []] in d["r"]
+    assert not any(r[0].startswith("⚠") or "Минералы" in r[0] for r in d["r"])
+    assert d["kb"] == [["Сохранить", "scan:save", "go"], ["Отмена", "wiz_cancel", "no"]]
+    chk = _check(bad={"body_fat_kg", "weight_kg"})
+    text = scan_card_data(chk, "UTC", styled_buttons(scan_keyboard(chk)))
+    bad = json.loads(text)
+    assert len(text.encode()) <= LIMIT
+    assert {"⚠ Вес", "⚠ Жир"} <= {r[0] for r in bad["r"]}
+    assert any("не сходятся" in n for n in bad["n"]) and bad["kb"][0][1] == "scan:confirm"
+    fut = _check(date_problem="future")
+    f = json.loads(scan_card_data(fut, "UTC", styled_buttons(scan_keyboard(fut))))
+    assert f["kb"] == [["Отмена", "wiz_cancel", "no"]] and any("будущем" in n for n in f["n"])
+
+
+async def test_сохранение_с_виджета_снимает_кнопки_в_данных():
+    """D-88: у карточки-виджета кнопки лежат в данных — после «Сохранить» бот правит данные (kb
+    пустой), а не клавиатуру сообщения; показатели карточки остаются."""
+    import json
+
+    from app.bot.keyboards import styled_buttons
+    from app.bot.ui.widgets import scan_card_data
+    from app.bot.widgets.transport import EditMessageWidgetData
+
+    scans = AsyncMock()
+    scans.save.return_value = (replace(SCAN, id=1), False)
+    scans.overview.return_value = SimpleNamespace(proposal=None)
+    wdata = scan_card_data(_check(), "UTC", styled_buttons(scan_keyboard(_check())))
+    state = _State({"scan": SCAN, "date_state": "ok", "scan_w": wdata})
+    cb = _callback("scan:save")
+    object.__setattr__(cb.message, "__pydantic_extra__", {"widget": {}})
+    await handlers.on_scan_btn(cb, object(), AsyncMock(), state, scans)
+    edits = [c.args[0] for c in cb.bot.await_args_list
+             if isinstance(c.args[0], EditMessageWidgetData)]
+    assert len(edits) == 1
+    d = json.loads(edits[0].chat_data)
+    assert d["kb"] == [] and ["Вес", "91,8 кг", "", 0, []] in d["r"] and state.cleared
