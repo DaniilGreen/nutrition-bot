@@ -28,7 +28,7 @@ from app.application.assistant import Assistant
 from app.application.entities import Meal, User
 from app.application.meal_service import SnapshotStale, meal_fingerprint
 from app.application.results import MealLogged, MealSession
-from app.bot.keyboards import meal_widget_keyboard, weighable
+from app.bot.keyboards import meal_widget_keyboard, open_in_app, weighable, widget_buttons
 from app.bot.ui.widgets import meal_data, merged_data
 from app.bot.widgets import live, template
 from app.bot.widgets.transport import EditMessageWidgetData, SendWidget
@@ -89,7 +89,9 @@ async def _card(
     ss = sum(m.totals.kcal for m in sess.meals) if sess is not None else None
     data = meal_data(meal, left, user.timezone, session_kcal=ss, undo=undo, deleted=deleted,
                      head="Запись" if opened else head,
-                     rows=sanitize(user.ui_prefs)["card_macros"] == "list")
+                     rows=sanitize(user.ui_prefs)["card_macros"] == "list",
+                     # кнопки — в самой карточке (D-82): «Повторить», «📌» — те же callback_data
+                     kb=None if deleted else widget_buttons(meal_widget_keyboard(meal, sess)))
     return data, sess
 
 
@@ -107,7 +109,7 @@ async def show(
             return False
         await bot(SendWidget(
             chat_id=chat_id, html=template("meal"), chat_data=data,
-            allow_queries=True, reply_markup=meal_widget_keyboard(result.meal, sess),
+            allow_queries=True, reply_markup=open_in_app("day"),  # прочее — в виджете (D-82)
         ))
     except Exception as exc:  # noqa: BLE001
         logger.warning("widget: карточка приёма не ушла (%s) — фолбэк на rich", exc)
@@ -144,21 +146,17 @@ async def _put(
         if "not modified" not in str(exc).lower():
             logger.warning("widget: данные карточки приёма не правятся: %s", exc)
             return False
-    try:
-        await bot.edit_message_reply_markup(  # подписи нет (D-75) — только кнопки
-            chat_id=uid, message_id=mid, reply_markup=meal_widget_keyboard(meal, sess),
-        )
-    except Exception as exc:  # noqa: BLE001 — данные уже легли: виджет показывает правду
-        if "not modified" not in str(exc).lower():
-            logger.warning("widget: кнопки карточки приёма не правятся: %s", exc)
+    # Кнопки — в самих данных (D-82): клавиатуру под сообщением не трогаем, иначе правка вернула
+    # бы под виджет телеграмные кнопки. У старых карточек (до D-82) она остаётся как была.
     return True
 
 
 async def card(
     assistant: Assistant, user: User, result: MealLogged
 ) -> tuple[str | None, InlineKeyboardMarkup | None]:
-    """Данные и кнопки свежей карточки — для того, кто шлёт её позже, без сессии БД
-    (подтверждение разбора, FR-49.7)."""
+    """Данные свежей карточки и полная клавиатура — для того, кто шлёт её позже, без сессии БД
+    (подтверждение разбора, FR-49.7). Клавиатура — только для текстового фолбэка: под виджетом
+    одна «Открыть в приложении», остальное в нём (D-82)."""
     data, sess = await _card(assistant, user, result.meal, left=result.remaining)
     return data, meal_widget_keyboard(result.meal, sess)
 
@@ -359,7 +357,7 @@ async def on_open(
     async def send(bot: Bot) -> None:
         msg = await bot(SendWidget(
             chat_id=uid, html=template("meal"), chat_data=data_,
-            allow_queries=True, reply_markup=meal_widget_keyboard(meal, sess),
+            allow_queries=True, reply_markup=open_in_app("day"),
         ))
         if len(_opened) > 200:  # ponytail: двое людей; чистим целиком — худшее: шапка «Записал»
             _opened.clear()

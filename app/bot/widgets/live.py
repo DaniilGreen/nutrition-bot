@@ -25,7 +25,6 @@ from typing import Any
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.application.assistant import Assistant
 from app.application.entities import User
@@ -161,11 +160,10 @@ async def show_weight(
         data = weight_data(points, tz, target)
         if data is None:
             return False
-        burn = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-            text="🔥 Реальный расход", callback_data="burn")]])  # FR-50: `burn.CALLBACK`
+        # «Реальный расход» — кнопкой в самом виджете (`k:burn`, D-82, FR-50)
         await bot(SendWidget(
-            chat_id=chat_id, html=template("weight"), chat_data=data,
-            reply_markup=open_in_app("body", burn),
+            chat_id=chat_id, html=template("weight"), chat_data=data, allow_queries=True,
+            reply_markup=open_in_app("body"),
         ))
     except Exception as exc:  # noqa: BLE001
         logger.warning("widget: вес не ушёл (%s) — фолбэк на PNG", exc)
@@ -228,7 +226,20 @@ async def push(bot: Bot, user: User, open_assistant: Opener) -> None:
         await _safe_apply(bot, uid, live, built)
 
 
+# Тексты ошибок для виджетов (D-85): шаблон показывает `t` как есть — словари сообщений в
+# каждом шаблоне стоили байтов, а лимит Telegram — 4096 на шаблон. Коды `err` остаются: по ним
+# виджеты ветвятся (`need`, `noweight`).
+ERR_TEXT = {
+    "gone": "Записи уже нет.", "old": "Прошло 10 мин — не вернуть.",
+    "edited": "Уже поправили — не вернуть.", "busy": "Уже делаю…",
+    "need": "Выбери размер у отмеченных.", "noweight": "Сначала запиши вес — «вес 86.8».",
+}
+_ERR_DEFAULT = "Не вышло — попробуй ещё раз."
+
+
 def _reply(obj: dict[str, Any]) -> str:
+    if "err" in obj and "t" not in obj:
+        obj = {**obj, "t": ERR_TEXT.get(str(obj["err"]), _ERR_DEFAULT)}
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 

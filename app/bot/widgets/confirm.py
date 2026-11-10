@@ -24,6 +24,7 @@ from app.application.dto import ParsedMessage, Unit
 from app.application.entities import User
 from app.application.meal_service import ItemPreview
 from app.application.results import MealLogged
+from app.bot.keyboards import open_in_app
 from app.bot.ui.widgets import confirm_data, meal_caption
 from app.bot.widgets import live, template
 from app.bot.widgets import meal as wmeal
@@ -155,7 +156,7 @@ async def on_confirm(
             if card is None:
                 raise ValueError("карточка не влезла")
             await bot(SendWidget(chat_id=uid, html=template("meal"), chat_data=card,
-                                 allow_queries=True, reply_markup=kb))
+                                 allow_queries=True, reply_markup=open_in_app("day")))
         except Exception as exc:  # noqa: BLE001 — запись уже есть: сказать о ней текстом
             logger.warning("widget: карточка после подтверждения не ушла (%s)", exc)
             await bot.send_message(uid, f"{meal_caption(result.meal)} · "

@@ -28,6 +28,13 @@ from app.domain.value_objects import Macros
 WIDGETS = Path(live.__file__).parent
 
 
+def _code(raw: str) -> dict:
+    """Ответ виджету без текста ошибки `t` (D-85): тесты сверяют код, текст — в своём тесте."""
+    obj = json.loads(raw)
+    obj.pop("t", None)
+    return obj
+
+
 class _Shipped:
     """Шаблон, каким он уходит в Telegram: у «Сегодня» — общая часть + вид панели (D-78)."""
 
@@ -148,7 +155,7 @@ def test_данные_обычного_дня() -> None:
     # последнее — id позиции: запись из одной позиции с весом правится прямо в «Сегодня» (D-74)
     assert d["it"][0] == [9, "05", "Курица", 700, 0, 100, 35, 23, 88, meals[1].id, 0]
     assert d["it"][1] == [5, "12", "Овсянка", 420, 1, 100, 21, 14, 52, meals[0].id, 0]
-    assert d["s"] == "🔥 3 дн. подряд" and d["pk"] == round(d["e"][1] / 91.5, 1)
+    assert d["s"] == "🔥 3 дн. подряд" and d["pk"] == f"{d['e'][1] / 91.5:.1f}".replace(".", ",")
 
 
 def test_имя_записи_не_режется_без_нужды() -> None:
@@ -294,7 +301,7 @@ async def test_чужой_и_без_флага_отказ(monkeypatch: pytest.Mo
     await _ask(bot, _q("x"), OWNER, FakeAssistant([]))
     await _ask(bot, _q(), OTHER, FakeAssistant([]))
     answers = bot.of(AnswerWidgetQuery)
-    assert [json.loads(a.data) for a in answers] == [{"err": "bad"}, {"err": "bad"}]
+    assert [_code(a.data) for a in answers] == [{"err": "bad"}, {"err": "bad"}]
     assert not bot.of(EditMessageWidgetData)
 
 
@@ -385,7 +392,7 @@ async def test_сбой_сборки_всё_равно_ответ(monkeypatch: p
     monkeypatch.setattr(live, "build", boom)
     bot = FakeBot()
     await _ask(bot, _q(), OWNER, FakeAssistant([]))
-    assert json.loads(bot.of(AnswerWidgetQuery)[0].data) == {"err": "fail"}
+    assert _code(bot.of(AnswerWidgetQuery)[0].data) == {"err": "fail"}
 
 
 def test_транспорт_сериализуется() -> None:
@@ -470,9 +477,51 @@ async def test_middleware_ловит_widget_query() -> None:
     bot = FakeBot()
     upd = Update.model_validate({"update_id": 1, "widget_query": _q("bad")})
     assert await mw(handler, upd, {"bot": bot}) is None and not seen
-    assert json.loads(bot.of(AnswerWidgetQuery)[0].data) == {"err": "bad"}
+    assert _code(bot.of(AnswerWidgetQuery)[0].data) == {"err": "bad"}
     plain = Update.model_validate({"update_id": 2})
     assert await mw(handler, plain, {"bot": bot}) == "routed"
+
+
+async def test_кнопка_виджета_через_диспетчер() -> None:
+    """D-82: `k:<callback_data>` из виджета — тот же CallbackQuery через `dispatcher.feed_update`:
+    сообщение — этот виджет, текст `answer()` уходит ответом виджету ровно один раз; обработчик
+    промолчал — пустой ответ (виджет не ждёт 15 с); упал — текст ошибки. `k:<число>` — листание
+    старой «Недели», не кнопка. Нет диспетчера — `bad`."""
+    from aiogram.types import CallbackQuery, Update
+
+    fed: list[CallbackQuery] = []
+
+    class Disp:
+        def __init__(self, say: str | None = None, boom: bool = False) -> None:
+            self.say, self.boom = say, boom
+
+        async def feed_update(self, bot: object, update: Update) -> None:
+            cq = update.callback_query
+            assert cq is not None
+            fed.append(cq)
+            if self.boom:
+                raise RuntimeError("handler")
+            if self.say is not None:
+                await cq.answer(self.say)
+                await cq.answer("второй раз — молчит")
+
+    async def handler(event: object, data: dict) -> str:
+        return "routed"
+
+    mw = WidgetQueryMiddleware(container=None)  # type: ignore[arg-type]
+    for disp, want in ((Disp("Записал"), "Записал"), (Disp(), ""), (Disp(boom=True), "Не вышло")):
+        bot = FakeBot()
+        upd = Update.model_validate({"update_id": 1, "widget_query": _q("k:meal_repeat:5")})
+        assert await mw(handler, upd, {"bot": bot, "dispatcher": disp}) is None
+        [ans] = bot.of(AnswerWidgetQuery)
+        got = json.loads(ans.data)
+        assert got["t"].startswith(want) and fed[-1].data == "meal_repeat:5"
+        msg = fed[-1].message
+        assert msg is not None and msg.message_id == 77 and "widget" in (msg.model_extra or {})
+    bot = FakeBot()
+    upd = Update.model_validate({"update_id": 2, "widget_query": _q("k:burn")})
+    await mw(handler, upd, {"bot": bot})
+    assert _code(bot.of(AnswerWidgetQuery)[0].data) == {"err": "bad"}
 
 
 # --- «⚡ Частое» виджетом (FR-49.2, AC-276…AC-278) ---------------------------------------------
@@ -645,12 +694,12 @@ async def test_маршрут_пишущего_запроса(freq, monkeypatch:
     other = _q("w:p:12:180:efgh", **{"from": {"id": 357309245}},
                chat={"id": 357309245, "type": "private"})
     await mw(handler, Update.model_validate({"update_id": 4, "widget_query": other}), {"bot": bot})
-    assert json.loads(bot.of(AnswerWidgetQuery)[-1].data) == {"err": "bad"} and len(calls) == 1
+    assert _code(bot.of(AnswerWidgetQuery)[-1].data) == {"err": "bad"} and len(calls) == 1
     # Фиксация упала — ответ не «записал», и тот же ключ потом пишет заново (B1 ревью).
     fail_commit.append(True)
     q3 = _q("w:p:12:180:zzzz")
     await mw(handler, Update.model_validate({"update_id": 5, "widget_query": q3}), {"bot": bot})
-    assert json.loads(bot.of(AnswerWidgetQuery)[-1].data) == {"err": "fail"} and len(pushed) == 1
+    assert _code(bot.of(AnswerWidgetQuery)[-1].data) == {"err": "fail"} and len(pushed) == 1
     fail_commit.clear()
     await mw(handler, Update.model_validate({"update_id": 6, "widget_query": q3}), {"bot": bot})
     assert json.loads(bot.of(AnswerWidgetQuery)[-1].data)["ok"] == 1 and len(calls) == 3
@@ -841,7 +890,7 @@ async def test_запрос_дня_сбой_бд_всё_равно_ответ(mo
     mw = WidgetQueryMiddleware(_container(fail=True))  # type: ignore[arg-type]
     upd = Update.model_validate({"update_id": 9, "widget_query": _q()})
     await mw(lambda e, d: None, upd, {"bot": bot})  # type: ignore[arg-type]
-    assert json.loads(bot.of(AnswerWidgetQuery)[0].data) == {"err": "fail"}
+    assert _code(bot.of(AnswerWidgetQuery)[0].data) == {"err": "fail"}
     ok = WidgetQueryMiddleware(_container())  # type: ignore[arg-type]
     await ok(lambda e, d: None, Update.model_validate({"update_id": 10, "widget_query": _q()}),  # type: ignore[arg-type]
              {"bot": bot})
@@ -1230,9 +1279,13 @@ def test_анимация_только_css_и_при_появлении(path: _S
     из `data-n`, в разметке сразу финальное (нет rAF — нет счёта). Низ пузыря стоит на месте при
     смене высоты (`setResizeAnchor('bottom')`) — лента не уезжает с последнего сообщения."""
     html = path.read_text()
-    assert "try{TW.setResizeAnchor('bottom')}catch(e){}" in html
-    assert "AN=()=>{const v=!TW||TW.isActive!==!1;document.body.className=A1&&v?'an':''" in html
-    assert "try{TW.onEvent('activated',()=>{A1&&(window.RD||draw)()})}catch(e){}" in html
+    from app.bot.widgets.kit import BOOT
+
+    assert BOOT.strip() in html  # пролог кита (D-84) — один на все шаблоны
+    assert "TW.setResizeAnchor('bottom')" in BOOT and "TW.onEvent('activated'" in BOOT
+    assert "AN=()=>{const v=!TW||TW.isActive!==!1;BD.className=A1&&v?'an':''" in BOOT
+    # тап и конец всех CSS-анимаций снимают `an` — листание не проигрывает появление заново
+    assert "addEventListener('click',A0,!0)" in BOOT and "addEventListener('animationend'" in BOOT
     assert "try{requestAnimationFrame(" in html and "registerProperty" not in html
     assert re.search(r"prefers-reduced-motion:reduce\)\{[^}]*\.an \*\{animation:none", html)
     assert ".an " in html.split("</style>")[0]
@@ -1362,3 +1415,20 @@ def test_иконка_не_ловит_правила_графика(path: _Shipp
     if "<svg class=ic" in html:
         css = html[:html.index("</style>")]
         assert not re.search(r"(^|[},\n])svg\{", css), path.name
+
+
+def test_ошибка_виджету_с_текстом() -> None:
+    """D-85: ответ с `err` несёт готовый текст `t` — шаблонам не нужны свои словари сообщений."""
+    assert json.loads(live._reply({"err": "gone"}))["t"] == "Записи уже нет."
+    assert json.loads(live._reply({"err": "zzz"}))["t"].startswith("Не вышло")
+    assert "t" not in json.loads(live._reply({"ok": 1}))
+
+
+@pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.name)
+def test_отлив_и_кит_во_всех(path: _Shipped) -> None:
+    """D-83: зелёный отлив (`--ok` аппки, 14 %/18 %) — у каждого шаблона, из кита, а не копией."""
+    from app.bot.widgets.kit import SHEEN
+
+    html = path.read_text()
+    assert SHEEN in html and "{{" not in html
+    assert "light-dark(#34C75924,#34C7592E)" in SHEEN

@@ -1,9 +1,9 @@
 <style>
 :root{color-scheme:light dark;--t:light-dark(#0e1013,#fff);--m:light-dark(#4e5560,#a7abb2);--b1:light-dark(#f7f9fc,#22262c);--b2:light-dark(#e2e8f0,#131518);--cd:light-dark(rgba(255,255,255,.72),rgba(255,255,255,.055));--da:light-dark(#1d2833,#c3cbd5);--ok:light-dark(#1d7a3a,#34c759);--wa:light-dark(#835600,#ffd426)}
-body{margin:0;padding:12px 14px max(26px,env(safe-area-inset-bottom));font:15px/1.3 "Segoe UI",system-ui,sans-serif;color:var(--t);background:linear-gradient(165deg,var(--b1),var(--b2));font-variant-numeric:tabular-nums}
+body{margin:0;padding:12px 14px max(26px,env(safe-area-inset-bottom));font:15px/1.3 "Segoe UI",system-ui,sans-serif;color:var(--t);background:{{sheen}}linear-gradient(165deg,var(--b1),var(--b2));font-variant-numeric:tabular-nums}
 .r{display:flex;align-items:center;gap:8px}.m{color:var(--m);font-size:13px}
 header b{font-size:20px}.bg{font-size:clamp(30px,12vw,44px);font-weight:700;letter-spacing:-1px;margin:6px 0 2px}.bg small{font-size:15px;color:var(--m);font-weight:500;margin-left:3px}
-.c{background:var(--cd);border-radius:18px;padding:10px 12px;margin-top:10px}
+.c{background:var(--cd);border-radius:18px;padding:10px 12px;margin-top:10px}.btn{margin-top:10px;padding:9px;border-radius:12px;text-align:center;font-size:13px;font-weight:600;cursor:pointer;background:var(--cd)}
 svg:not(.ic){display:block;width:100%;height:auto}.ax{display:flex;justify-content:space-between;font-size:11px;color:var(--m);margin-top:2px}
 #tp{min-height:18px;font-size:13px;margin-top:4px}
 .ft{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px}.ft div{font-size:12px;color:var(--m)}.ft b{display:block;font-size:16px;color:var(--t);white-space:nowrap}
@@ -13,9 +13,9 @@ svg:not(.ic){display:block;width:100%;height:auto}.ax{display:flex;justify-conte
 <div class=bg id=l></div><div class=m id=sb></div>
 <div class=c><svg id=sv viewBox="0 0 300 120"></svg><div class=ax><span id=a></span><span id=z></span></div><div id=tp class=m>Тап по точке — дата и вес</div></div>
 <div class=ft><div>с прошлого<b id=f1></b></div><div>за период<b id=f2></b></div><div>за 4 недели<b id=f3></b></div></div>
+<div class=btn data-k=burn>{{ic:fire}} Реальный расход</div><div class=m id=ms></div>
 <script>
-let A1=1;const TW=window.TelegramWidget;try{TW.setResizeAnchor('bottom')}catch(e){}const NU=v=>'<span class=cu data-n='+v+'>'+v+'</span>',AN=()=>{const v=!TW||TW.isActive!==!1;document.body.className=A1&&v?'an':'';if(A1&&v){A1=0;try{requestAnimationFrame(t0=>{const e=document.querySelectorAll('.cu'),f=t=>{const k=Math.min(1,(t-t0)/900);e.forEach(x=>x.textContent=Math.round(x.dataset.n*(1-(1-k)**3)));k<1&&requestAnimationFrame(f)};f(t0)})}catch(e){}}};try{TW.onEvent('activated',()=>{A1&&(window.RD||draw)()})}catch(e){}
-const W=TW,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
+{{boot}}const W=TW,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
 K=v=>v==null?'—':(v>0?'+':'')+(v.toFixed(1)).replace('.',',').replace('-','−'),A=v=>K(v).replace('+',''),M=['янв','фев','мар','апр','мая','июн','июл','авг','сен','окт','ноя','дек'];
 let D=null;
 function dt(n){const d=new Date(D.a0+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.getUTCDate()+' '+M[d.getUTCMonth()]}
@@ -29,4 +29,5 @@ $('a').textContent=D.a;$('z').textContent=D.z;$('f1').textContent=D.dd==null?'�
 function grow(){let V=-1;const q=s=>document.querySelector('#sv '+s),pl=q('polyline'),pg=q('polygon'),P=pl.getAttribute('points').split(' '),cs=document.querySelectorAll('#sv circle:not([data-i])'),n=P.length,y0=pg.getAttribute('points').split(' ')[0].split(',')[1];try{requestAnimationFrame(t0=>{const f=t=>{const k=Math.min(1,(t-t0)/1300),m=k*(n-1),i=Math.floor(m),a=P[i].split(','),b=(P[i+1]||P[i]).split(','),r=m-i,p=P.slice(0,i+1).concat((+a[0]+(b[0]-a[0])*r).toFixed(1)+','+(+a[1]+(b[1]-a[1])*r).toFixed(1));pl.setAttribute('points',p.join(' '));pg.setAttribute('points',P[0].split(',')[0]+','+y0+' '+p.join(' ')+' '+p[p.length-1].split(',')[0]+','+y0);if(i!=V){V=i;cs.forEach((c,j)=>c.setAttribute('r',j>i?0:j==n-1?5:3))}k<1&&requestAnimationFrame(f)};f(t0)})}catch(e){}}
 document.addEventListener('click',e=>{const t=e.target.closest('[data-i]');if(!t||!D)return;const q=D.p[+t.dataset.i];$('tp').innerHTML=dt(q[2])+' · <b style="color:var(--t)">'+A(q[1])+'\u00a0кг</b>';try{W.HapticFeedback.selectionChanged()}catch(x){}});
 if(W){W.onEvent('chatDataChanged',draw);draw();try{W.ready&&W.ready()}catch(e){}}else draw();
+document.addEventListener('click',e=>{const b=e.target.closest('[data-k]');if(b&&TW&&TW.request)try{TW.request('k:'+b.dataset.k).then(a=>{try{document.getElementById('ms').textContent=JSON.parse(a.result).t||''}catch(x){}})}catch(x){}});
 </script>

@@ -4,10 +4,11 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from datetime import UTC, datetime
 from typing import Any
 
 from aiogram import BaseMiddleware, Bot
-from aiogram.types import TelegramObject, Update
+from aiogram.types import CallbackQuery, Chat, Message, TelegramObject, Update
 from aiogram.types import User as TgUser
 
 from app.application.assistant import Assistant
@@ -17,6 +18,25 @@ from app.bot.widgets import live
 from app.container import Container
 
 logger = logging.getLogger(__name__)
+
+#: Кнопка экрана, нарисованная в виджете (D-82): «k:» + callback_data прежней кнопки под ним.
+TAP = "k:"
+_ANSWERED: set[str] = set()
+
+
+class _Tap(CallbackQuery):
+    """Нажатие кнопки в виджете. Для обработчиков — обычный CallbackQuery (те же обработчики, что у
+    кнопки под виджетом, логика не дублируется); отличие одно: текст `answer()` уходит виджету
+    ответом на запрос (`{"ok":1,"t":…}`), и тот показывает его строкой у себя. Один раз."""
+
+    async def answer(  # type: ignore[override]
+        self, text: str | None = None, *args: Any, **kwargs: Any
+    ) -> bool:
+        if self.id in _ANSWERED or self.bot is None:
+            return False
+        _ANSWERED.add(self.id)
+        await live.reply(self.bot, self.id, {"ok": 1, "t": text or ""})
+        return True
 
 
 async def user_of(
@@ -119,6 +139,9 @@ class WidgetQueryMiddleware(BaseMiddleware):
         qid = q.get("id")
         if not isinstance(qid, str) or not qid:
             return None
+        if origin is not None and origin[2].startswith(TAP) and not origin[2][2:].isdigit():
+            await self._tap(bot, q, qid, origin, data)  # `k:<число>` — листание старой «Недели»
+            return None
         route = live.ROUTES.get(origin[2].split(":", 1)[0]) if origin else None
         if origin is not None and route is not None:
             await self._route(bot, q, qid, origin, route)
@@ -129,6 +152,34 @@ class WidgetQueryMiddleware(BaseMiddleware):
             return None
         await self._today(bot, q, qid, parsed)
         return None
+
+    async def _tap(
+        self, bot: Bot, q: dict[str, Any], qid: str, origin: tuple[int, int, str],
+        data: dict[str, Any],
+    ) -> None:
+        """Кнопка из виджета → тот же CallbackQuery через диспетчер (как finance_bot): внешние и
+        внутренние middleware проходят заново — своя сессия БД, свой человек, пуш «Сегодня».
+        Сообщение — этот виджет. Обработчик промолчал — ответ пустой: виджет не ждёт 15 с."""
+        uid, mid, code = origin[0], origin[1], origin[2][len(TAP):]
+        dispatcher = data.get("dispatcher")
+        if dispatcher is None or not code:
+            await live.reply(bot, qid, {"err": "bad"})
+            return
+        message = Message(
+            message_id=mid, date=datetime.now(UTC), chat=Chat(id=uid, type="private"), widget={},
+        ).as_(bot)
+        tap = _Tap(
+            id=qid, from_user=TgUser.model_validate(q["from"]), chat_instance="", data=code,
+            message=message,
+        ).as_(bot)
+        try:
+            await dispatcher.feed_update(bot, Update(update_id=0, callback_query=tap))
+        except Exception:  # noqa: BLE001 — кнопка не должна ронять поллинг
+            logger.exception("widget: кнопка %r не выполнена", code[:64])
+            await tap.answer("Не вышло — попробуй ещё раз.")
+        finally:
+            await tap.answer()
+            _ANSWERED.discard(qid)
 
     async def _user(self, users: UserRepo, q: dict[str, Any], uid: int) -> User:
         frm = q["from"]

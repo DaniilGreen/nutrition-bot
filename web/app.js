@@ -846,7 +846,15 @@
     if (window.confirm(text)) then();
   }
 
-  function show(html) { root.classList.remove('working'); root.innerHTML = html; markStale(); }
+  function show(html) {
+    /* D-84: вход на экран — после скелета `loading()`; правка (`busy()`) скелета не ставит,
+       и появление не проигрывается заново. */
+    var entering = !!root.querySelector('.skel');
+    root.classList.remove('working');
+    root.classList.toggle('in', entering);
+    root.innerHTML = html; markStale();
+    if (entering) setTimeout(function () { root.classList.remove('in'); }, 1200);
+  }
 
   /* MA-INV-74: сохранённый, ещё не подтверждённый сервером день приглушён и не
      нажимается — кроме поля ввода: записать можно сразу, ввод не ждёт сети. */

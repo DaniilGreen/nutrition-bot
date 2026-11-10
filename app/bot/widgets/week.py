@@ -22,7 +22,7 @@ from app.bot.widgets.transport import SendWidget
 
 logger = logging.getLogger(__name__)
 MAX_WEEKS = 52
-_NAV = re.compile(r"k:([0-9]{1,2})")
+_NAV = re.compile(r"[nk]:([0-9]{1,2})")  # `k:` — старые сообщения до D-82
 
 
 async def data_for(ctx: DayContext, assistant: Assistant, user: User, scans: object | None,
@@ -81,4 +81,5 @@ async def on_week(uid: int, mid: int, data: str, user: User, assistant: Assistan
     return live.Outcome(json.loads(text) if text else {"err": "empty"})
 
 
-live.ROUTES["k"] = on_week
+live.ROUTES["n"] = on_week
+live.ROUTES["k"] = on_week  # только `k:<число>`: прочее `k:` — кнопка (D-82, middlewares)

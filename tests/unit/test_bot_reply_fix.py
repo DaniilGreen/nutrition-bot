@@ -659,3 +659,24 @@ async def test_аппке_fix_item_отдаёт_остаток_сегодня():
     w.nlu.queue = [_eat(_food("булгур"))]
     logged = await w.assistant.fix_item(w.user, a.id, a.items[0].id, "это был булгур")
     assert logged is not None and logged.remaining.consumed.kcal == 300  # сегодняшний омлет
+
+
+async def test_ответ_на_карточку_виджет_без_кнопок():
+    """D-82: под карточкой-виджетом кнопок больше нет — запись ответа берётся из её
+    `widget.chat_data["m"]`; данные не карточки (нет `i`) или мусор — не карточка."""
+    import json
+
+    w = await _world()
+    a = await w.meals.add(_meal(w.user.id, _BUCK, ago=30))
+    await w.meals.add(_meal(w.user.id, _OMELET))  # свежее — правиться не должно
+    w.nlu.queue = [_eat(_food("булгур"))]
+    msg = _reply("это был булгур", None)
+    msg.reply_to_message.__pydantic_extra__ = {
+        "widget": {"html": "<b>x</b>", "chat_data": json.dumps({"v": 1, "m": a.id, "i": []})}}
+    assert handlers._replied_meal(msg) == a.id
+    await _say(w, msg, AsyncMock())
+    assert _items(a) == [("булгур", 150)]
+    for junk in ({"v": 1, "m": a.id}, {"v": 1, "m": True, "i": []}, "не json"):
+        msg.reply_to_message.__pydantic_extra__ = {"widget": {"chat_data": junk if isinstance(
+            junk, str) else json.dumps(junk)}}
+        assert handlers._replied_meal(msg) is None

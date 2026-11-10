@@ -1,6 +1,6 @@
 <style>
 :root{color-scheme:light dark;--t:light-dark(#0e1013,#fff);--m:light-dark(#4e5560,#a7abb2);--b1:light-dark(#f7f9fc,#22262c);--b2:light-dark(#e2e8f0,#131518);--cd:light-dark(rgba(255,255,255,.72),rgba(255,255,255,.055));--tr:light-dark(#d3dae3,#32363d);--br:light-dark(#5f6b7b,#7c8899);--pr:light-dark(#0b7d91,#3ac8e0);--fa:light-dark(#b25500,#ff9f45);--ca:light-dark(#6650d6,#9a87f4);--wa:light-dark(#835600,#ffd426);--dg:light-dark(#c4281c,#ff453a);--ok:light-dark(#1d7a3a,#34c759);--ac:light-dark(#2d6a93,#5e9ac1);--at:light-dark(#fff,#0e1013)}
-body{margin:0;padding:12px 14px max(26px,env(safe-area-inset-bottom));font:15px/1.3 "Segoe UI",system-ui,sans-serif;overflow-wrap:anywhere;color:var(--t);background:linear-gradient(165deg,var(--b1),var(--b2));font-variant-numeric:tabular-nums}
+body{margin:0;padding:12px 14px max(26px,env(safe-area-inset-bottom));font:15px/1.3 "Segoe UI",system-ui,sans-serif;overflow-wrap:anywhere;color:var(--t);background:{{sheen}}linear-gradient(165deg,var(--b1),var(--b2));font-variant-numeric:tabular-nums}
 .r{display:flex;align-items:center;gap:6px}.sp{flex:1}.m{color:var(--m);font-size:13px}header{flex-wrap:wrap;margin-bottom:8px}header b{font-size:20px}
 .p{font-size:12px;padding:3px 8px;border-radius:99px;background:var(--cd);font-weight:600;white-space:nowrap}
 .c{background:var(--cd);border-radius:18px;padding:10px 12px;margin-bottom:8px}
@@ -17,8 +17,7 @@ button[disabled]{background:var(--tr);color:var(--m)}.dn{color:var(--ok);font-we
 <div class=c id=nt></div>
 <div class=c id=cl></div>
 <script>
-let A1=1;const TW=window.TelegramWidget;try{TW.setResizeAnchor('bottom')}catch(e){}const NU=v=>'<span class=cu data-n='+v+'>'+v+'</span>',AN=()=>{const v=!TW||TW.isActive!==!1;document.body.className=A1&&v?'an':'';if(A1&&v){A1=0;try{requestAnimationFrame(t0=>{const e=document.querySelectorAll('.cu'),f=t=>{const k=Math.min(1,(t-t0)/900);e.forEach(x=>x.textContent=Math.round(x.dataset.n*(1-(1-k)**3)));k<1&&requestAnimationFrame(f)};f(t0)})}catch(e){}}};try{TW.onEvent('activated',()=>{A1&&(window.RD||draw)()})}catch(e){}
-const W=TW,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
+{{boot}}const W=TW,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
 T=s=>(s+'').replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';'),K=()=>Math.random().toString(36).slice(2,8).padEnd(6,'0'),
 bar=(v,g,c)=>'<div class=tk><i style="width:'+(g>0?Math.max(0,Math.min(100,v/g*100)):0)+'%;background:var('+c+')"></i></div>',
 M={TIMEOUT:'Бот не ответил — попробуй ещё раз.',RATE_LIMITED:'Слишком часто — секунду.'};

@@ -423,6 +423,19 @@ def meal_widget_keyboard(
     return open_in_app("day", InlineKeyboardMarkup(inline_keyboard=rows))
 
 
+_LEAD = re.compile(r"^[^\w«(]+")
+
+
+def widget_buttons(markup: InlineKeyboardMarkup | None) -> list[list[str]]:
+    """Callback-кнопки клавиатуры — в данные виджета (D-82): [[текст без эмодзи, callback_data]].
+    Виджет рисует их у себя и жмёт через `k:<callback_data>` — работают те же обработчики. Кнопки
+    web_app/url (аппка) так не умеют — они остаются под сообщением."""
+    if markup is None:
+        return []
+    return [[_LEAD.sub("", b.text).strip(), b.callback_data]
+            for row in markup.inline_keyboard for b in row if b.callback_data]
+
+
 def weighable(meal: Meal) -> list[MealItem]:
     """Позиции, вес которых можно поправить (FR-43): сохранённые и с граммами. Стейтед без веса
     масштабировать не от чего — `adjust_item` его и не возьмёт."""

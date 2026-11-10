@@ -1,6 +1,6 @@
 <style>
 :root{color-scheme:light dark;--t:light-dark(#0e1013,#fff);--m:light-dark(#4e5560,#a7abb2);--b1:light-dark(#f7f9fc,#22262c);--b2:light-dark(#e2e8f0,#131518);--cd:light-dark(rgba(255,255,255,.72),rgba(255,255,255,.055));--tr:light-dark(#d3dae3,#32363d);--pr:light-dark(#0b7d91,#3ac8e0);--fa:light-dark(#b25500,#ff9f45);--ca:light-dark(#6650d6,#9a87f4);--wa:light-dark(#835600,#ffd426);--dg:light-dark(#c4281c,#ff453a);--ok:light-dark(#1d7a3a,#34c759);--ac:light-dark(#2d6a93,#5e9ac1);--at:light-dark(#fff,#0e1013);--nu:light-dark(#aab4c0,#4a5059)}
-body{margin:0;padding:12px 14px max(26px,env(safe-area-inset-bottom));font:15px/1.3 "Segoe UI",system-ui,sans-serif;color:var(--t);background:linear-gradient(165deg,var(--b1),var(--b2));font-variant-numeric:tabular-nums}
+body{margin:0;padding:12px 14px max(26px,env(safe-area-inset-bottom));font:15px/1.3 "Segoe UI",system-ui,sans-serif;color:var(--t);background:{{sheen}}linear-gradient(165deg,var(--b1),var(--b2));font-variant-numeric:tabular-nums}
 .r{display:flex;align-items:center;gap:6px}.sp{flex:1}.m{color:var(--m);font-size:13px}header{flex-wrap:wrap;margin-bottom:6px}header b{font-size:20px}
 #h{font-size:clamp(22px,8.5vw,32px);font-weight:700;letter-spacing:-.5px;line-height:1.1}
 .c{background:var(--cd);border-radius:18px;padding:10px 12px;margin-top:10px}
@@ -20,8 +20,7 @@ footer{font-size:13px;color:var(--m);margin-top:10px}
 <div class=c><div class=m id=al></div><div class=ft id=ft></div></div>
 <footer id=tl></footer>
 <script>
-let A1=1;const TW=window.TelegramWidget;try{TW.setResizeAnchor('bottom')}catch(e){}const NU=v=>'<span class=cu data-n='+v+'>'+v+'</span>',AN=()=>{const v=!TW||TW.isActive!==!1;document.body.className=A1&&v?'an':'';if(A1&&v){A1=0;try{requestAnimationFrame(t0=>{const e=document.querySelectorAll('.cu'),f=t=>{const k=Math.min(1,(t-t0)/900);e.forEach(x=>x.textContent=Math.round(x.dataset.n*(1-(1-k)**3)));k<1&&requestAnimationFrame(f)};f(t0)})}catch(e){}}};try{TW.onEvent('activated',()=>{A1&&(window.RD||draw)()})}catch(e){}
-const W=TW,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
+{{boot}}const W=TW,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
 T=s=>(s+'').replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';'),N=n=>(n+'').replace(/\B(?=(\d{3})+(?!\d))/g,'\u202f'),
 CL=['--nu','--ok','--wa','--dg'],WD=['не записан','в цели','меньше половины цели','перебор'];
 let D=null,M=0,S=-1;
@@ -35,6 +34,6 @@ if(S<0){S=D.c.findIndex(x=>x[7]);if(S<0)S=6}$('al').textContent=D.al;
 const a=D.a,g=D.g,f=(l,c,v,gg)=>'<div>'+(c?'<i class=d style="background:var('+c+')"></i>':'')+l+'<b>'+N(v)+'</b><s>из '+N(gg)+'</s></div>';
 $('ft').innerHTML=f('Ккал','',a[0],g[0])+f('Белок','--pr',a[1],g[1])+f('Жир','--fa',a[2],g[2])+f('Углев.','--ca',a[3],g[3]);$('tl').textContent=D.tl;chart()}
 function hp(){try{W.HapticFeedback.selectionChanged()}catch(e){}}
-let B=0,WH=0;document.addEventListener('click',e=>{const t=e.target.closest('[data-t]'),r=e.target.closest('[data-i]'),nv=e.target.closest('[data-w]');if(nv&&D&&!B){const n=(D.wa||0)+ +nv.dataset.w;if(n<0||n>52||!W||!W.request)return;B=1;nv.classList.add('bz');const de=document.documentElement;WH=Math.max(WH,de.offsetHeight);de.style.minHeight=WH+'px';try{W.request('k:'+n).then(a=>{B=0;nv.classList.remove('bz');const r=J(a&&a.result);if(r&&r.v){S=-1;draw(r)}else $('tl').textContent=r&&r.err=='empty'?'За ту неделю записей нет.':'Не вышло — попробуй ещё раз.'},()=>{B=0;nv.classList.remove('bz')})}catch(x){B=0}return}if(t){M=+t.dataset.t;document.querySelectorAll('[data-t]').forEach(s=>s.classList.toggle('on',s==t));chart();hp()}else if(r&&D){S=+r.dataset.i;chart();hp()}});
+let B=0,WH=0;document.addEventListener('click',e=>{const t=e.target.closest('[data-t]'),r=e.target.closest('[data-i]'),nv=e.target.closest('[data-w]');if(nv&&D&&!B){const n=(D.wa||0)+ +nv.dataset.w;if(n<0||n>52||!W||!W.request)return;B=1;nv.classList.add('bz');const de=document.documentElement;WH=Math.max(WH,de.offsetHeight);de.style.minHeight=WH+'px';try{W.request('n:'+n).then(a=>{B=0;nv.classList.remove('bz');const r=J(a&&a.result);if(r&&r.v){S=-1;draw(r)}else $('tl').textContent=r&&r.err=='empty'?'За ту неделю записей нет.':'Не вышло — попробуй ещё раз.'},()=>{B=0;nv.classList.remove('bz')})}catch(x){B=0}return}if(t){M=+t.dataset.t;document.querySelectorAll('[data-t]').forEach(s=>s.classList.toggle('on',s==t));chart();hp()}else if(r&&D){S=+r.dataset.i;chart();hp()}});
 if(W){W.onEvent('chatDataChanged',draw);draw();try{W.ready&&W.ready()}catch(e){}}else draw();
 </script>

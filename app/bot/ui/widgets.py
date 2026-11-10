@@ -142,7 +142,7 @@ def today_data(
     if (strip := week_strip(week, day)) is not None:
         base["w"] = strip
     if weight_kg:
-        base["pk"] = round(c.protein / weight_kg, 1)
+        base["pk"] = f"{c.protein / weight_kg:.1f}".replace(".", ",")  # готовой строкой (D-85)
     if streak is not None and streak.of > 0:
         base["s"] = streak_pill(streak)
 
@@ -245,6 +245,7 @@ MEAL_NAME_STEPS = (28, 18, 12)
 def meal_data(
     meal: Meal, left: Remaining, tz: str, *, session_kcal: float | None = None,
     undo: int = 0, deleted: bool = False, head: str | None = None, rows: bool = False,
+    kb: list[list[str]] | None = None,
 ) -> str | None:
     """`chat_data` карточки приёма (FR-49.4). None — не влезла в бюджет: вызывающий шлёт rich.
 
@@ -261,6 +262,9 @@ def meal_data(
       hd  шапка вместо «Записал» («📌 Пиши «бургер»» у набора, FR-47); нет ключа — «Записал»
       nb  (только у `merged_data`) имя набора, в который вошла запись
       l   1 — блок дня столбиком (`ui_prefs.card_macros`, D-76); нет ключа — сеткой 2×2
+      kb  кнопки карточки [[текст, callback_data]] — жмутся через `k:` (D-82)
+      xt, xs  заголовок и строка следа «удалена» / «вошло в набор» (x=1), готовые (D-85)
+    Имена — HTML-безопасными: шаблон кладёт их в innerHTML без своего экранирования (D-85).
     Граммы и ккал позиции — снапшот (INV-3); JS лишь предпросматривает пропорцию (W-INV-1)."""
     zone = ZoneInfo(tz)
     at = meal.eaten_at.astimezone(zone)
@@ -281,13 +285,19 @@ def meal_data(
         base["hd"] = head
     if rows:
         base["l"] = 1
+    if kb:
+        base["kb"] = kb
+    if deleted:
+        names = ", ".join(i.name_snapshot.strip() for i in meal.items)
+        base["xt"] = "Запись удалена"
+        base["xs"] = f"{escape(names[:120])} · {round(t.kcal)}\u00a0ккал"
     for limit in MEAL_NAME_STEPS:
         items = []
         for i in meal.items:
             name = i.name_snapshot.strip()
             name = name if len(name) <= limit else name[: limit - 1].rstrip() + "…"
             grams = round(i.grams, 1) if i.grams else 0
-            items.append([i.id, name, grams, round(i.macros.kcal), int(i.is_estimate),
+            items.append([i.id, escape(name), grams, round(i.macros.kcal), int(i.is_estimate),
                           int(i.id in can)])
         text = _dump({**base, "i": items})
         if size(text) <= LIMIT - 8:  # запас под "ok":1 в ответе на запрос
@@ -299,7 +309,8 @@ def merged_data(name: str) -> str:
     """Карточка, где нажали «📌 Приём пищи — в набор», после слияния (FR-47, FR-49.4): её записей
     больше нет — только след «вошло в набор», без позиций и действий."""
     return _dump({
-        "v": 1, "m": 0, "x": 1, "z": 0, "nb": name[:64], "hd": "📌 Набор", "i": [],
+        "v": 1, "m": 0, "x": 1, "z": 0, "hd": "Набор", "i": [],
+        "xt": f"Вошло в набор «{escape(name[:64])}»", "xs": "",
         "k": [0, 0, 0, 0], "rv": time.time_ns() // 1_000_000 % 10**10,
     })
 
@@ -523,7 +534,8 @@ def day_data(dv: Any, rem: Remaining, *, undo: int = 0) -> str:
             name = it.name_snapshot.strip()
             name = name if len(name) <= limit else name[: limit - 1].rstrip() + "…"
             k = it.macros
-            rows.append([m.id or 0, it.id or 0, hm(m.eaten_at), name, round(it.grams or 0),
+            # имя — HTML-безопасным: шаблон кладёт его в innerHTML как есть (D-85)
+            rows.append([m.id or 0, it.id or 0, hm(m.eaten_at), escape(name), round(it.grams or 0),
                          round(k.kcal), round(k.protein), round(k.fat), round(k.carb),
                          int(it.is_estimate), gi, int(len(m.items) > 1)])
         keep = rows

@@ -11,6 +11,9 @@
   --prot:#3AC8E0; --fat:#FF9F45; --carb:#9A87F4;
   --bar:#7C8899; --bar-2:#A7B2C0; --line:#A7ABB2; --data:#C3CBD5;
   --border:#6E747F; --tint:#182E3F;
+  /* D-83: зелёный отлив — свет в правом верхнем углу, как у виджетов бота (тот же --ok, 18 %:
+     тема у аппки одна, тёмная). Одна правка здесь — на всех экранах. */
+  --sheen:radial-gradient(130% 80% at 100% 0,#34C7592E,#0000 62%);
   /* Радиусы и шкала — как в макетах (§6.16). Раньше расходились: у радиусов
      на 2–4px, у шрифта на 6px в герое. Мелочь по отдельности, но вместе
      это другой ритм страницы. */
@@ -35,7 +38,7 @@ html,body{overscroll-behavior-y:contain}
    Разъезд верхней панели лечится не потолком страницы, а потолком самих
    колонок — см. `.hero` ниже. */
 body{
-  margin:0; background:var(--bg); color:var(--text);
+  margin:0; background:var(--sheen),var(--bg); color:var(--text);
   font:400 15px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif;
   -webkit-font-smoothing:antialiased;
   padding:var(--s-4) var(--s-4) calc(var(--tabbar) + var(--s-5) + env(safe-area-inset-bottom));
@@ -176,7 +179,15 @@ nav button[aria-current="page"]{color:var(--accent)}
 #screen.stale>:not(#composer){opacity:.5;pointer-events:none;transition:opacity .12s}
 /* Свежий так и не пришёл: цифры подписаны временем, на которое они верны. */
 .stale-mark{font-size:var(--f-caption-s);color:var(--alert);margin-bottom:var(--s-2)}
-@media (prefers-reduced-motion:reduce){.skel{animation:none}.track>i{transition:none}}
+/* D-84: появление — только при входе на экран (скелет → данные), правка его не повторяет:
+   карточки поднимаются, полосы и столбики растут. Итог в разметке, анимация дорисовывает. */
+#screen.in .card{animation:in-rise .45s cubic-bezier(.2,.8,.2,1) both}
+#screen.in .card:nth-child(2){animation-delay:.05s}#screen.in .card:nth-child(n+3){animation-delay:.1s}
+#screen.in .track>i{transform-origin:0 50%;animation:in-gx .9s .15s cubic-bezier(.2,.8,.2,1) both}
+#screen.in .card svg rect{transform-box:fill-box;transform-origin:50% 100%;animation:in-gy .8s .1s cubic-bezier(.2,.8,.2,1) both}
+@keyframes in-rise{from{opacity:0;transform:translateY(8px)}}
+@keyframes in-gx{from{transform:scaleX(0)}}@keyframes in-gy{from{transform:scaleY(0)}}
+@media (prefers-reduced-motion:reduce){.skel{animation:none}.track>i{transition:none}#screen.in *{animation:none!important}}
 
 /* ── поле ввода: посередине экрана, между панелью и лентой (§6.3) ────── */
 .composer{display:flex;align-items:center;gap:var(--s-2);background:var(--surface-2);

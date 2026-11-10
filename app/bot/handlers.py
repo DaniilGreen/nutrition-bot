@@ -9,6 +9,7 @@ UX: постоянное reply-меню, командное меню, «печа
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import math
 import re
@@ -2956,11 +2957,25 @@ _AMOUNT_RE = re.compile(r"\d|\b(?:г|гр|грамм\w*|кг|мл|л|шт)\b", r
 
 
 def _replied_meal(message: Message) -> int | None:
-    """Id приёма карточки, на которую ответили: из callback_data её кнопок (D-MA-26). Хранить
-    message_id → meal_id не нужно — связь уже лежит в самом сообщении и переживает рестарт.
-    Чей приём — сверяет `get_meal` по пользователю, чужой id в кнопке ничего не даёт."""
+    """Id приёма карточки, на которую ответили: из callback_data её кнопок (D-MA-26), а у
+    карточки-виджета без кнопок (D-82) — из её данных: Telegram отдаёт `widget.chat_data` в самом
+    сообщении, там `m` — id записи. Хранить message_id → meal_id не нужно — связь лежит в
+    сообщении и переживает рестарт. Чей приём — сверяет `get_meal` по пользователю, чужой id
+    ничего не даёт."""
     reply = message.reply_to_message
-    return card_meal_id(reply.reply_markup) if reply is not None else None
+    if reply is None:
+        return None
+    if (found := card_meal_id(reply.reply_markup)) is not None:
+        return found
+    widget = (reply.model_extra or {}).get("widget")
+    try:
+        data = json.loads(widget["chat_data"]) if isinstance(widget, dict) else None
+    except (TypeError, ValueError, KeyError):
+        return None
+    if not isinstance(data, dict) or data.get("v") != 1 or "i" not in data:
+        return None  # не карточка приёма: у «Сегодня», «Истории» и прочих `m` нет
+    m = data.get("m")
+    return m if isinstance(m, int) and not isinstance(m, bool) and m > 0 else None
 
 
 def _fix_trace(r: MealCorrected, *, tail: bool = True) -> str:

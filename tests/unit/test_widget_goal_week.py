@@ -80,8 +80,9 @@ async def test_листание_недель(world, fake_container) -> None:  # 
     assert r["wa"] == 1 and len(r["c"]) == 7 and r["t"] == screens._span(w.start, w.end)
     assert [c[2] for c in r["c"]] == [1900 + i * 10 for i in range(7)]
     assert (await wweek.on_week(5, 7, "k:0", u, assistant)).reply.get("wa") in (0, None)
+    assert (await wweek.on_week(5, 7, "n:1", u, assistant)).reply == r  # D-82: листание — `n:`
     assert (await wweek.on_week(5, 7, "k:6", u, assistant)).reply == {"err": "empty"}
     for bad in ("k:53", "k:x", "k:-1"):
         assert (await wweek.on_week(5, 7, bad, u, assistant)).reply == {"err": "bad"}
     html = template("week")
-    assert "W.request('k:'+n)" in html and "d.wa" not in html and "D.wa" in html
+    assert "W.request('n:'+n)" in html and "d.wa" not in html and "D.wa" in html

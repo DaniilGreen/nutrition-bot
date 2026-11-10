@@ -133,7 +133,8 @@ async def test_показ_виджет_или_текст(monkeypatch: pytest.Mon
 
 
 async def test_кнопка_расхода_под_весом() -> None:
-    """Вход в FR-50 — кнопка под виджетом «⚖️ Вес»; её колбэк ловит `on_burn`."""
+    """Вход в FR-50 — кнопка В САМОМ виджете «⚖️ Вес» (`k:burn`, D-82): под сообщением только
+    аппка; виджет принимает запросы; колбэк тот же — его ловит `on_burn`."""
     from datetime import timedelta
 
     from app.bot.widgets import live
@@ -142,5 +143,7 @@ async def test_кнопка_расхода_под_весом() -> None:
     bot = _Bot()
     assert await live.show_weight(bot, 1, [(t0 + timedelta(days=i), 86 - i / 10) for i in range(5)],  # type: ignore[arg-type]
                                   "UTC", "cut")
-    kb = bot.calls[0].reply_markup
-    assert burn.CALLBACK in [b.callback_data for r in kb.inline_keyboard for b in r]
+    sent = bot.calls[0]
+    kb = sent.reply_markup
+    assert sent.allow_queries and f"data-k={burn.CALLBACK}" in sent.html
+    assert kb is None or not any(b.callback_data for r in kb.inline_keyboard for b in r)

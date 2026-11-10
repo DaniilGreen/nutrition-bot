@@ -122,9 +122,14 @@ async def test_показ_и_фолбэк(world) -> None:  # noqa: ANN001
     sent = bot.calls[0]
     assert isinstance(sent, SendWidget) and sent.html == template("meal") and sent.allow_queries
     assert sent.caption is None  # AC-290, D-75: только сам виджет
-    kb = [b.callback_data for r in sent.reply_markup.inline_keyboard for b in r]
+    # D-82: кнопки — в данных виджета (`k:`), под сообщением только аппка
+    under = sent.reply_markup
+    assert under is None or not any(b.callback_data for r in under.inline_keyboard for b in r)
+    kb = [code for _, code in json.loads(sent.chat_data)["kb"]]
     assert f"meal_repeat:{meal.id}" in kb and f"dish_save:{meal.id}" in kb
     assert not any(c and c.startswith(("meal_undo", "item_del", "iw:")) for c in kb)
+    texts = [t for t, _ in json.loads(sent.chat_data)["kb"]]
+    assert all(t and t[0].isalpha() for t in texts)  # без эмодзи
     assert not await wmeal.show(Bot(fail=True), 5, u, assistant, MealLogged(meal, left))  # type: ignore[arg-type]
 
 
@@ -181,8 +186,9 @@ async def test_отменить_всё_вернуть_и_правка_между
 
 
 async def test_после_правки_сообщение_поправлено(world) -> None:  # noqa: ANN001
-    """FR-49.4: после ответа — данные и кнопки самого сообщения (открытая позже карточка
-    показывает правду); после удаления под ним только аппка."""
+    """FR-49.4, D-82: после ответа — данные самого сообщения (открытая позже карточка показывает
+    правду); клавиатуру под ним правка не трогает — иначе вернула бы кнопки под виджет. После
+    удаления кнопок нет и в самих данных."""
     assistant, u, meal = await world()
     out = await wmeal.on_meal(5, 77, f"m:a:{meal.id}:{meal.items[0].id}:180:z1z1", u, assistant)  # type: ignore[arg-type]
     assert out.after is not None
@@ -191,12 +197,12 @@ async def test_после_правки_сообщение_поправлено(w
     edit = bot.calls[0]
     assert isinstance(edit, EditMessageWidgetData) and edit.message_id == 77
     assert json.loads(edit.chat_data)["i"][0][2] == 180
-    assert bot.marks[0]["message_id"] == 77
+    assert not bot.marks
     out = await wmeal.on_meal(5, 77, f"m:u:{meal.id}:z2z2", u, assistant)  # type: ignore[arg-type]
     bot = Bot()
     await out.after(bot)  # type: ignore[arg-type]
-    kb = bot.marks[0]["reply_markup"]
-    assert kb is None or not any(b.callback_data for r in kb.inline_keyboard for b in r)
+    gone = json.loads(bot.calls[0].chat_data)
+    assert not bot.marks and "kb" not in gone and gone["xt"] == "Запись удалена"
 
 
 async def test_карточка_записи_виджет_или_rich(monkeypatch: pytest.MonkeyPatch) -> None:

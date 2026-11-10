@@ -637,7 +637,7 @@ async def test_приём_пищи_в_набор_под_виджетом(monkeyp
     calls = [c.args[0] for c in msg.bot.await_args_list]
     [old] = [c for c in calls if isinstance(c, EditMessageWidgetData)]
     d = json.loads(old.chat_data)
-    assert old.message_id == 5 and d["nb"] == "бургер" and d["x"] == 1 and d["z"] == 0
+    assert old.message_id == 5 and d["xt"] == "Вошло в набор «бургер»" and d["x"] == 1 and d["z"] == 0
     [new] = [c for c in calls if isinstance(c, SendWidget)]
     assert new.caption is None and json.loads(new.chat_data)["hd"] == "📌 Пиши «бургер»"  # D-75
     assert "Набор сохранён" not in new.chat_data
