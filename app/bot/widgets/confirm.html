@@ -1,6 +1,6 @@
 <style>
 :root{color-scheme:light dark;--t:light-dark(#0e1013,#fff);--m:light-dark(#4e5560,#a7abb2);--b1:light-dark(#f7f9fc,#22262c);--b2:light-dark(#e2e8f0,#131518);--cd:light-dark(#ffffffb8,#ffffff0e);--tr:light-dark(#d3dae3,#32363d);--ac:light-dark(#2d6a93,#5e9ac1);--at:light-dark(#fff,#0e1013);--wa:light-dark(#835600,#ffd426);--al:light-dark(#9c4a2f,#e0a58f);--ok:light-dark(#1d7a3a,#34c759)}
-body{margin:0;padding:12px 14px max(12px,env(safe-area-inset-bottom));font:15px/1.3 system-ui,sans-serif;overflow-wrap:anywhere;color:var(--t);background:linear-gradient(165deg,var(--b1),var(--b2));font-variant-numeric:tabular-nums}
+body{margin:0;padding:12px 14px max(26px,env(safe-area-inset-bottom));font:15px/1.3 system-ui,sans-serif;overflow-wrap:anywhere;color:var(--t);background:linear-gradient(165deg,var(--b1),var(--b2));font-variant-numeric:tabular-nums}
 .m{color:var(--m);font-size:13px}header b{font-size:20px}header{margin-bottom:8px}
 .c{background:var(--cd);border-radius:18px;padding:4px 12px;margin-bottom:8px}
 .it{padding:8px 0;border-top:1px solid var(--tr)}.it:first-child{border:0}.it.nd{box-shadow:inset 3px 0 0 var(--wa);padding-left:8px}
@@ -30,7 +30,7 @@ let t=0,p=0,miss=[];
 $('bd').innerHTML='<div class=c>'+d.i.map((x,i)=>{const k=kc(x,i),s=x[5];if(k==null)miss.push(i);else{t+=k;p+=pr(x,i)}
 return'<div class="it'+(ND&&k==null?' nd':'')+'" data-i='+i+' style="animation-delay:'+i*50+'ms"><div class=hd><span>'+T(x[0])+(x[4]?' <s>≈</s>':'')+'</span><b>'+(k==null?'—':k)+'</b></div><div class=ch>'+
 (s?s.map((g,j)=>'<button class="sz'+(G[i]==g?' on':'')+'" data-g='+g+'>'+'SML'[j]+(nw?'·'+g:' · '+g+' г')+'</button>').join(''):'')+
-(x[6]==0&&G[i]?'<span class=st><button data-s=-1>−</button><b>'+G[i]+' г</b><button data-s=1>+</button></span>':x[6]==1?'<span class=m>'+G[i]+' г · вес из названия</span>':x[6]==2?'<span class=m>свои цифры</span>':'')+'</div></div>'}).join('')+'</div>'+
+(x[6]==0?'<span class=st'+(G[i]?'':' style="visibility:hidden"')+'><button data-s=-1>−</button><b>'+G[i]+' г</b><button data-s=1>+</button></span>':x[6]==1?'<span class=m>'+G[i]+' г · вес из названия</span>':x[6]==2?'<span class=m>свои цифры</span>':'')+'</div></div>'}).join('')+'</div>'+
 '<div class=tt><span class=m>Итого ≈</span><b>'+(f?NU(R(t)):R(t))+'</b><span class=m>ккал · Б '+R(p)+(miss.length?' · без размера: '+miss.length:'')+'</span></div>';
 $('ac').innerHTML='<button class=go data-q=w>✅ Записать</button><button class=no data-q=x'+(nw?' style="flex:0 0 44px" aria-label=Отмена>✖️':'>✖️ Отмена')+'</button>';
 if(miss.length&&ND)$('ts').textContent=M.need}

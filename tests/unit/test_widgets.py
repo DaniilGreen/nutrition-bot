@@ -122,8 +122,9 @@ def test_данные_обычного_дня() -> None:
     assert d["es"] == 38  # 420 из 1120 — оценкой
     assert d["h"] == [[5, 420, 1], [9, 700, 1]]
     assert d["nk"] == 990  # «сейчас» кривой — число Python (`DayPace.today_kcal`), W-INV-1
-    assert d["it"][0] == [9, "05", "Курица", 700, 0]  # свежие первыми
-    assert d["it"][1] == [5, "12", "Овсянка", 420, 1]
+    # свежие первыми; граммы и Б/Ж/У записи — Python (W-INV-1), под строкой «100 г · Б35 Ж23 У88»
+    assert d["it"][0] == [9, "05", "Курица", 700, 0, 100, 35, 23, 88]
+    assert d["it"][1] == [5, "12", "Овсянка", 420, 1, 100, 21, 14, 52]
     assert d["s"] == [3, 0, 3, 3] and d["pk"] == round(d["e"][1] / 91.5, 1)
 
 
@@ -1213,3 +1214,19 @@ def test_сегодня_одинаковый_ответ_не_перерисов�
     """Тяга `t:` приходит через долю секунды после показа: тот же день не должен перерисовать
     героя и оборвать счёт (D-64)."""
     assert "sm=K==k" in template("today") and "if(sm)return;" in template("today")
+
+
+def test_сегодня_тап_по_часу_не_меняет_высоту() -> None:
+    """Тап по часу менял число строк ленты — виджет менял высоту, и лента чата прыгала. Теперь
+    списки всех часов лежат в одной ячейке сетки, виден один: высота — по самому длинному."""
+    html = template("today")
+    assert "#ls{display:grid;grid-template-columns:minmax(0,1fr)}" in html
+    assert "#ls>div{grid-area:1/1;visibility:hidden}#ls>.on{visibility:visible}" in html
+    assert "$('ls').innerHTML=hs.map(" in html
+
+
+@pytest.mark.parametrize("path", sorted(WIDGETS.glob("*.html")), ids=lambda p: p.name)
+def test_низ_под_значок_telegram(path: Path) -> None:
+    """В правом нижнем углу виджета Telegram рисует свой значок ↗ — он закрывал последнее число.
+    Нижний отступ — не меньше 26 px."""
+    assert "max(26px,env(safe-area-inset-bottom))" in path.read_text()

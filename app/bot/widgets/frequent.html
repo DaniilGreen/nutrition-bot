@@ -1,12 +1,12 @@
 <style>
 :root{color-scheme:light dark;--t:light-dark(#0e1013,#fff);--m:light-dark(#4e5560,#a7abb2);--b1:light-dark(#f7f9fc,#22262c);--b2:light-dark(#e2e8f0,#131518);--cd:light-dark(rgba(255,255,255,.72),rgba(255,255,255,.055));--tr:light-dark(#d3dae3,#32363d);--ac:light-dark(#2d6a93,#5e9ac1);--at:light-dark(#fff,#0e1013);--ok:light-dark(#1d7a3a,#34c759)}
-body{margin:0;padding:12px 14px max(12px,env(safe-area-inset-bottom));font:15px/1.3 system-ui,sans-serif;color:var(--t);background:linear-gradient(165deg,var(--b1),var(--b2));font-variant-numeric:tabular-nums}
+body{margin:0;padding:12px 14px max(26px,env(safe-area-inset-bottom));font:15px/1.3 system-ui,sans-serif;color:var(--t);background:linear-gradient(165deg,var(--b1),var(--b2));font-variant-numeric:tabular-nums}
 header{display:flex;align-items:baseline;gap:8px;margin-bottom:10px}header b{font-size:20px}.m{color:var(--m);font-size:13px}
 #g{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .tl{background:var(--cd);border-radius:16px;padding:10px 12px;min-height:58px;cursor:pointer;transition:transform .15s}
 .tl:active{transform:scale(.97)}.tl b{display:block;font-size:15px;font-weight:600;max-height:2.6em;overflow:hidden;overflow-wrap:anywhere;hyphens:auto}
 .tl span{display:block;margin-top:4px;color:var(--m);font-size:13px}.tl.bz b{color:var(--m)}.tl.ok{animation:ok 1.5s}@keyframes ok{0%,70%{box-shadow:inset 0 0 0 2px var(--ok)}}
-#ts{margin-top:10px;background:var(--cd);border-radius:16px;padding:10px 12px;display:none;align-items:center;gap:10px;font-size:14px}
+#ts{margin-top:10px;background:var(--cd);border-radius:16px;padding:10px 12px;display:flex;visibility:hidden;align-items:center;gap:10px;font-size:14px}
 #ts span{flex:1}#ts button{border:0;border-radius:12px;padding:8px 12px;background:var(--ac);color:var(--at);font:600 14px system-ui,sans-serif}
 #ts button[disabled]{background:var(--tr);color:var(--m)}
 @media (prefers-reduced-motion:reduce){.tl{transition:none}.tl.ok{animation:none;box-shadow:inset 0 0 0 2px var(--ok)}}
@@ -23,7 +23,7 @@ const K=()=>Math.random().toString(36).slice(2,8).padEnd(6,'0'),hp=t=>{try{W.Hap
 L=l=>l<0?'перебор '+-l:'осталось '+l,
 ERR={BUSY:'Ещё пишу предыдущее…',RATE_LIMITED:'Слишком часто — секунду.',TIMEOUT:'Бот не ответил — проверь в «Сегодня».',NOT_ALLOWED:'Открой чат с ботом, чтобы записать.'};
 function draw(){AN();D=J(W&&W.chatData);const t=D&&D.t||[];$('g').innerHTML=t.length?t.map((x,i)=>'<div class=tl data-i='+i+' style="animation-delay:'+i*40+'ms"><b>'+(x[2][0]=='s'?'📌 ':'')+T(x[0])+'</b><span>'+(x[2][0]=='s'?'':T(x[1]).replace(' ','\u00a0')+' · ')+(x[4]?'≈':'')+x[3]+'\u00a0ккал</span></div>').join(''):'<p class=m>Пока нечего показать — запиши пару раз одно и то же.</p>'}
-function toast(s,u){$('ts').style.display='flex';$('tx').innerHTML=s;$('ub').style.display=u?'':'none';$('ub').disabled=false}
+function toast(s,u){$('ts').style.visibility='visible';$('tx').innerHTML=s;$('ub').style.display=u?'':'none';$('ub').disabled=false}
 function idle(el){B=0;el.classList.remove('bz');const b=el.querySelector('b');b.innerHTML=b.dataset.n}
 document.addEventListener('click',ev=>{document.body.classList.remove('an');const el=ev.target.closest('.tl');
 if(el&&W&&!B){const x=D.t[+el.dataset.i],b=el.querySelector('b');B=1;document.querySelectorAll('.ok').forEach(t=>t.classList.remove('ok'));el.classList.add('bz');b.dataset.n=b.innerHTML;b.textContent='Пишу…';

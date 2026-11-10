@@ -14,7 +14,8 @@ rich-экранов (MA-INV-1). Полный `gather()` виджету не ну
   s   серия [дней, заморозка недели 0/1, покрыто дней, из скольких] (D-44, D-57) — «N из 30»
   n   норма по часам от `sh` (нет — MA-INV-37)    nk  «сейчас» кривой — `DayPace.today_kcal`
   h   [[индекс часа, ккал, записей]] — все часы с записями (никогда не режутся)
-  it  [[индекс часа, «мм», имя, ккал, ≈ 0/1]] — записи, свежие первыми (режутся с хвоста);
+  it  [[индекс часа, «мм», имя, ккал, ≈ 0/1, граммы (0 — без веса), Б, Ж, У]] — записи, свежие
+      первыми (режутся с хвоста);
       записей часа в `h` больше, чем в `it`, — виджет пишет «ещё N — в приложении»
 """
 from __future__ import annotations
@@ -108,7 +109,9 @@ def today_data(
     for limit in NAME_STEPS:
         rows = [
             [idx(m.eaten_at), m.eaten_at.astimezone(tz).strftime("%M"), _name(m, limit),
-             round(m.totals.kcal), int(any(i.is_estimate for i in m.items))]
+             round(m.totals.kcal), int(any(i.is_estimate for i in m.items)),
+             round(sum(i.grams or 0 for i in m.items)), round(m.totals.protein),
+             round(m.totals.fat), round(m.totals.carb)]
             for m in meals
         ]
         while True:
@@ -434,3 +437,58 @@ def confirm_data(items: list[Any]) -> str | None:
                      int(p.estimate), sizes, mode])
     text = _dump({"v": 1, "i": rows})
     return text if size(text) <= LIMIT else None
+
+
+DAY_NAME_STEPS = (26, 18, 12)
+
+
+def day_data(dv: Any, rem: Remaining, *, undo: int = 0) -> str:
+    """`chat_data` «🗒 Истории» (FR-49.8): тот же `day_card`, что у rich-экрана дня (MA-INV-1),
+    приёмы пищи — группами `MealSession` (FR-47). Всегда ≤ LIMIT: имена режутся, хвост дня
+    уходит в «ещё N — в приложении».
+
+    Формат v1:
+      da  дней назад (0 — сегодня)     t  «Сегодня, 10 ноя»     z  1 — есть что «⏪ Вернуть»
+      dy  день [[съедено, цель, %] × Ккал, Б, Ж, У] (`macros_rows`/`pct`, как карточка приёма)
+      g   приёмы пищи из нескольких записей: [[«18:48–18:56», ккал, ≈ 0/1]]
+      e   позиции: [[id записи, id позиции, «чч:мм», имя, граммы, ккал, Б, Ж, У, ≈ 0/1,
+           индекс в g или −1, у записи больше одной позиции 0/1]]
+      mo  позиций не влезло"""
+    from app.application.results import MealSession
+    from app.bot.ui.screens import _day_title
+
+    zone = ZoneInfo(dv.timezone)
+    hm = lambda t: t.astimezone(zone).strftime("%H:%M")  # noqa: E731
+    groups: list[list[Any]] = []
+    raw: list[tuple[Any, Any, int]] = []
+    for s in dv.sessions or MealSession.group(dv.meals):
+        gi = -1
+        if len(s.meals) > 1:
+            gi = len(groups)
+            groups.append([f"{hm(s.start)}–{hm(s.end)}",
+                           round(sum(m.totals.kcal for m in s.meals)),
+                           int(any(i.is_estimate for m in s.meals for i in m.items))])
+        raw += [(m, it, gi) for m in s.meals for it in m.items]
+    base: dict[str, Any] = {
+        "v": 1, "da": dv.days_ago, "t": _day_title(dv), "z": undo, "g": groups,
+        "dy": [[round(c), round(g), pct(c, g)] for _, c, g in macros_rows(rem.consumed, rem.goal)],
+    }
+    text = ""
+    for limit in DAY_NAME_STEPS:
+        rows = []
+        for m, it, gi in raw:
+            name = it.name_snapshot.strip()
+            name = name if len(name) <= limit else name[: limit - 1].rstrip() + "…"
+            k = it.macros
+            rows.append([m.id or 0, it.id or 0, hm(m.eaten_at), name, round(it.grams or 0),
+                         round(k.kcal), round(k.protein), round(k.fat), round(k.carb),
+                         int(it.is_estimate), gi, int(len(m.items) > 1)])
+        keep = rows
+        while True:
+            text = _dump({**base, "e": keep, "mo": len(rows) - len(keep)})
+            if size(text) <= LIMIT or not keep:
+                break
+            keep = keep[:-1]
+        if len(keep) == len(rows):
+            break
+    return text

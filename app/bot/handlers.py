@@ -142,6 +142,7 @@ from app.bot.ui import gather, screens
 from app.bot.ui.kit import plural
 from app.bot.widgets import burn as widgets_burn
 from app.bot.widgets import confirm as widgets_confirm
+from app.bot.widgets import day as widgets_day
 from app.bot.widgets import frequent as widgets_frequent
 from app.bot.widgets import live as widgets_live
 from app.bot.widgets import meal as widgets_meal
@@ -3567,6 +3568,12 @@ async def _show_weight(message: Message, app_user: User, assistant: Assistant) -
 
 
 async def _show_history(message: Message, app_user: User, assistant: Assistant) -> None:
+    """FR-49.8: с флагом — виджет дня с листанием и действиями; не вышло — rich-экран."""
+    if (
+        message.bot is not None and widgets_live.enabled(app_user)
+        and await widgets_day.show(message.bot, message.chat.id, app_user, assistant)
+    ):
+        return
     rem, dv = await assistant.day_card(app_user)  # день + стрелки ← →
     kb = day_nav_keyboard(dv.days_ago, dv.meals, dv.timezone, day=dv.day)
     await _day_send(lambda html: _rich(message, html, kb), dv, rem)
