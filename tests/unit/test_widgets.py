@@ -1163,6 +1163,9 @@ async def test_неделя_те_же_числа_что_экран(name: str) ->
     v = screens.week_view(ctx)
     assert not isinstance(v, str)
     assert len(d["c"]) == 7 and d["k"] == list(screens.week_hits(v))
+    # владелец 11.11: «записано N из M» в виджете лишнее (видно по столбикам) — только «в плане ✅»
+    assert "записано" in v.sub and "записано" not in d["hs"]
+    assert d["hs"] == ("в плане ✅" if v.sub.startswith("в плане") else "")
     assert [c[1] for c in d["c"]] == [{"none": 0, "ok": 1, "low": 2, "over": 3}[x] for x in v.cells]
     rows = dict(ctx.macros7)
     for c, day in zip(d["c"], v.days, strict=True):

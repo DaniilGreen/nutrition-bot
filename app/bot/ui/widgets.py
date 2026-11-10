@@ -349,7 +349,9 @@ def week_data(v: WeekView, macros: dict[date, Macros], today: date, weeks_ago: i
         ])
     a, g = v.avg, v.goal
     return _dump({
-        "v": 1, "t": v.title, "h": v.hero, "hs": v.sub, "ov": int(v.over), "c": days,
+        # под героем — только «в плане ✅»: «записано N из M» видно по столбикам (владелец 11.11)
+        "v": 1, "t": v.title, "h": v.hero, "hs": v.sub.split("записано")[0].rstrip(" ·"),
+        "ov": int(v.over), "c": days,
         "a": [round(a.kcal), round(a.protein), round(a.fat), round(a.carb)],
         "g": [round(g.daily_kcal), round(g.protein_g), round(g.fat_g), round(g.carb_g)],
         "al": v.avg_label, "k": [hit, logged], "tl": v.tail, "wa": weeks_ago,
