@@ -14,8 +14,8 @@ svg{display:block;width:100%;height:auto}.ax{display:flex;justify-content:space-
 <div class=c><svg id=sv viewBox="0 0 300 120"></svg><div class=ax><span id=a></span><span id=z></span></div><div id=tp class=m>Тап по точке — дата и вес</div></div>
 <div class=ft><div>с прошлого<b id=f1></b></div><div>за период<b id=f2></b></div><div>за 4 недели<b id=f3></b></div></div>
 <script>
-let A1=1,CU=0;try{CSS.registerProperty({name:'--n',syntax:'<integer>',inherits:!1,initialValue:'0'});CU=1}catch(e){}const NU=v=>CU?'<span class=cu style="--n:'+v+'"></span>':v,AN=()=>{document.body.className=A1?'an':'';A1=0};
-const W=window.TelegramWidget,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
+let A1=1;const TW=window.TelegramWidget;try{TW.setResizeAnchor('bottom')}catch(e){}const NU=v=>'<span class=cu data-n='+v+'>'+v+'</span>',AN=()=>{const v=!TW||TW.isActive!==!1;document.body.className=A1&&v?'an':'';if(A1&&v){A1=0;try{requestAnimationFrame(t0=>{const e=document.querySelectorAll('.cu'),f=t=>{const k=Math.min(1,(t-t0)/900);e.forEach(x=>x.textContent=Math.round(x.dataset.n*(1-(1-k)**3)));k<1&&requestAnimationFrame(f)};f(t0)})}catch(e){}}};try{TW.onEvent('activated',()=>{A1&&(window.RD||draw)()})}catch(e){}
+const W=TW,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
 K=v=>v==null?'—':(v>0?'+':'')+(v.toFixed(1)).replace('.',',').replace('-','−'),A=v=>K(v).replace('+',''),M=['янв','фев','мар','апр','мая','июн','июл','авг','сен','окт','ноя','дек'];
 let D=null;
 function dt(n){const d=new Date(D.a0+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.getUTCDate()+' '+M[d.getUTCMonth()]}

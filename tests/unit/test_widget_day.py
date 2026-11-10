@@ -95,15 +95,21 @@ async def test_вся_запись_и_последняя_позиция(world) -
     assert w["ok"] == 1 and await assistant.get_meal(u, eggs.id) is None and not w["e"]
 
 
-async def test_в_сегодня_только_с_прошлого_дня(world) -> None:  # noqa: ANN001
-    """FR-42 тем же `repeat_item`: с вчера — запись в сегодня, вчера не меняется; с сегодня —
-    отказ (задвоил бы); чужая запись — `gone`."""
+async def test_повтор_с_весом_с_любого_дня(world) -> None:  # noqa: ANN001
+    """FR-42 тем же `repeat_item` (D-68): с вчера — в сегодня с выбранным весом, снимок
+    масштабирован (INV-3), вчера не меняется; с сегодня тоже можно; граммы вне 1…2000 — отказ;
+    чужая запись — `gone`."""
     assistant, u, (cheese, _, old) = await world()
-    r = await _do(assistant, u, f"h:p:1:{old.id}:{old.items[0].id}:p1p1")
-    assert r["ok"] == 1 and r["da"] == 1 and r["tm"].startswith("🔁 Записал в сегодня: творог")
+    r = await _do(assistant, u, f"h:p:1:{old.id}:{old.items[0].id}:200:p1p1")
+    assert r["ok"] == 1 and r["da"] == 1
+    assert r["tm"].startswith("🔁 Записал в сегодня: творог 200 г")
     today = await _do(assistant, u, "h:d:0")
-    assert "творог" in [x[3] for x in today["e"]]
-    assert (await _do(assistant, u, f"h:p:0:{cheese.id}:0:p2p2"))["err"] == "bad"
+    [row] = [x for x in today["e"] if x[3] == "творог"]
+    assert row[4] == 200 and row[5] == round(218 * 200 / 180)
+    again = await _do(assistant, u, f"h:p:0:{cheese.id}:0:0:p2p2")  # вся запись, сегодня
+    assert again["ok"] == 1 and len([x for x in again["e"] if x[3] == "сыр сливочный"]) == 2
+    assert (await _do(assistant, u, f"h:p:0:{cheese.id}:{cheese.items[0].id}:2001:p3p3"))[
+        "err"] == "bad"
     stranger = User(telegram_id=6, name="y", locale="ru", timezone="UTC", id=99)
     out = await day.on_day(  # type: ignore[arg-type]
         6, 77, f"h:x:0:{cheese.id}:0:s1s1", stranger, assistant)

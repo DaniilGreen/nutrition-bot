@@ -44,6 +44,7 @@ _ADJ = re.compile(rf"m:a:{_ID}:{_ID}:([0-9]{{1,4}}):{_KEY}")
 _DEL = re.compile(rf"m:d:{_ID}:{_ID}:{_KEY}")
 _UNDO = re.compile(rf"m:u:{_ID}:{_KEY}")
 _BACK = re.compile(rf"m:r:{_ID}:{_KEY}")
+_OPEN = re.compile(rf"o:{_ID}:{_KEY}")
 
 _done: dict[tuple[int, str], tuple[float, dict[str, Any]]] = {}  # (кто, ключ) → (когда, ответ)
 
@@ -56,6 +57,8 @@ class _Undo:
 
 
 _undo: dict[tuple[int, int], _Undo] = {}
+# Карточки, открытые тапом по записи (D-69): шапка «Запись», не «Записал» (MA-INV-70).
+_opened: set[tuple[int, int]] = set()
 # (кто, сообщение) → ревизия, что уже лежит в сообщении: правка со старшей не ложится поверх.
 _rv: dict[tuple[int, int], int] = {}
 _now = time.monotonic
@@ -70,7 +73,7 @@ def _sweep(now: float) -> None:
 
 async def _card(
     assistant: Assistant, user: User, meal: Meal, *, undo: int = 0, deleted: bool = False,
-    left: Remaining | None = None, head: str | None = None,
+    left: Remaining | None = None, head: str | None = None, opened: bool = False,
 ) -> tuple[str | None, str, MealSession | None]:
     """Данные, подпись и приём пищи (FR-47, только из нескольких записей) карточки из базы;
     остаток — дня самой записи, а не сегодняшнего."""
@@ -80,8 +83,11 @@ async def _card(
         sess = None
     ss = sum(m.totals.kcal for m in sess.meals) if sess is not None else None
     data = meal_data(meal, left, user.timezone, session_kcal=ss, undo=undo, deleted=deleted,
-                     head=head)
-    return data, meal_caption(meal, deleted=deleted), sess
+                     head="Запись" if opened else head)
+    caption = meal_caption(meal, deleted=deleted)
+    if opened and not deleted:
+        caption = caption.replace("✅ Записал:", "✏️ Запись:", 1)
+    return data, caption, sess
 
 
 async def show(
@@ -204,7 +210,8 @@ async def _answer(
     meal: Meal, *, undo: int, deleted: bool = False, slot: _Undo | None = None,
     drop_slot: bool = False,
 ) -> live.Outcome:
-    data, caption, sess = await _card(assistant, user, meal, undo=undo, deleted=deleted)
+    data, caption, sess = await _card(assistant, user, meal, undo=undo, deleted=deleted,
+                                      opened=(uid, mid) in _opened)
     if data is None:
         # Карточка после правки не влезла в 1024 байта: исключение откатит сессию — правка не
         # сохранится молча за ответом «не вышло» (и «Вернуть» не потеряется).
@@ -311,4 +318,42 @@ async def _apply(
                          slot=new)
 
 
+async def on_open(
+    uid: int, mid: int, data: str, user: User, assistant: Assistant
+) -> live.Outcome:
+    """`o:<запись>:<ключ>` — тап по записи в «Сегодня» / «✏️ Править» в «Истории» (D-69): её
+    карточка приёма следом — там ±10 г, 🗑, «Отменить всё», «Вернуть». Ничего не пишет."""
+    m = _OPEN.fullmatch(data)
+    if m is None:
+        return live.Outcome({"err": "bad"})
+    now = _now()
+    _sweep(now)
+    key = (uid, m.group(2))
+    if (seen := _done.get(key)) is not None:
+        return live.Outcome(seen[1])  # двойной тап — одна карточка
+    meal = await assistant.get_meal(user, int(m.group(1)))
+    if meal is None:
+        return live.Outcome({"err": "gone"})  # чужая или уже удалённая
+    left = await assistant.day_left(user, meal.eaten_at)
+    data_, caption, sess = await _card(assistant, user, meal, left=left, opened=True)
+    if data_ is None:
+        return live.Outcome({"err": "bad"})
+    reply: dict[str, Any] = {"ok": 1}
+
+    def commit() -> None:
+        _done[key] = (now, reply)
+
+    async def send(bot: Bot) -> None:
+        msg = await bot(SendWidget(
+            chat_id=uid, html=template("meal"), chat_data=data_, caption=caption,
+            allow_queries=True, reply_markup=meal_widget_keyboard(meal, sess),
+        ))
+        if len(_opened) > 200:  # ponytail: двое людей; чистим целиком — худшее: шапка «Записал»
+            _opened.clear()
+        _opened.add((uid, msg.message_id))
+
+    return live.Outcome(reply, commit=commit, after=send)
+
+
 live.ROUTES["m"] = on_meal
+live.ROUTES["o"] = on_open

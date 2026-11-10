@@ -1,4 +1,5 @@
-"""«🗒 История» виджетом (FR-49.8, D-67): день с листанием ‹ ›, 🗑 позиции, ⏪ Вернуть, 🔁 в сегодня.
+"""«🗒 История» виджетом (FR-49.8, D-67, D-68): листание ‹ ›, 🗑 позиции, ⏪ Вернуть,
+🔁 повторить с весом.
 
 Те же use-case, что у кнопок rich-экрана дня: `remove_item` / `delete_meal`, `restore_meal` со
 сверкой отпечатка (FR-41), `repeat_item` / `repeat_meal` (FR-42). Числа — `day_card` (MA-INV-1).
@@ -25,6 +26,7 @@ from app.bot.keyboards import open_in_app
 from app.bot.ui.widgets import day_data
 from app.bot.widgets import live, template
 from app.bot.widgets.transport import EditMessageWidgetData, SendWidget
+from app.domain.plausibility import MAX_PORTION_G, MIN_PORTION_G
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +36,7 @@ _KEY = r"([0-9a-z]{4,10})"
 _READ = re.compile(r"h:d:([0-9]{1,3})")
 _DEL = re.compile(rf"h:x:([0-9]{{1,3}}):([0-9]{{1,10}}):([0-9]{{1,10}}):{_KEY}")
 _BACK = re.compile(rf"h:r:([0-9]{{1,3}}):{_KEY}")
-_REP = re.compile(rf"h:p:([0-9]{{1,3}}):([0-9]{{1,10}}):([0-9]{{1,10}}):{_KEY}")
+_REP = re.compile(rf"h:p:([0-9]{{1,3}}):([0-9]{{1,10}}):([0-9]{{1,10}}):([0-9]{{1,4}}):{_KEY}")
 CAPTION = "🗒 История"
 
 
@@ -145,16 +147,18 @@ async def _write(
     if meal is None:
         return live.Outcome({"err": "gone"})  # чужая или уже удалённая
 
-    if op == "p":  # «🔁 В сегодня» (FR-42): только с прошлого дня — сегодня повтор задвоил бы
-        if da == 0:
-            return live.Outcome({"err": "bad"})
+    if op == "p":  # «🔁 Повторить» в сегодня с выбранным весом (FR-42, D-68), с любого дня
+        grams = int(m.group(4))
         if item_id and item_id not in {i.id for i in meal.items}:
             return live.Outcome({"err": "bad"})
-        res = (await assistant.repeat_item(user, meal_id, item_id) if item_id
-               else await assistant.repeat_meal(user, meal_id))
+        if grams and not MIN_PORTION_G <= grams <= MAX_PORTION_G:
+            return live.Outcome({"err": "bad"})
+        res = (await assistant.repeat_item(user, meal_id, item_id, grams=float(grams) or None)
+               if item_id else await assistant.repeat_meal(user, meal_id))
         if res is None:
             return live.Outcome({"err": "gone"})
-        what = ", ".join(i.name_snapshot for i in res.meal.items)
+        what = ", ".join(i.name_snapshot + (f" {round(i.grams)} г" if i.grams else "")
+                         for i in res.meal.items)
         what = what if len(what) <= 40 else what[:39] + "…"
         text = await _day(assistant, user, da, slot_key in _undo)
         kcal = round(res.meal.totals.kcal)

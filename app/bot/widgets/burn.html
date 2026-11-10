@@ -7,12 +7,12 @@ body{margin:0;padding:12px 14px max(26px,env(safe-area-inset-bottom));font:15px/
 .rw{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;font-size:13px;margin:6px 0}.rw b{font-weight:600}
 .tk{grid-column:1/-1;height:8px;border-radius:4px;background:var(--tr);overflow:hidden}.tk i{display:block;height:100%}
 .pp{font-weight:600;color:var(--ok)}
-.cu{counter-reset:n var(--n)}.cu::after{content:counter(n)}.an .cu{animation:cu 1s ease-out}@keyframes cu{from{--n:0}}.an .tk i{animation:g .9s ease-out}@keyframes g{from{width:0}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
+.an .tk i{animation:g .9s ease-out}@keyframes g{from{width:0}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
 <header><b>🔥 Реальный расход</b></header>
 <div id=bd></div>
 <script>
-let A1=1,CU=0;try{CSS.registerProperty({name:'--n',syntax:'<integer>',inherits:!1,initialValue:'0'});CU=1}catch(e){}const NU=v=>CU?'<span class=cu style="--n:'+v+'"></span>':v,AN=()=>{document.body.className=A1?'an':'';A1=0};
-const W=window.TelegramWidget,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
+let A1=1;const TW=window.TelegramWidget;try{TW.setResizeAnchor('bottom')}catch(e){}const NU=v=>'<span class=cu data-n='+v+'>'+v+'</span>',AN=()=>{const v=!TW||TW.isActive!==!1;document.body.className=A1&&v?'an':'';if(A1&&v){A1=0;try{requestAnimationFrame(t0=>{const e=document.querySelectorAll('.cu'),f=t=>{const k=Math.min(1,(t-t0)/900);e.forEach(x=>x.textContent=Math.round(x.dataset.n*(1-(1-k)**3)));k<1&&requestAnimationFrame(f)};f(t0)})}catch(e){}}};try{TW.onEvent('activated',()=>{A1&&(window.RD||draw)()})}catch(e){}
+const W=TW,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
 T=s=>(s+'').replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';');
 let D=null;
 function draw(){D=J(W&&W.chatData);if(!D||D.v!=1)return;AN();const d=D,h=[];

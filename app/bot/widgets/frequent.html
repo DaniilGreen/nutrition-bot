@@ -11,19 +11,19 @@ header{display:flex;align-items:baseline;gap:8px;margin-bottom:10px}header b{fon
 #ts button[disabled]{background:var(--tr);color:var(--m)}
 @media (prefers-reduced-motion:reduce){.tl{transition:none}.tl.ok{animation:none;box-shadow:inset 0 0 0 2px var(--ok)}}
 @media (max-width:260px){#g{grid-template-columns:minmax(0,1fr);gap:6px}.tl{padding:8px 10px;min-height:0}.tl b{white-space:nowrap;text-overflow:ellipsis}header .m{display:none}}
-.an .tl{animation:fu .45s ease-out both}@keyframes fu{from{opacity:0;transform:translateY(6px)}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
+.an .tl{animation:fu .45s ease-out both}@keyframes fu{from{opacity:0;transform:translateY(6px)}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}@media (max-width:260px){#ts{display:none}}</style>
 <header><b>⚡ Частое</b><span class=m>тап — запишу сразу</span></header>
 <div id=g lang=ru></div><div id=ts><span id=tx></span><button id=ub>⏪ Вернуть</button></div>
 <script>
-let A1=1,CU=0;try{CSS.registerProperty({name:'--n',syntax:'<integer>',inherits:!1,initialValue:'0'});CU=1}catch(e){}const NU=v=>CU?'<span class=cu style="--n:'+v+'"></span>':v,AN=()=>{document.body.className=A1?'an':'';A1=0};
-const W=window.TelegramWidget,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
+let A1=1;const TW=window.TelegramWidget;try{TW.setResizeAnchor('bottom')}catch(e){}const NU=v=>'<span class=cu data-n='+v+'>'+v+'</span>',AN=()=>{const v=!TW||TW.isActive!==!1;document.body.className=A1&&v?'an':'';if(A1&&v){A1=0;try{requestAnimationFrame(t0=>{const e=document.querySelectorAll('.cu'),f=t=>{const k=Math.min(1,(t-t0)/900);e.forEach(x=>x.textContent=Math.round(x.dataset.n*(1-(1-k)**3)));k<1&&requestAnimationFrame(f)};f(t0)})}catch(e){}}};try{TW.onEvent('activated',()=>{A1&&(window.RD||draw)()})}catch(e){}
+const W=TW,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
 T=s=>(s+'').replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';');
 let D=null,B=0,U=null;
 const K=()=>Math.random().toString(36).slice(2,8).padEnd(6,'0'),hp=t=>{try{W.HapticFeedback.notificationOccurred(t)}catch(e){}},
 L=l=>l<0?'перебор '+-l:'осталось '+l,
 ERR={BUSY:'Ещё пишу предыдущее…',RATE_LIMITED:'Слишком часто — секунду.',TIMEOUT:'Бот не ответил — проверь в «Сегодня».',NOT_ALLOWED:'Открой чат с ботом, чтобы записать.'};
 function draw(){AN();D=J(W&&W.chatData);const t=D&&D.t||[];$('g').innerHTML=t.length?t.map((x,i)=>'<div class=tl data-i='+i+' style="animation-delay:'+i*40+'ms"><b>'+(x[2][0]=='s'?'📌 ':'')+T(x[0])+'</b><span>'+(x[2][0]=='s'?'':T(x[1]).replace(' ','\u00a0')+' · ')+(x[4]?'≈':'')+x[3]+'\u00a0ккал</span></div>').join(''):'<p class=m>Пока нечего показать — запиши пару раз одно и то же.</p>'}
-function toast(s,u){$('ts').style.visibility='visible';$('tx').innerHTML=s;$('ub').style.display=u?'':'none';$('ub').disabled=false}
+function toast(s,u){$('ts').style.cssText='visibility:visible;display:flex';$('tx').innerHTML=s;$('ub').style.display=u?'':'none';$('ub').disabled=false}
 function idle(el){B=0;el.classList.remove('bz');const b=el.querySelector('b');b.innerHTML=b.dataset.n}
 document.addEventListener('click',ev=>{document.body.classList.remove('an');const el=ev.target.closest('.tl');
 if(el&&W&&!B){const x=D.t[+el.dataset.i],b=el.querySelector('b');B=1;document.querySelectorAll('.ok').forEach(t=>t.classList.remove('ok'));el.classList.add('bz');b.dataset.n=b.innerHTML;b.textContent='Пишу…';

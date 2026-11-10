@@ -82,8 +82,9 @@ _OUT_OF_PROFILE = [
     r":has\(", r"clip-path", r"text-shadow", r"src=[\"']?https?:", r"@import", r"@font-face",
     r"position:\s*sticky", r"overflow:\s*(auto|scroll)", r"\bfetch\(", r"XMLHttpRequest",
     r"-webkit-line-clamp", r"<foreignObject", r"<animate",
-    # D-56: рантайм виджета не обязан их иметь — без них «Сегодня» показывал бы 0 навсегда
-    r"requestAnimationFrame", r"setTimeout", r"setInterval",
+    # профиль виджетов (core.telegram.org/bots/widgets): `@property` — вне; таймеры есть, но
+    # анимации — CSS и rAF (D-70), таймеры не нужны
+    r"@property", r"setTimeout", r"setInterval",
 ]
 
 
@@ -123,8 +124,8 @@ def test_данные_обычного_дня() -> None:
     assert d["h"] == [[5, 420, 1], [9, 700, 1]]
     assert d["nk"] == 990  # «сейчас» кривой — число Python (`DayPace.today_kcal`), W-INV-1
     # свежие первыми; граммы и Б/Ж/У записи — Python (W-INV-1), под строкой «100 г · Б35 Ж23 У88»
-    assert d["it"][0] == [9, "05", "Курица", 700, 0, 100, 35, 23, 88]
-    assert d["it"][1] == [5, "12", "Овсянка", 420, 1, 100, 21, 14, 52]
+    assert d["it"][0] == [9, "05", "Курица", 700, 0, 100, 35, 23, 88, meals[1].id]
+    assert d["it"][1] == [5, "12", "Овсянка", 420, 1, 100, 21, 14, 52, meals[0].id]
     assert d["s"] == [3, 0, 3, 3] and d["pk"] == round(d["e"][1] / 91.5, 1)
 
 
@@ -1200,12 +1201,15 @@ def test_плитка_частого_граммы_не_отрываются() ->
 
 @pytest.mark.parametrize("path", sorted(WIDGETS.glob("*.html")), ids=lambda p: p.name)
 def test_анимация_только_css_и_при_появлении(path: Path) -> None:
-    """D-64: анимация — CSS под классом `an`, который ставится только первым показом; счётчику
-    свойство регистрирует JS в `try` (нет `registerProperty` — число сразу финальное, D-56);
-    `prefers-reduced-motion` её снимает."""
+    """D-64, D-70: анимация — когда виджет на экране (`isActive`, событие `activated`): Telegram
+    создаёт виджет до показа, и анимация при создании доигрывала невидимо. Числа досчитывает rAF
+    из `data-n`, в разметке сразу финальное (нет rAF — нет счёта). Низ пузыря стоит на месте при
+    смене высоты (`setResizeAnchor('bottom')`) — лента не уезжает с последнего сообщения."""
     html = path.read_text()
-    assert "AN=()=>{document.body.className=A1?'an':'';A1=0}" in html
-    assert "try{CSS.registerProperty(" in html
+    assert "try{TW.setResizeAnchor('bottom')}catch(e){}" in html
+    assert "AN=()=>{const v=!TW||TW.isActive!==!1;document.body.className=A1&&v?'an':''" in html
+    assert "try{TW.onEvent('activated',()=>{A1&&(window.RD||draw)()})}catch(e){}" in html
+    assert "try{requestAnimationFrame(" in html and "registerProperty" not in html
     assert re.search(r"prefers-reduced-motion:reduce\)\{[^}]*\.an \*\{animation:none", html)
     assert ".an " in html.split("</style>")[0]
 
@@ -1213,7 +1217,7 @@ def test_анимация_только_css_и_при_появлении(path: Pa
 def test_сегодня_одинаковый_ответ_не_перерисовывает() -> None:
     """Тяга `t:` приходит через долю секунды после показа: тот же день не должен перерисовать
     героя и оборвать счёт (D-64)."""
-    assert "sm=K==k" in template("today") and "if(sm)return;" in template("today")
+    assert "sm=K==k" in template("today") and "if(sm&&!A1)return;" in template("today")
 
 
 def test_сегодня_тап_по_часу_не_меняет_высоту() -> None:

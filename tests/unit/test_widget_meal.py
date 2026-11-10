@@ -352,3 +352,26 @@ async def test_старшая_правка_не_ложится_поверх_св
     assert await wmeal._edit(bot, 5, 77, old, "c", None, None)  # type: ignore[arg-type]
     edits = [c for c in bot.calls if isinstance(c, EditMessageWidgetData)]
     assert [json.loads(e.chat_data)["rv"] for e in edits] == [200]
+
+
+async def test_тап_по_записи_открывает_её_карточку(world) -> None:  # noqa: ANN001
+    """D-69: `o:<запись>` — карточка этой записи следом, шапка «Запись», подпись «✏️ Запись: …»
+    (не «Записал» — MA-INV-70); ничего не пишет; двойной тап — одна карточка; чужая — `gone`.
+    Правка в открытой карточке сохраняет «✏️ Запись»."""
+    wmeal._opened.clear()
+    assistant, u, meal = await world()
+    out = await wmeal.on_open(5, 1, f"o:{meal.id}:o1o1", u, assistant)  # type: ignore[arg-type]
+    assert out.reply == {"ok": 1}
+    out.commit()  # type: ignore[misc]
+    bot = Bot()
+    await out.after(bot)  # type: ignore[misc]
+    [sent] = bot.calls
+    assert isinstance(sent, SendWidget) and sent.html == template("meal")
+    assert json.loads(sent.chat_data)["hd"] == "Запись" and sent.caption.startswith("✏️ Запись:")
+    again = await wmeal.on_open(5, 1, f"o:{meal.id}:o1o1", u, assistant)  # type: ignore[arg-type]
+    assert again.reply == {"ok": 1} and again.after is None
+    stranger = User(telegram_id=6, name="y", locale="ru", timezone="UTC", id=99)
+    assert (await wmeal.on_open(6, 1, f"o:{meal.id}:o2o2", stranger, assistant)).reply == {  # type: ignore[arg-type]
+        "err": "gone"}
+    r = await _do(assistant, u, f"m:a:{meal.id}:{meal.items[0].id}:210:o3o3", mid=77)
+    assert r["hd"] == "Запись"

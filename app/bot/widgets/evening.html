@@ -11,14 +11,14 @@ body{margin:0;padding:12px 14px max(26px,env(safe-area-inset-bottom));font:15px/
 button{font:600 15px system-ui,sans-serif;border:0;border-radius:14px;padding:11px 14px;width:100%;background:var(--ac);color:var(--at);cursor:pointer;margin-top:8px}
 button[disabled]{background:var(--tr);color:var(--m)}.dn{color:var(--ok);font-weight:600}
 @media (max-width:260px){.bg{font-size:20px}.bg small{display:block;margin:0}.hr{gap:8px}#cl .m{display:none}#nt div{font-size:13px}}
-.cu{counter-reset:n var(--n)}.cu::after{content:counter(n)}.an .cu{animation:cu 1s ease-out}@keyframes cu{from{--n:0}}.an .tk i{animation:g .9s ease-out}@keyframes g{from{width:0}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
+.an .tk i{animation:g .9s ease-out}@keyframes g{from{width:0}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
 <header class=r><b>🌙 Итог дня</b><span class=m id=dl></span><span class=sp></span><span class=p id=sk></span></header>
 <div class=c><div class=hr id=hr></div><div class=ft id=ft></div></div>
 <div class=c id=nt></div>
 <div class=c id=cl></div>
 <script>
-let A1=1,CU=0;try{CSS.registerProperty({name:'--n',syntax:'<integer>',inherits:!1,initialValue:'0'});CU=1}catch(e){}const NU=v=>CU?'<span class=cu style="--n:'+v+'"></span>':v,AN=()=>{document.body.className=A1?'an':'';A1=0};
-const W=window.TelegramWidget,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
+let A1=1;const TW=window.TelegramWidget;try{TW.setResizeAnchor('bottom')}catch(e){}const NU=v=>'<span class=cu data-n='+v+'>'+v+'</span>',AN=()=>{const v=!TW||TW.isActive!==!1;document.body.className=A1&&v?'an':'';if(A1&&v){A1=0;try{requestAnimationFrame(t0=>{const e=document.querySelectorAll('.cu'),f=t=>{const k=Math.min(1,(t-t0)/900);e.forEach(x=>x.textContent=Math.round(x.dataset.n*(1-(1-k)**3)));k<1&&requestAnimationFrame(f)};f(t0)})}catch(e){}}};try{TW.onEvent('activated',()=>{A1&&(window.RD||draw)()})}catch(e){}
+const W=TW,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
 T=s=>(s+'').replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';'),K=()=>Math.random().toString(36).slice(2,8).padEnd(6,'0'),
 bar=(v,g,c)=>'<div class=tk><i style="width:'+(g>0?Math.max(0,Math.min(100,v/g*100)):0)+'%;background:var('+c+')"></i></div>',
 M={TIMEOUT:'Бот не ответил — попробуй ещё раз.',RATE_LIMITED:'Слишком часто — секунду.'};

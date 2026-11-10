@@ -13,12 +13,12 @@ button{font:inherit;font-weight:600;border:0;border-radius:12px;background:var(-
 #ac{display:flex;gap:8px;flex-wrap:wrap}#ac button{flex:1 1 120px;padding:9px}.go{background:var(--ac);color:var(--at)}.no{background:var(--cd);color:var(--al)}
 .st{white-space:nowrap}@media (max-width:260px){.c{padding:4px 8px}.sz{font-size:11px;padding:3px 5px}.ch{gap:4px}#ac button{flex-basis:60px;font-size:13px;padding:8px 4px}}
 .bz{opacity:.45;pointer-events:none}#ts{font-size:13px;margin-top:8px;color:var(--m)}#ts:empty{display:none}.dn{font-weight:600;color:var(--ok)}
-.cu{counter-reset:n var(--n)}.cu::after{content:counter(n)}.an .cu{animation:cu .9s ease-out}@keyframes cu{from{--n:0}}.an .it{animation:fu .4s ease-out both}@keyframes fu{from{opacity:0;transform:translateY(6px)}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
+.an .it{animation:fu .4s ease-out both}@keyframes fu{from{opacity:0;transform:translateY(6px)}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
 <header><b>🍽 Проверь и запиши</b><div class=m>размер — тапом, граммы — ± 10</div></header>
 <div id=bd></div><div id=ac></div><div id=ts></div>
 <script>
-let A1=1,CU=0;try{CSS.registerProperty({name:'--n',syntax:'<integer>',inherits:!1,initialValue:'0'});CU=1}catch(e){}const NU=v=>CU?'<span class=cu style="--n:'+v+'"></span>':v,AN=()=>{document.body.className=A1?'an':'';A1=0};
-const W=window.TelegramWidget,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},R=Math.round,
+let A1=1;const TW=window.TelegramWidget;try{TW.setResizeAnchor('bottom')}catch(e){}const NU=v=>'<span class=cu data-n='+v+'>'+v+'</span>',AN=()=>{const v=!TW||TW.isActive!==!1;document.body.className=A1&&v?'an':'';if(A1&&v){A1=0;try{requestAnimationFrame(t0=>{const e=document.querySelectorAll('.cu'),f=t=>{const k=Math.min(1,(t-t0)/900);e.forEach(x=>x.textContent=Math.round(x.dataset.n*(1-(1-k)**3)));k<1&&requestAnimationFrame(f)};f(t0)})}catch(e){}}};try{TW.onEvent('activated',()=>{A1&&(window.RD||draw)()})}catch(e){}
+const W=TW,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},R=Math.round,
 T=s=>(s+'').replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';'),K=()=>Math.random().toString(36).slice(2,8).padEnd(6,'0'),
 M={need:'Выбери размер у отмеченных.',old:'Разбор устарел — пришли еду заново.',bad:'Так не записать — пришли еду заново.',busy:'Уже записываю…',TIMEOUT:'Бот не ответил — проверь в «Сегодня».',RATE_LIMITED:'Слишком часто — секунду.'};
 let D=null,G=[],B=0,ND=0,DONE='';

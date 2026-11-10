@@ -14,7 +14,7 @@ rich-экранов (MA-INV-1). Полный `gather()` виджету не ну
   s   серия [дней, заморозка недели 0/1, покрыто дней, из скольких] (D-44, D-57) — «N из 30»
   n   норма по часам от `sh` (нет — MA-INV-37)    nk  «сейчас» кривой — `DayPace.today_kcal`
   h   [[индекс часа, ккал, записей]] — все часы с записями (никогда не режутся)
-  it  [[индекс часа, «мм», имя, ккал, ≈ 0/1, граммы (0 — без веса), Б, Ж, У]] — записи, свежие
+  it  [[индекс часа, «мм», имя, ккал, ≈ 0/1, граммы (0 — без веса), Б, Ж, У, id записи]] — свежие
       первыми (режутся с хвоста);
       записей часа в `h` больше, чем в `it`, — виджет пишет «ещё N — в приложении»
 """
@@ -111,7 +111,7 @@ def today_data(
             [idx(m.eaten_at), m.eaten_at.astimezone(tz).strftime("%M"), _name(m, limit),
              round(m.totals.kcal), int(any(i.is_estimate for i in m.items)),
              round(sum(i.grams or 0 for i in m.items)), round(m.totals.protein),
-             round(m.totals.fat), round(m.totals.carb)]
+             round(m.totals.fat), round(m.totals.carb), m.id or 0]
             for m in meals
         ]
         while True:

@@ -20,8 +20,8 @@ footer{font-size:13px;color:var(--m);margin-top:10px}
 <div class=c><div class=m id=al></div><div class=ft id=ft></div></div>
 <footer id=tl></footer>
 <script>
-let A1=1,CU=0;try{CSS.registerProperty({name:'--n',syntax:'<integer>',inherits:!1,initialValue:'0'});CU=1}catch(e){}const NU=v=>CU?'<span class=cu style="--n:'+v+'"></span>':v,AN=()=>{document.body.className=A1?'an':'';A1=0};
-const W=window.TelegramWidget,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
+let A1=1;const TW=window.TelegramWidget;try{TW.setResizeAnchor('bottom')}catch(e){}const NU=v=>'<span class=cu data-n='+v+'>'+v+'</span>',AN=()=>{const v=!TW||TW.isActive!==!1;document.body.className=A1&&v?'an':'';if(A1&&v){A1=0;try{requestAnimationFrame(t0=>{const e=document.querySelectorAll('.cu'),f=t=>{const k=Math.min(1,(t-t0)/900);e.forEach(x=>x.textContent=Math.round(x.dataset.n*(1-(1-k)**3)));k<1&&requestAnimationFrame(f)};f(t0)})}catch(e){}}};try{TW.onEvent('activated',()=>{A1&&(window.RD||draw)()})}catch(e){}
+const W=TW,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
 T=s=>(s+'').replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';'),N=n=>(n+'').replace(/\B(?=(\d{3})+(?!\d))/g,'\u202f'),
 CL=['--nu','--ok','--wa','--dg'],WD=['не записан','в цели','меньше половины цели','перебор'];
 let D=null,M=0,S=-1;
