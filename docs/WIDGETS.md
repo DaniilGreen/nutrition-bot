@@ -220,7 +220,7 @@
   `journalctl --vacuum-size=100M` и `apt-get clean`; `image prune -a` не трогал. Перезапустил деплой
   кнопкой (`workflow_dispatch`) — прошёл. Остаток: пакеты всё ещё переставляются на каждом деплое
   (D-53, «чего это не дало»), диск после деплоя 85 %.
-- **Откат всего виджетного:** `WIDGETS_USERS=` (пусто) в `/opt/burnfat/.env` и `docker compose up -d bot` —
+- **Откат всего виджетного:** `WIDGETS_USERS=` (пусто) в `/opt/burnfat/.env` и `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d bot` (без оверрея compose пересоздаст `db` с портом 5432 наружу) —
   все вернутся на rich/PNG/клавиатуру без деплоя. Откат кода: `git revert eb4f005 4fad97a c73b193` и пуш.
 
 ### 8.6 Открытые вопросы
