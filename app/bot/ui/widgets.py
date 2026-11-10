@@ -42,7 +42,9 @@ from app.domain.timeframe import local_date
 from app.domain.value_objects import Macros
 
 LIMIT = 1024  # байт UTF-8 на chat_data / ответ запроса (Bot API 10.4)
-NAME_STEPS = (22, 16, 12)  # имя записи режется по ступеням, прежде чем выкидывать записи
+# Имя целиком, пока влезает в бюджет: по ширине строку режет CSS (`text-overflow`); ступени
+# короче — только чтобы не выкидывать записи из ленты.
+NAME_STEPS = (60, 22, 16, 12)
 
 
 def _name(meal: Meal, limit: int) -> str:
@@ -433,7 +435,7 @@ def confirm_data(items: list[Any]) -> str | None:
     return text if size(text) <= LIMIT else None
 
 
-DAY_NAME_STEPS = (26, 18, 12)
+DAY_NAME_STEPS = (60, 26, 18, 12)  # полное имя, пока влезает: ширину режет CSS
 
 
 def day_data(dv: Any, rem: Remaining, *, undo: int = 0) -> str:
