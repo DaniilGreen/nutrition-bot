@@ -29,10 +29,10 @@ const W=window.TelegramWidget,$=i=>document.getElementById(i),RM=window.matchMed
 let D=null,E=0,S=-1,F=1,K='',ST=0,B=0;
 const J=s=>{try{return JSON.parse(s)}catch(e){return null}},R=Math.round,C=n=>(n+'').replace('.',','),H=i=>('0'+(D.sh+i)%24).slice(-2),
 T=s=>(s+'').replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';'),
-bar=(v,g,c)=>'<div class=tk><i style="width:'+(g>0?Math.min(100,v/g*100):0)+'%;background:var('+c+')"></i></div>',
+bar=(v,g,c)=>'<div class=tk><i style="width:'+(g>0?Math.max(0,Math.min(100,v/g*100)):0)+'%;background:var('+c+')"></i></div>',
 col=(l,n,u,c,sub,b)=>'<div><div class=m>'+l+'</div><div class=bg style="color:var('+c+')">'+n+(u?'<small>'+u+'</small>':'')+'</div>'+b+'<div class=mi>'+sub+'</div></div>',
 ft=(l,c,v,g)=>'<div><div class=mi>'+(c?'<i class=d style="background:var('+c+')"></i>':'')+l+'</div><b>'+v+'</b>'+(g?'<s>/'+g+'</s>':'')+'</div>';
-function hero(){const g=D.g,e=D.e,lk=D.l[0],lp=D.l[1],pk=D.pk!=null?'<span class=pk> · '+C(D.pk)+' г/кг</span>':'';$('hc').className='c'+(F&&!RM?' an':'');
+function hero(){const g=D.g,e=D.e,lk=D.l[0],lp=D.l[1],pk=D.pk!=null?'<span class=pk> · '+C(D.pk)+'\u00a0г/кг</span>':'';$('hc').className='c'+(F&&!RM?' an':'');
 $('hero').innerHTML=E?col('Съедено ккал',e[0],'','--t','из '+g[0]+(lk>=0?' · ещё '+lk:' · перебор '+-lk),bar(e[0],g[0],'--br'))+col('Съедено белка',e[1],'г','--t','из '+g[1]+pk,bar(e[1],g[1],'--pr')):col(lk<0?'Перебор ккал':'Осталось ккал',Math.abs(lk),'',lk<0?'--dg':'--t',e[0]+' из '+g[0],bar(e[0],g[0],'--br'))+col('Осталось белка',Math.max(0,lp),'г',lp>0&&e[0]>0?'--wa':'--t',e[1]+' из '+g[1]+pk,bar(e[1],g[1],'--pr'));
 $('ft').innerHTML=ft('Жир','--fa',e[2],g[2])+ft('Углев.','--ca',e[3],g[3])+ft('Оценка','',e[0]?'≈'+D.es+'%':'—')}
 function pace(){const n=D.n,p=$('pc');p.style.display=n&&D.g[0]?'':'none';if(!n||!D.g[0])return;const hn=D.hn,cum=[],h={};let a=0;(D.h||[]).forEach(x=>h[x[0]]=x[1]);for(let i=0;i<=hn;i++){a+=h[i]||0;cum.push(a)}

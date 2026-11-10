@@ -266,7 +266,7 @@ def week_data(v: WeekView, macros: dict[date, Macros], today: date) -> str:
       c   [[«пн 3», клетка 0…3 (нет/в цели/меньше половины/перебор), ккал, Б, Ж, У, цель ккал,
            сегодня 0/1, будущее 0/1]] — семь дней
       a   средние [ккал, Б, Ж, У] вошедших дней      g  цели [ккал, Б, Ж, У]
-      al  «В среднем за 5 дн.»   cap  «Пн → Вс»   k  [в цели, судимых дней]   tl  подвал
+      al  «В среднем за 5 дн.»   k  [в цели, судимых дней]   tl  подвал
     Клетка — правило баланса (§6.23): сегодня не судим, пока не перебор (D-29)."""
     hit, logged = week_hits(v)
     days = []
@@ -282,7 +282,7 @@ def week_data(v: WeekView, macros: dict[date, Macros], today: date) -> str:
         "v": 1, "t": v.title, "h": v.hero, "hs": v.sub, "ov": int(v.over), "c": days,
         "a": [round(a.kcal), round(a.protein), round(a.fat), round(a.carb)],
         "g": [round(g.daily_kcal), round(g.protein_g), round(g.fat_g), round(g.carb_g)],
-        "al": v.avg_label, "cap": v.cap, "k": [hit, logged], "tl": v.tail,
+        "al": v.avg_label, "k": [hit, logged], "tl": v.tail,
     })
 
 

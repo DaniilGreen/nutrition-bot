@@ -120,7 +120,7 @@ async def on_undo(
     if deleted.meal is None:
         return live.Outcome({"err": "gone"})
     today = await assistant.today(user)
-    reply: dict[str, Any] = {"ok": 1, "u": meal_id, "l": round(today.remaining.kcal_left)}
+    reply: dict[str, Any] = {"ok": 1, "l": round(today.remaining.kcal_left)}
 
     def commit() -> None:
         _done[key] = (now, reply)

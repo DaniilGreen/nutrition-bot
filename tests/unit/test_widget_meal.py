@@ -53,6 +53,7 @@ def _rec(uid: int) -> Meal:
 def world(fake_container):  # noqa: ANN001, ANN201
     wmeal._done.clear()
     wmeal._undo.clear()
+    wmeal._rv.clear()
 
     async def make() -> tuple[object, User, Meal]:
         assistant, users = fake_container.assistant_for(None)
@@ -339,3 +340,15 @@ async def test_ответ_на_rich_карточку_прежним_путём(m
     [card] = rf._edits(msg)
     assert card["message_id"] == 5 and card["rich_message"].html.startswith("<h3>✏️ Поправил")
     assert rf._texts(card["reply_markup"])[0] == "⏪ Вернуть: рис"
+
+
+async def test_старшая_правка_не_ложится_поверх_свежей() -> None:
+    """Тап в виджете и ответ текстом правят одно сообщение задачами: если собранное раньше дошло
+    до правки позже, оно пропускается по ревизии — открытая потом карточка не врёт (аудит 10.11)."""
+    wmeal._rv.clear()
+    bot = Bot()
+    new, old = json.dumps({"v": 1, "rv": 200}), json.dumps({"v": 1, "rv": 100})
+    assert await wmeal._edit(bot, 5, 77, new, "c", None, None)  # type: ignore[arg-type]
+    assert await wmeal._edit(bot, 5, 77, old, "c", None, None)  # type: ignore[arg-type]
+    edits = [c for c in bot.calls if isinstance(c, EditMessageWidgetData)]
+    assert [json.loads(e.chat_data)["rv"] for e in edits] == [200]

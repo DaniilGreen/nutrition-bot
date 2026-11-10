@@ -21,14 +21,14 @@ footer{font-size:13px;color:var(--m);margin-top:10px}
 <footer id=tl></footer>
 <script>
 const W=window.TelegramWidget,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},
-T=s=>(s+'').replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';'),N=n=>(n+'').replace(/\B(?=(\d{3})+(?!\d))/g,'\u00a0'),
+T=s=>(s+'').replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';'),N=n=>(n+'').replace(/\B(?=(\d{3})+(?!\d))/g,'\u202f'),
 CL=['--nu','--ok','--wa','--dg'],WD=['не записан','в цели','меньше половины цели','перебор'];
 let D=null,M=0,S=-1;
 function chart(){const c=D.c,g=M?D.g[1]:0,v=c.map(x=>M?x[3]:x[2]),gl=c.map(x=>M?g:x[6]),mx=Math.max(...v,...gl)*1.08||1,Y=x=>(104-x/mx*98).toFixed(1),w=40;
 $('sv').innerHTML=c.map((x,i)=>{const h=104-Y(v[i]);return(x[8]?'':'<rect data-i='+i+' x='+(i*w+6)+' y='+Y(v[i])+' width=28 height='+Math.max(h,v[i]?2:0)+' rx=5 fill="var('+(M?'--pr':CL[x[1]])+')"'+(i==S?'':' fill-opacity=.85')+' />')+
 '<line x1='+(i*w+2)+' x2='+(i*w+38)+' y1='+Y(gl[i])+' y2='+Y(gl[i])+' stroke="var(--m)" stroke-dasharray="3 3" vector-effect=non-scaling-stroke />'+(i==S?'<rect x='+(i*w+3)+' y=2 width=34 height=104 rx=7 fill=none stroke="var(--ac)" stroke-width=1.5 vector-effect=non-scaling-stroke />':'')+'<rect data-i='+i+' x='+i*w+' y=0 width=40 height=110 fill-opacity=0 />'}).join('');
 $('ax').innerHTML=c.map((x,i)=>'<span'+(i==S||x[7]?' class=on':'')+'>'+x[0]+'</span>').join('');
-const x=c[S];$('dt').innerHTML=x?(x[8]?T(x[0])+' — ещё впереди':'<b>'+T(x[0])+'</b> · '+(x[2]?N(x[2])+' из '+N(x[6])+' ккал · Б '+x[3]+' · Ж '+x[4]+' · У '+x[5]+' · <span style="color:var('+(x[1]?CL[x[1]]:'--m')+')">'+(x[7]&&!x[1]?'день идёт':WD[x[1]])+'</span>':'нет записей')):''}
+const x=c[S];$('dt').innerHTML=x?(x[8]?T(x[0])+' — ещё впереди':'<b>'+T(x[0])+'</b> · '+(x[2]?N(x[2])+' из '+N(x[6])+'\u00a0ккал · Б '+x[3]+' · Ж '+x[4]+' · У '+x[5]+' · <span style="color:var('+(x[1]?CL[x[1]]:'--m')+')">'+(x[7]&&!x[1]?'день идёт':WD[x[1]])+'</span>':'нет записей')):''}
 function draw(){D=J(W&&W.chatData);if(!D||D.v!=1)return;$('tt').textContent=D.t;$('h').textContent=D.h;$('h').style.color=D.ov?'var(--wa)':'';$('hs').textContent=D.hs;$('kk').textContent='в цели '+D.k[0]+' из '+D.k[1];
 if(S<0){S=D.c.findIndex(x=>x[7]);if(S<0)S=6}$('al').textContent=D.al;
 const a=D.a,g=D.g,f=(l,c,v,gg)=>'<div>'+(c?'<i class=d style="background:var('+c+')"></i>':'')+l+'<b>'+N(v)+'</b><s>из '+N(gg)+'</s></div>';

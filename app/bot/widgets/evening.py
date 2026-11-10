@@ -74,7 +74,7 @@ async def on_close(
         return live.Outcome({"err": "bad"})
     await assistant.close_day(user, day)  # False — уже закрыт: ответ тот же
     streak = await assistant.streak(user)
-    reply: dict[str, Any] = {"ok": 1, "c": 1}
+    reply: dict[str, Any] = {"ok": 1}
     if streak.of > 0:  # как `evening_data`: нет истории — нет пилюли, а не «0 из 0»
         reply["s"] = [streak.days, int(streak.frozen), streak.covered, streak.of]
     sent = _SENT.get((uid, mid))

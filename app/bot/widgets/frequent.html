@@ -21,13 +21,13 @@ let D=null,B=0,U=null;
 const K=()=>Math.random().toString(36).slice(2,8).padEnd(6,'0'),hp=t=>{try{W.HapticFeedback.notificationOccurred(t)}catch(e){}},
 L=l=>l<0?'перебор '+-l:'осталось '+l,
 ERR={BUSY:'Ещё пишу предыдущее…',RATE_LIMITED:'Слишком часто — секунду.',TIMEOUT:'Бот не ответил — проверь в «Сегодня».',NOT_ALLOWED:'Открой чат с ботом, чтобы записать.'};
-function draw(){D=J(W&&W.chatData);const t=D&&D.t||[];$('g').innerHTML=t.length?t.map((x,i)=>'<div class=tl data-i='+i+'><b>'+(x[2][0]=='s'?'📌 ':'')+T(x[0])+'</b><span>'+(x[2][0]=='s'?'':T(x[1])+' · ')+(x[4]?'≈':'')+x[3]+' ккал</span></div>').join(''):'<p class=m>Пока нечего показать — запиши пару раз одно и то же.</p>'}
+function draw(){D=J(W&&W.chatData);const t=D&&D.t||[];$('g').innerHTML=t.length?t.map((x,i)=>'<div class=tl data-i='+i+'><b>'+(x[2][0]=='s'?'📌 ':'')+T(x[0])+'</b><span>'+(x[2][0]=='s'?'':T(x[1]).replace(' ','\u00a0')+' · ')+(x[4]?'≈':'')+x[3]+'\u00a0ккал</span></div>').join(''):'<p class=m>Пока нечего показать — запиши пару раз одно и то же.</p>'}
 function toast(s,u){$('ts').style.display='flex';$('tx').innerHTML=s;$('ub').style.display=u?'':'none';$('ub').disabled=false}
 function idle(el){B=0;el.classList.remove('bz');const b=el.querySelector('b');b.innerHTML=b.dataset.n}
 document.addEventListener('click',ev=>{const el=ev.target.closest('.tl');
 if(el&&W&&!B){const x=D.t[+el.dataset.i],b=el.querySelector('b');B=1;document.querySelectorAll('.ok').forEach(t=>t.classList.remove('ok'));el.classList.add('bz');b.dataset.n=b.innerHTML;b.textContent='Пишу…';
 let pr;try{pr=W.request('w:'+x[2]+':'+K())}catch(e){idle(el);return}pr.then(a=>{const r=J(a&&a.result)||{};idle(el);
-if(r.ok){U=r.m;el.classList.add('ok');hp('success');toast('✓ Записал: <b>'+T(r.n)+'</b> · '+r.k+' ккал · '+L(r.l),1)}
+if(r.ok){U=r.m;el.classList.add('ok');hp('success');toast('✓ Записал: <b>'+T(r.n)+'</b> · '+r.k+'\u00a0ккал · '+L(r.l),1)}
 else{hp('error');toast(r.err=='gone'?'Этой плитки уже нет — открой «Частое» заново.':r.err=='busy'?'Ещё пишу — проверь в «Сегодня».':'Не записал — попробуй ещё раз.',0)}},
 e=>{idle(el);hp('error');toast(ERR[e&&e.code]||'Не записал — попробуй ещё раз.',0)})}
 else if(ev.target.id=='ub'&&U&&W&&!B){B=1;$('ub').disabled=true;$('ub').textContent='Возвращаю…';

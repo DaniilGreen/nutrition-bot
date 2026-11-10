@@ -82,6 +82,8 @@ _OUT_OF_PROFILE = [
     r":has\(", r"clip-path", r"text-shadow", r"src=[\"']?https?:", r"@import", r"@font-face",
     r"position:\s*sticky", r"overflow:\s*(auto|scroll)", r"\bfetch\(", r"XMLHttpRequest",
     r"-webkit-line-clamp", r"<foreignObject", r"<animate",
+    # D-56: рантайм виджета не обязан их иметь — без них «Сегодня» показывал бы 0 навсегда
+    r"requestAnimationFrame", r"setTimeout", r"setInterval",
 ]
 
 
@@ -1093,3 +1095,99 @@ async def test_неделя_те_же_числа_что_экран(name: str) ->
             assert c[2] == round(rows[day].kcal)
     assert f"в цели {d['k'][0]} из {d['k'][1]}" in screens.week(ctx)
     assert not await week.show(FakeBot(fail=True), 1, ctx)  # type: ignore[arg-type]
+
+
+# --- аудит 10.11: линтер шаблонов и гонка показа ---------------------------------------------
+
+@pytest.mark.parametrize("path", sorted(WIDGETS.glob("*.html")), ids=lambda p: p.name)
+def test_шаблон_вызовы_моста_в_try_и_полосы_не_минус(path: Path) -> None:
+    """`W.request`/`W.ready` — в `try` (исключение не оставит виджет «занятым», D-56); ширина
+    полосы — не меньше нуля (отрицательная width невалидна → полоса во всю ширину); число и
+    единица — через неразрывный пробел."""
+    html = path.read_text()
+    for m in re.finditer(r"W\.(request|ready)\b", html):
+        if html[m.start() - 3:m.start()] in ("!W.", "(W."):  # проверка наличия, не вызов
+            continue
+        before = html[max(0, m.start() - 40):m.start()]
+        call = html[m.end():m.end() + 2]
+        if "(" not in call and "&&" not in call:
+            continue
+        assert "try{" in before, f"{path.name}: W.{m.group(1)} вне try"
+    for m in re.finditer(r"Math\.min\(100,", html):
+        assert html[m.start() - 11:m.start()] == "Math.max(0,", f"{path.name}: полоса без max(0)"
+    assert not re.search(r"' (г|ккал|кг)\b", html), f"{path.name}: единица оторвётся от числа"
+
+
+def _builders() -> dict[str, str]:
+    """`chat_data` каждого виджета на данных тестов — для сверки ключей с шаблоном."""
+    from app.application.entities import Product
+    from app.bot.keyboards import frequent_tiles
+    from app.bot.quick import Frequent
+    from app.bot.ui.screens import week_view
+    from app.bot.ui.widgets import evening_data, frequent_data, meal_data, week_data, weight_data
+    from app.domain.value_objects import Density
+    from tests.unit.test_ui_widths import CTXS, WEEK
+
+    meals = [_meal(datetime(2026, 11, 10, 2, 0, tzinfo=UTC), "Овсянка", 420, est=True, n=2)]
+    t0 = datetime(2026, 10, 1, 1, 0, tzinfo=UTC)
+    prod = Product(canonical_key="p", display_name="Творог", id=3, density=Density(121, 17, 5, 3))
+    ctx = WEEK["пятница в плане"]
+    v = week_view(ctx)
+    assert not isinstance(v, str)
+    m = meals[0]
+    m.id = 9
+    return {
+        "today": today_data(_stats(meals), GOAL, 91.5, PACE, Streak(3, True, 3, 3), NOW, 4),
+        "weight": weight_data([(t0 + timedelta(days=i), 86 - i / 10) for i in range(30)], TZ,
+                              "cut") or "",
+        "meal": meal_data(m, _stats(meals).remaining, TZ, session_kcal=900, undo=1) or "",
+        "week": week_data(v, dict(ctx.macros7), ctx.days[-1][0]),
+        "evening": evening_data(CTXS["обычный день"], NOW.date(), Streak(3, False, 3, 3)),
+        "frequent": frequent_data(Frequent(frequent_tiles([], [(3, "Творог", 180.0, 9)]),
+                                           {3: prod}, {})),
+    }
+
+
+@pytest.mark.parametrize("name", ["today", "weight", "meal", "week", "evening", "frequent"])
+def test_ключи_данных_читает_шаблон(name: str) -> None:
+    """Ключ `chat_data`, которого шаблон не читает, — мёртвый вес в бюджете 1024 байта и ложное
+    обещание (так жил `cap` у недели). `v` — версия формата, её читают не все."""
+    html = template(name)
+    keys = set(json.loads(_builders()[name])) - {"v"}
+    dead = {k for k in keys if not re.search(rf"\b[dDr]\.{k}\b", html)}
+    assert not dead, f"{name}: шаблон не читает {sorted(dead)}"
+
+
+async def test_повторный_сегодня_удаляет_прежний_даже_если_t_успел(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D-47 под гонкой: новый виджет шлёт `t:` сразу, ответ на него (без замка) учит `_LIVE` его
+    id ещё до того, как `show_today` дочитал ответ `sendWidget`. Прежний всё равно удаляется."""
+    monkeypatch.setattr(live, "enabled", lambda u, s=None: True)
+
+    class Racy(FakeBot):
+        async def __call__(self, method: object) -> object:
+            msg = await super().__call__(method)
+            if isinstance(method, SendWidget):
+                live._LIVE[OWNER.telegram_id] = live._Live("2026-11-10", msg.message_id, "")
+            return msg
+
+    bot = Racy()
+    a = FakeAssistant([])
+    await live.show_today(bot, 351362942, OWNER, a)  # type: ignore[arg-type]
+    first = live._LIVE[351362942].message_id
+    await live.show_today(bot, 351362942, OWNER, a)  # type: ignore[arg-type]
+    assert bot.deleted == [first]
+
+
+def test_неделя_тысячи_одним_видом() -> None:
+    """FR-48: «1 124» в герое (Python, `kit.k`) и в столбиках/средних (JS) — один и тот же узкий
+    неразрывный пробел, а не два разных."""
+    from app.bot.ui.kit import NB
+
+    assert NB == "\u202f" and "'\\u202f'" in template("week")
+
+
+def test_плитка_частого_граммы_не_отрываются() -> None:
+    """Хвост «180 г» — общий с текстом кнопки FR-40; неразрывный пробел ставит шаблон."""
+    assert "T(x[1]).replace(' ','\\u00a0')" in template("frequent")

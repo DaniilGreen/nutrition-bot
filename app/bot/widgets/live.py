@@ -122,6 +122,9 @@ async def show_today(bot: Bot, chat_id: int, user: User, assistant: Assistant) -
 
     Тот же день уже показан — новый виджет внизу, прежний удаляется (D-47)."""
     async with lock(user.telegram_id):
+        # Прежний — ДО отправки: новый виджет сразу шлёт `t:`, а ответ на него (без замка) учит
+        # `_LIVE` уже его id — взятый после, `old` оказался бы им самим, и прежний не удалился бы.
+        old = _LIVE.get(user.telegram_id)
         try:
             built = await build(assistant, user)
             msg = await bot(
@@ -133,7 +136,6 @@ async def show_today(bot: Bot, chat_id: int, user: User, assistant: Assistant) -
         except Exception as exc:  # noqa: BLE001 — любой сбой виджета не должен оставить без «Сегодня»
             logger.warning("widget: sendWidget не прошёл (%s) — фолбэк на rich", exc)
             return False
-        old = _LIVE.get(user.telegram_id)
         _LIVE[user.telegram_id] = _Live(built.day, msg.message_id, _key(built.data))
         mark = _SHOWN.get()
         if mark is not None:

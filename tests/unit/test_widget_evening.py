@@ -69,7 +69,7 @@ async def test_всё_записал_закрывает_день() -> None:
     assert sent.caption == "🌙 Итог дня"  # AC-290: уведомление без цифр, они — в итоге
     today = datetime.now(UTC).date()
     out = await evening.on_close(7, 55, f"e:c:{today}:abcd", USER, a)  # type: ignore[arg-type]
-    assert out.reply == {"ok": 1, "c": 1, "s": [11, 0, 30, 30]} and a.closed == [today]
+    assert out.reply == {"ok": 1, "s": [11, 0, 30, 30]} and a.closed == [today]
     assert out.after is not None
     edit = Bot()
     await out.after(edit)  # type: ignore[arg-type]

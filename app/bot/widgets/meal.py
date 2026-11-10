@@ -55,6 +55,8 @@ class _Undo:
 
 
 _undo: dict[tuple[int, int], _Undo] = {}
+# (кто, сообщение) → ревизия, что уже лежит в сообщении: правка со старшей не ложится поверх.
+_rv: dict[tuple[int, int], int] = {}
 _now = time.monotonic
 
 
@@ -104,7 +106,24 @@ async def _edit(
     sess: MealSession | None,
 ) -> bool:
     """Правка самого сообщения: данные, подпись, кнопки под ним. False — данные не легли (это не
-    виджет или сообщения нет); подпись и кнопки тогда не трогаем."""
+    виджет или сообщения нет); подпись и кнопки тогда не трогаем.
+
+    Под замком человека и со сверкой ревизии: тап в виджете и ответ текстом правят одно сообщение
+    задачами, и собранное раньше не должно лечь последним (открытая позже карточка врала бы)."""
+    async with live.lock(uid):
+        rv, key = json.loads(data).get("rv", 0), (uid, mid)
+        if rv < _rv.get(key, 0):
+            return True  # в сообщении уже свежее — эта правка устарела
+        if len(_rv) > 200:  # ponytail: двое людей; чистим целиком, худшее — одна лишняя правка
+            _rv.clear()
+        _rv[key] = rv
+        return await _put(bot, uid, mid, data, caption, meal, sess)
+
+
+async def _put(
+    bot: Bot, uid: int, mid: int, data: str, caption: str, meal: Meal | None,
+    sess: MealSession | None,
+) -> bool:
     try:
         await bot(EditMessageWidgetData(chat_id=uid, message_id=mid, chat_data=data))
     except Exception as exc:  # noqa: BLE001
