@@ -1153,7 +1153,11 @@ def test_ключи_данных_читает_шаблон(name: str) -> None:
     """Ключ `chat_data`, которого шаблон не читает, — мёртвый вес в бюджете 1024 байта и ложное
     обещание (так жил `cap` у недели). `v` — версия формата, её читают не все."""
     html = template(name)
+    from app.bot.ui.widgets import merged_data
+
     keys = set(json.loads(_builders()[name])) - {"v"}
+    if name == "meal":  # шапка и след «вошло в набор» (FR-47) — того же шаблона
+        keys |= set(json.loads(merged_data("бургер"))) - {"v"}
     dead = {k for k in keys if not re.search(rf"\b[dDr]\.{k}\b", html)}
     assert not dead, f"{name}: шаблон не читает {sorted(dead)}"
 

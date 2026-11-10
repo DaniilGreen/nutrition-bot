@@ -28,7 +28,7 @@ from app.application.entities import Meal, User
 from app.application.meal_service import SnapshotStale, meal_fingerprint
 from app.application.results import MealLogged, MealSession
 from app.bot.keyboards import meal_widget_keyboard, weighable
-from app.bot.ui.widgets import meal_caption, meal_data
+from app.bot.ui.widgets import meal_caption, meal_data, merged_data
 from app.bot.widgets import live, template
 from app.bot.widgets.transport import EditMessageWidgetData, SendWidget
 from app.domain.goals import Remaining
@@ -69,7 +69,7 @@ def _sweep(now: float) -> None:
 
 async def _card(
     assistant: Assistant, user: User, meal: Meal, *, undo: int = 0, deleted: bool = False,
-    left: Remaining | None = None,
+    left: Remaining | None = None, head: str | None = None,
 ) -> tuple[str | None, str, MealSession | None]:
     """Данные, подпись и приём пищи (FR-47, только из нескольких записей) карточки из базы;
     остаток — дня самой записи, а не сегодняшнего."""
@@ -78,21 +78,25 @@ async def _card(
     if sess is not None and len(sess.meals) < 2:
         sess = None
     ss = sum(m.totals.kcal for m in sess.meals) if sess is not None else None
-    data = meal_data(meal, left, user.timezone, session_kcal=ss, undo=undo, deleted=deleted)
+    data = meal_data(meal, left, user.timezone, session_kcal=ss, undo=undo, deleted=deleted,
+                     head=head)
     return data, meal_caption(meal, deleted=deleted), sess
 
 
 async def show(
-    bot: Bot, chat_id: int, user: User, assistant: Assistant, result: MealLogged
+    bot: Bot, chat_id: int, user: User, assistant: Assistant, result: MealLogged, *,
+    head: str | None = None, caption: str | None = None,
 ) -> bool:
     """Отправить карточку записи виджетом. False — не вышло или не влезло: вызывающий шлёт
-    rich-карточку с прежними кнопками (W-INV-2)."""
+    rich-карточку с прежними кнопками (W-INV-2). head/caption — у слитого набора (FR-47)."""
     try:
-        data, caption, sess = await _card(assistant, user, result.meal, left=result.remaining)
+        data, own, sess = await _card(
+            assistant, user, result.meal, left=result.remaining, head=head
+        )
         if data is None:
             return False
         await bot(SendWidget(
-            chat_id=chat_id, html=template("meal"), chat_data=data, caption=caption,
+            chat_id=chat_id, html=template("meal"), chat_data=data, caption=caption or own,
             allow_queries=True, reply_markup=meal_widget_keyboard(result.meal, sess),
         ))
     except Exception as exc:  # noqa: BLE001
@@ -150,6 +154,13 @@ def _refresh(
         await _edit(bot, uid, mid, data, caption, meal, sess)
 
     return run
+
+
+async def merged(bot: Bot, uid: int, mid: int, name: str) -> bool:
+    """Виджет, где нажали «📌 Приём пищи — в набор», — след «вошло в набор» без действий (FR-47,
+    FR-49.4): его записей больше нет. False — это не виджет: вызывающий правит rich-следом."""
+    _undo.pop((uid, mid), None)
+    return await _edit(bot, uid, mid, merged_data(name), f"📌 Вошло в набор «{name}»", None, None)
 
 
 async def refresh_fix(

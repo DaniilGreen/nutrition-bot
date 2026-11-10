@@ -16,7 +16,7 @@ button{font:600 15px system-ui,sans-serif;border:0;border-radius:12px;background
 #ts{font-size:13px;margin-top:8px;color:var(--m)}#ts:empty{display:none}
 @media (max-width:260px){.st b{min-width:50px}.st button{width:28px}.bg{font-size:26px}.it{padding:6px 0}.dy{grid-template-columns:minmax(0,1fr);gap:4px;padding:8px 10px}.dy>div{grid-template-columns:auto minmax(0,1fr) auto;column-gap:5px;font-size:12px}.dy>div>b{grid-column:auto;order:1;font-size:12px;white-space:nowrap}.dy s{font-size:12px}.dy>div>i{order:2}.dy .tk{order:3}}
 </style>
-<header class=r><b>Записал</b><span class=m id=at></span><span class=sp></span></header>
+<header class=r><b id=hd>Записал</b><span class=m id=at></span><span class=sp></span></header>
 <div id=bd></div><div id=ac></div><div id=ts></div>
 <script>
 const W=window.TelegramWidget,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},R=Math.round,
@@ -27,8 +27,8 @@ const hp=t=>{try{t?W.HapticFeedback.notificationOccurred(t):W.HapticFeedback.sel
 G=x=>P[x[0]]!=null?P[x[0]]:x[2],
 L=['Ккал','Белок','Жир','Углеводы'],CL=['--br','--pr','--fa','--ca'],
 toast=s=>{$('ts').textContent=s||''};
-function draw(){const d=D;if(!d||d.v!=1)return;if(d.i[0]&&!d.i.some(x=>x[0]==S))S=d.i[0][0];const k=d.k;$('at').textContent=d.at+' · '+d.dl;
-if(d.x){$('bd').innerHTML='<div class=c style="padding:10px 12px"><b>Запись удалена</b><div class=m>'+T(d.i.map(x=>x[1]).join(', '))+' · '+k[0]+'\u00a0ккал</div></div>';$('ac').innerHTML=d.z?'<button class=bk data-q=r>⏪ Вернуть</button>':'';return}
+function draw(){const d=D;if(!d||d.v!=1)return;if(d.i[0]&&!d.i.some(x=>x[0]==S))S=d.i[0][0];const k=d.k;$('hd').textContent=d.hd||'Записал';$('at').textContent=d.at?d.at+' · '+d.dl:'';
+if(d.x){$('bd').innerHTML='<div class=c style="padding:10px 12px"><b>'+(d.nb?'📌 Вошло в набор «'+T(d.nb)+'»':'Запись удалена')+'</b><div class=m>'+(d.nb?'Карточка набора — ниже.':T(d.i.map(x=>x[1]).join(', '))+' · '+k[0]+'\u00a0ккал')+'</div></div>';$('ac').innerHTML=d.z?'<button class=bk data-q=r>⏪ Вернуть</button>':'';return}
 const nw=document.body.clientWidth<260,n=nw?3:4,V=d.i.length>n+1?d.i.slice(0,n):d.i;if(V!=d.i&&!V.some(x=>x[0]==S))V[n-1]=d.i.find(x=>x[0]==S);
 $('bd').innerHTML='<div class=bg>+'+k[0]+'<small>ккал</small></div><div class=mc><span><i class=d style="background:var(--pr)"></i>Б <b>'+k[1]+'</b></span><span><i class=d style="background:var(--fa)"></i>Ж <b>'+k[2]+'</b></span><span><i class=d style="background:var(--ca)"></i>У <b>'+k[3]+'</b></span>'+(d.ss?'<span>приём пищи <b>'+d.ss+'</b></span>':'')+'</div><div class=c>'+
 V.map(x=>{const g=G(x),p=g!=x[2],o=d.i.length<4||x[0]==S;return'<div class=it data-i='+x[0]+'><div class=nm>'+T(x[1])+(x[4]?' <s>≈</s>':'')+'</div><div class=m>'+(o||!x[2]?'':C(g)+'\u00a0г')+'</div><div class="kc'+(p?' pv':'')+'">'+(p?R(x[3]*g/x[2]):x[3])+'</div>'+

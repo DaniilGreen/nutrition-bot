@@ -970,10 +970,19 @@ async def _save_session_set(
         return
     await session.commit()  # фиксируем ДО карточки — «📌 Набор» не врёт
     bot = message.bot
-    if len(ids) > 1 and bot is not None:  # слили: прежняя карточка — след, а не живые кнопки
+    flag = bot is not None and widgets_live.enabled(user)
+    if len(ids) > 1 and bot is not None and not (  # слили: прежняя карточка — след, не кнопки
+        flag and isinstance(card_id, int)
+        and await widgets_meal.merged(bot, message.chat.id, card_id, name)
+    ):
         await _rich_edit_at(bot, message.chat.id, card_id,
                             f"<h3>📌 Вошло в набор «{escape(name, quote=False)}»</h3>"
                             "<p>Карточка набора — ниже.</p>", None)
+    if flag and bot is not None and await widgets_meal.show(  # FR-49.4: набор — виджетом
+        bot, message.chat.id, user, assistant, logged, head="📌 Набор сохранён",
+        caption=f"📌 Набор «{name}» — дальше просто пиши «{name}»",
+    ):
+        return
     ctx, sess = await gather(assistant, user), await _session(user, assistant, logged.meal.id)
     await _rich(
         message, screens.meal_card(ctx, logged, saved=True, session=sess),

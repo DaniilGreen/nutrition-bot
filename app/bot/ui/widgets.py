@@ -200,7 +200,7 @@ MEAL_NAME_STEPS = (28, 18, 12)
 
 def meal_data(
     meal: Meal, left: Remaining, tz: str, *, session_kcal: float | None = None,
-    undo: int = 0, deleted: bool = False,
+    undo: int = 0, deleted: bool = False, head: str | None = None,
 ) -> str | None:
     """`chat_data` карточки приёма (FR-49.4). None — не влезла в бюджет: вызывающий шлёт rich.
 
@@ -214,6 +214,8 @@ def meal_data(
       z   что можно вернуть этим виджетом: 0 — ничего, 1 — позицию, 2 — запись
       x   1 — запись удалена (карточка показывает «удалена» и «⏪ Вернуть»)
       rv  ревизия (мс): `chatDataChanged` старше показанного виджет пропускает
+      hd  шапка вместо «Записал» («📌 Набор сохранён», FR-47); нет ключа — «Записал»
+      nb  (только у `merged_data`) имя набора, в который вошла запись
     Граммы и ккал позиции — снапшот (INV-3); JS лишь предпросматривает пропорцию (W-INV-1)."""
     zone = ZoneInfo(tz)
     at = meal.eaten_at.astimezone(zone)
@@ -230,6 +232,8 @@ def meal_data(
     }
     if session_kcal is not None:
         base["ss"] = round(session_kcal)
+    if head:
+        base["hd"] = head
     for limit in MEAL_NAME_STEPS:
         items = []
         for i in meal.items:
@@ -242,6 +246,15 @@ def meal_data(
         if size(text) <= LIMIT - 8:  # запас под "ok":1 в ответе на запрос
             return text
     return None
+
+
+def merged_data(name: str) -> str:
+    """Карточка, где нажали «📌 Приём пищи — в набор», после слияния (FR-47, FR-49.4): её записей
+    больше нет — только след «вошло в набор», без позиций и действий."""
+    return _dump({
+        "v": 1, "m": 0, "x": 1, "z": 0, "nb": name[:64], "hd": "📌 Набор", "i": [],
+        "k": [0, 0, 0, 0], "rv": time.time_ns() // 1_000_000 % 10**10,
+    })
 
 
 def meal_caption(meal: Meal, *, deleted: bool = False) -> str:

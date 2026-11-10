@@ -620,3 +620,26 @@ async def test_тексты_про_одну_запись_не_зовут_её_п
     await handlers.on_meal_undo(cb, w.user, w.assistant, AsyncMock())
     assert _answers(cb) == ["🗑 Отменил запись (337 ккал)"]
     assert _plain(rich.await_args.args[1]).startswith("🗑 Отменил запись · 13:05")
+
+
+async def test_приём_пищи_в_набор_под_виджетом(monkeypatch: pytest.MonkeyPatch):
+    """AC-294, D-61: «📌» на карточке-виджете — прежний виджет перерисован в «вошло в набор» (rich-
+    правка его молча не брала), карточка набора — виджетом с подсказкой в подписи, не rich."""
+    import json
+
+    from app.bot.widgets.transport import EditMessageWidgetData, SendWidget
+
+    monkeypatch.setattr(handlers.widgets_live, "enabled", lambda u, s=None: True)
+    w = await _world()
+    burger = await _burger(w)
+    await _tap_save(w, burger[-1].id)
+    msg = await _name(w, "бургер")
+    calls = [c.args[0] for c in msg.bot.await_args_list]
+    [old] = [c for c in calls if isinstance(c, EditMessageWidgetData)]
+    d = json.loads(old.chat_data)
+    assert old.message_id == 5 and d["nb"] == "бургер" and d["x"] == 1 and d["z"] == 0
+    [new] = [c for c in calls if isinstance(c, SendWidget)]
+    assert new.caption == "📌 Набор «бургер» — дальше просто пиши «бургер»"
+    assert json.loads(new.chat_data)["hd"] == "📌 Набор сохранён"
+    assert not msg.bot.send_rich_message.await_count
+    assert not any("rich_message" in e for e in _edits(msg))  # rich-следа по виджету нет
