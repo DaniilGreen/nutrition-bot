@@ -6,8 +6,6 @@ header{margin-bottom:10px;flex-wrap:wrap}header b{font-size:20px}.sp{flex:1}#dl{
 .p{font-size:12px;padding:3px 8px;border-radius:99px;background:var(--cd);font-weight:600;white-space:nowrap}
 .lv{color:var(--m)}.lv i{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ac);margin-right:5px}
 .c{background:var(--cd);border-radius:18px;padding:12px 14px;margin-bottom:8px}
-#hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
-.bg{font-size:clamp(24px,12vw,44px);font-weight:700;letter-spacing:-1px;line-height:1.05;margin-top:2px}.bg small{font-size:14px;color:var(--m);font-weight:500;margin-left:2px}
 .tk{height:6px;border-radius:3px;background:var(--tr);margin-top:8px;overflow:hidden}.tk i{display:block;height:100%}.an .tk i{animation:g .8s ease-out}@keyframes g{from{width:0}}
 .ft{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin-top:12px;padding-top:10px;border-top:1px solid var(--tr);font-size:15px;gap:6px}
 .ft b{font-weight:600}.ft s{text-decoration:none;color:var(--m);font-size:13px}.ft div:last-child{text-align:right}.d{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px}
@@ -21,6 +19,7 @@ header{margin-bottom:10px;flex-wrap:wrap}header b{font-size:20px}.sp{flex:1}#dl{
 <header class=r><b>Сегодня</b><span class=m id=dl></span><span class=sp></span><span class="p lv" id=lv></span><span class=p id=sk></span></header>
 <section class=c id=hc><div id=hero></div><div class=ft id=ft></div></section>
 <div id=hs></div><div id=ls></div><div class=ed id=ed></div>
+<!--P-->
 <script>
 let A1=1;const TW=window.TelegramWidget;try{TW.setResizeAnchor('bottom')}catch(e){}const NU=v=>'<span class=cu data-n='+v+'>'+v+'</span>',AN=()=>{const v=!TW||TW.isActive!==!1;document.body.className=A1&&v?'an':'';if(A1&&v){A1=0;try{requestAnimationFrame(t0=>{const e=document.querySelectorAll('.cu'),f=t=>{const k=Math.min(1,(t-t0)/900);e.forEach(x=>x.textContent=Math.round(x.dataset.n*(1-(1-k)**3)));k<1&&requestAnimationFrame(f)};f(t0)})}catch(e){}}};try{TW.onEvent('activated',()=>{A1&&(window.RD||draw)()})}catch(e){}
 const W=TW,$=i=>document.getElementById(i);
@@ -28,11 +27,8 @@ let D=null,E=0,S=-1,K='',ST=0,B=0,SM=0,SI=0,RG=0,Q=0,UZ=0;
 const J=s=>{try{return JSON.parse(s)}catch(e){return null}},R=Math.round,C=n=>(n+'').replace('.',','),H=i=>('0'+(D.sh+i)%24).slice(-2),
 T=s=>(s+'').replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';'),
 bar=(v,g,c)=>'<div class=tk><i style="width:'+(g>0?Math.max(0,Math.min(100,v/g*100)):0)+'%;background:var('+c+')"></i></div>',
-col=(l,n,u,c,sub,b)=>'<div><div class=m>'+l+'</div><div class=bg style="color:var('+c+')">'+NU(n)+(u?'<small>'+u+'</small>':'')+'</div>'+b+'<div class=mi>'+sub+'</div></div>',
-ft=(l,c,v,g)=>'<div><div class=mi>'+(c?'<i class=d style="background:var('+c+')"></i>':'')+l+'</div><b>'+v+'</b>'+(g?'<s>/'+g+'</s>':'')+'</div>';
-function hero(){const g=D.g,e=D.e,lk=D.l[0],lp=D.l[1],pk=D.pk!=null?'<span class=pk> · '+C(D.pk)+'\u00a0г/кг</span>':'';
-$('hero').innerHTML=E?col('Съедено ккал',e[0],'','--t','из '+g[0]+(lk>=0?' · ещё '+lk:' · перебор '+-lk),bar(e[0],g[0],'--br'))+col('Съедено белка',e[1],'г','--t','из '+g[1]+pk,bar(e[1],g[1],'--pr')):col(lk<0?'Перебор ккал':'Осталось ккал',Math.abs(lk),'',lk<0?'--dg':'--t',e[0]+' из '+g[0],bar(e[0],g[0],'--br'))+col('Осталось белка',Math.max(0,lp),'г',lp>0&&e[0]>0?'--wa':'--t',e[1]+' из '+g[1]+pk,bar(e[1],g[1],'--pr'));
-$('ft').innerHTML=ft('Жир','--fa',e[2],g[2])+ft('Углев.','--ca',e[3],g[3])+ft('Оценка','',e[0]?'≈'+D.es+'%':'—')}
+
+ft=(l,c,v,g)=>'<div><div class=mi>'+(c?'<i class=d style="background:var('+c+')"></i>':'')+l+'</div><b>'+v+'</b>'+(g?'<s>/'+g+'</s>':'')+'</div>',f3=()=>ft(D.f[0],'',D.f[1]);
 function hours(){const al=D.h||[],k0=Math.max(3,Math.floor(((document.body.clientWidth||320)-22)/58)),k=al.length>k0?k0-1:k0,hs=al.slice(-k);if(!hs.some(x=>x[0]==S))S=hs.length?hs[hs.length-1][0]:-1;
 $('hs').innerHTML=hs.length?(al.length>k?'<span class=m>+'+(al.length-k)+'\u00a0ч</span>':'')+hs.map(x=>'<div class="ch'+(x[0]==S?' on':'')+'" data-h='+x[0]+'>'+H(x[0])+'<b>'+x[1]+'</b></div>').join(''):'<div class=m>Пока пусто — напиши, что съел.</div>';
 $('ls').innerHTML=hs.map(h=>{const all=(D.it||[]).filter(x=>x[0]==h[0]),its=all.slice(0,4),mo=(h[2]||all.length)-its.length;

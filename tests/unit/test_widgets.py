@@ -19,13 +19,34 @@ from app.application.entities import Meal, MealItem, User, WeightLog
 from app.application.results import DailyStats, DayPace, WeightTrend
 from app.bot.middlewares import WidgetQueryMiddleware
 from app.bot.ui.widgets import LIMIT, today_data
-from app.bot.widgets import live, template
+from app.bot.widgets import PARTS, live, template
 from app.bot.widgets.transport import AnswerWidgetQuery, EditMessageWidgetData, SendWidget
 from app.domain.goals import Goal, remaining
 from app.domain.streak import Streak
 from app.domain.value_objects import Macros
 
 WIDGETS = Path(live.__file__).parent
+
+
+class _Shipped:
+    """Шаблон, каким он уходит в Telegram: у «Сегодня» — общая часть + вид панели (D-78)."""
+
+    def __init__(self, name: str, part: str | None = None) -> None:
+        self.name, self.stem = f"{name}.{part}" if part else name, name
+        self.html = template(name, part)
+
+    def read_text(self) -> str:
+        return self.html
+
+    def read_bytes(self) -> bytes:
+        return self.html.encode()
+
+
+SHIPPED = [
+    _Shipped(p.stem, k)
+    for p in sorted(WIDGETS.glob("*.html")) if "." not in p.stem  # части — внутри сборок
+    for k in PARTS.get(p.stem, (None,))
+]
 GOAL = Goal(daily_kcal=2200, protein_g=183, fat_g=80, carb_g=200)
 TZ = "Etc/GMT-7"
 NOW = datetime(2026, 11, 10, 7, 20, tzinfo=UTC)  # 14:20 у владельца
@@ -69,8 +90,8 @@ PACE = DayPace(show=False, hour=14, norm_kcal=1240, today_kcal=990, days_used=16
 
 # --- W-INV-3: бюджет и профиль --------------------------------------------------------------
 
-@pytest.mark.parametrize("path", sorted(WIDGETS.glob("*.html")), ids=lambda p: p.name)
-def test_шаблон_в_бюджете(path: Path) -> None:
+@pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.name)
+def test_шаблон_в_бюджете(path: _Shipped) -> None:
     raw = path.read_bytes()
     assert len(raw) <= 32768
     assert len(zlib.compress(raw, 9)) <= 4096, "W-INV-3: шаблон больше 4 КБ после zlib-9"
@@ -88,8 +109,8 @@ _OUT_OF_PROFILE = [
 ]
 
 
-@pytest.mark.parametrize("path", sorted(WIDGETS.glob("*.html")), ids=lambda p: p.name)
-def test_шаблон_в_профиле_1(path: Path) -> None:
+@pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.name)
+def test_шаблон_в_профиле_1(path: _Shipped) -> None:
     """Недопустимое Telegram молча вырезает — ловим до рендера (§6 промпта, W-INV-7)."""
     html = path.read_text()
     for pat in _OUT_OF_PROFILE:
@@ -119,7 +140,7 @@ def test_данные_обычного_дня() -> None:
     d = json.loads(today_data(_stats(meals), GOAL, 91.5, Streak(3, False, 3, 3), NOW, 4))
     assert d["d"] == "2026-11-10" and d["dl"] == "вт, 10 ноя" and d["at"] == "14:20"
     assert d["g"] == [2200, 183, 80, 200] and d["e"][0] == 1120
-    assert d["es"] == 38  # 420 из 1120 — оценкой
+    assert d["f"] == ["Вес", "91,5"]  # третья ячейка — как в аппке (D-78)
     assert d["h"] == [[5, 420, 1], [9, 700, 1]]
     # свежие первыми; граммы и Б/Ж/У записи — Python (W-INV-1), под строкой «100 г · Б35 Ж23 У88»
     # последнее — id позиции: запись из одной позиции с весом правится прямо в «Сегодня» (D-74)
@@ -280,7 +301,7 @@ async def test_show_today_и_повтор_в_тот_же_день(monkeypatch: p
     assert await live.show_today(bot, 351362942, OWNER, a)  # type: ignore[arg-type]
     sent = bot.of(SendWidget)[0]
     assert sent.allow_queries and sent.caption is None
-    assert sent.html == template("today") and json.loads(sent.chat_data)["e"][0] == 420
+    assert sent.html == template("today", "bars") and json.loads(sent.chat_data)["e"][0] == 420
     first = live._LIVE[351362942].message_id
     assert await live.show_today(bot, 351362942, OWNER, a)  # type: ignore[arg-type]
     assert bot.deleted == [first] and live._LIVE[351362942].message_id != first
@@ -1050,8 +1071,8 @@ def test_серия_без_истории_пилюли_нет() -> None:
     assert d["s"] == [0, 1, 20, 29]  # серия порвалась, покрытие осталось
 
 
-@pytest.mark.parametrize("path", sorted(WIDGETS.glob("*.html")), ids=lambda p: p.name)
-def test_скрипт_шаблона_разбирается(path: Path, tmp_path: Path) -> None:
+@pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.name)
+def test_скрипт_шаблона_разбирается(path: _Shipped, tmp_path: Path) -> None:
     """Синтаксическая ошибка в `<script>` убивает виджет целиком, а Python-тесты её не видят:
     повторное `const` в шаблоне уже доходило до проверки. `node --check` — где есть node (CI)."""
     import shutil
@@ -1060,10 +1081,10 @@ def test_скрипт_шаблона_разбирается(path: Path, tmp_path
     node = shutil.which("node")
     if node is None:
         pytest.skip("node нет — синтаксис шаблона проверяет CI")
-    m = re.search(r"<script>(.*)</script>", path.read_text(), re.S)
-    assert m is not None
-    js = tmp_path / f"{path.stem}.js"
-    js.write_text(m.group(1))
+    parts = re.findall(r"<script>(.*?)</script>", path.read_text(), re.S)
+    assert parts
+    js = tmp_path / f"{path.name}.js"
+    js.write_text("\n".join(parts))
     out = subprocess.run([node, "--check", str(js)], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
 
@@ -1099,8 +1120,8 @@ async def test_неделя_те_же_числа_что_экран(name: str) ->
 
 # --- аудит 10.11: линтер шаблонов и гонка показа ---------------------------------------------
 
-@pytest.mark.parametrize("path", sorted(WIDGETS.glob("*.html")), ids=lambda p: p.name)
-def test_шаблон_вызовы_моста_в_try_и_полосы_не_минус(path: Path) -> None:
+@pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.name)
+def test_шаблон_вызовы_моста_в_try_и_полосы_не_минус(path: _Shipped) -> None:
     """`W.request`/`W.ready` — в `try` (исключение не оставит виджет «занятым», D-56); ширина
     полосы — не меньше нуля (отрицательная width невалидна → полоса во всю ширину); число и
     единица — через неразрывный пробел."""
@@ -1197,8 +1218,8 @@ def test_плитка_частого_граммы_не_отрываются() ->
     assert "T(x[1]).replace(' ','\\u00a0')" in template("frequent")
 
 
-@pytest.mark.parametrize("path", sorted(WIDGETS.glob("*.html")), ids=lambda p: p.name)
-def test_анимация_только_css_и_при_появлении(path: Path) -> None:
+@pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.name)
+def test_анимация_только_css_и_при_появлении(path: _Shipped) -> None:
     """D-64, D-70: анимация — когда виджет на экране (`isActive`, событие `activated`): Telegram
     создаёт виджет до показа, и анимация при создании доигрывала невидимо. Числа досчитывает rAF
     из `data-n`, в разметке сразу финальное (нет rAF — нет счёта). Низ пузыря стоит на месте при
@@ -1227,8 +1248,8 @@ def test_сегодня_тап_по_часу_не_меняет_высоту() ->
     assert "$('ls').innerHTML=hs.map(" in html
 
 
-@pytest.mark.parametrize("path", sorted(WIDGETS.glob("*.html")), ids=lambda p: p.name)
-def test_низ_под_значок_telegram(path: Path) -> None:
+@pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.name)
+def test_низ_под_значок_telegram(path: _Shipped) -> None:
     """В правом нижнем углу виджета Telegram рисует свой значок ↗ — он закрывал последнее число.
     Нижний отступ — не меньше 26 px."""
     assert "max(26px,env(safe-area-inset-bottom))" in path.read_text()
@@ -1251,3 +1272,21 @@ def test_неделя_листание_не_растит_виджет() -> None:
     html = template("week")
     assert "document.body.style.minHeight" not in html
     assert "const de=document.documentElement;WH=Math.max(WH,de.offsetHeight)" in html
+
+
+@pytest.mark.parametrize("hero", ["bars", "rings", "kcal", None])
+async def test_вид_панели_как_в_аппке(monkeypatch: pytest.MonkeyPatch, hero: str | None) -> None:
+    """AC-302, D-78: «📊 Сегодня» — та панель, что выбрана в аппке (`ui_prefs.hero`; нет или
+    мусор — «Два осталось»), третья ячейка подвала — `foot_third` (приёмов — группами FR-47)."""
+    from dataclasses import replace
+
+    monkeypatch.setattr(live, "enabled", lambda u, s=None: True)
+    user = replace(OWNER, ui_prefs={"hero": hero, "foot_third": "meals"})
+    bot = FakeBot()
+    meals = [_meal(datetime(2026, 11, 10, 2, 0, tzinfo=UTC), "Овсянка", 420),
+             _meal(datetime(2026, 11, 10, 6, 0, tzinfo=UTC), "Курица", 600)]
+    assert await live.show_today(bot, 351362942, user, FakeAssistant(meals))  # type: ignore[arg-type]
+    [sent] = bot.of(SendWidget)
+    assert sent.html == template("today", hero or "bars") and "<!--P-->" not in sent.html
+    assert json.loads(sent.chat_data)["f"] == ["Приёмов", 2]
+    assert ("function hero(){" in sent.html) and sent.html.count("function hero(){") == 1

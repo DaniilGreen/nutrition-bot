@@ -2344,7 +2344,18 @@
               '<div class="mic" style="margin:2px 0 8px 26px">' + esc(h[2]) + '</div>' +
               '<div class="prev">' + heroPreview(h[0]) + '</div></div>';
           }).join(''),
-          'Меняется только вид. Записи, цели и подсчёт не трогаются.') +
+          'Меняется только вид — здесь и в «📊 Сегодня» бота. Записи, цели и подсчёт не трогаются.') +
+
+        /* D-76, D-78: блок дня в карточке записи бота. Там же меняется тапом по блоку. */
+        group('Карточка записи в боте',
+          [['grid', 'Сеткой 2×2'], ['list', 'Столбиком, одно под другим']].map(function (o) {
+            var on = (p.card_macros || 'grid') === o[0];
+            return '<div class="pick' + (on ? ' on' : '') + '"' + pk(on) +
+              ' data-card="' + o[0] + '"><span class="dot"></span>' +
+              '<span style="flex-grow:1;font-size:var(--f-body-s)">' + esc(o[1]) +
+              '</span></div>';
+          }).join(''),
+          'Ккал, белок, жир и углеводы дня под записью. Тап по блоку в самой карточке — то же самое.') +
 
         group('Подвал панели',
           [['meals', 'Приёмов за день'], ['weight', 'Последний вес']].map(function (o) {
@@ -4449,6 +4460,9 @@
     }
     if (pick.dataset.hero) {
       return patch('/api/settings/prefs', { hero: pick.dataset.hero }, 'Вид панели изменён.');
+    }
+    if (pick.dataset.card) {
+      return patch('/api/settings/prefs', { card_macros: pick.dataset.card }, 'Карточка изменена.');
     }
     if (pick.dataset.foot) {
       return patch('/api/settings/prefs', { foot_third: pick.dataset.foot }, 'Подвал изменён.');

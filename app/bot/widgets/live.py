@@ -34,7 +34,7 @@ from app.bot.ui.widgets import today_data, weight_data
 from app.bot.widgets import template
 from app.bot.widgets.transport import AnswerWidgetQuery, EditMessageWidgetData, SendWidget
 from app.config import get_settings
-from app.domain.prefs import day_start
+from app.domain.prefs import day_start, sanitize
 from app.domain.timeframe import local_date
 
 logger = logging.getLogger(__name__)
@@ -112,7 +112,8 @@ async def build(assistant: Assistant, user: User, now: datetime | None = None) -
     streak = await assistant.streak(user)
     day = local_date(now, stats.timezone, start_h)
     weight = trend.logs[0].weight_kg if trend.logs else None
-    data = today_data(stats, goal, weight, streak, now, start_h)
+    data = today_data(stats, goal, weight, streak, now, start_h,
+                      foot=sanitize(user.ui_prefs)["foot_third"])
     return Built(day.isoformat(), data)
 
 
@@ -128,7 +129,8 @@ async def show_today(bot: Bot, chat_id: int, user: User, assistant: Assistant) -
             built = await build(assistant, user)
             msg = await bot(
                 SendWidget(
-                    chat_id=chat_id, html=template("today"), chat_data=built.data,
+                    chat_id=chat_id, html=template("today", sanitize(user.ui_prefs)["hero"]),
+                    chat_data=built.data,
                     allow_queries=True, reply_markup=open_in_app("day"),
                 )
             )

@@ -10,7 +10,7 @@ rich-экранов (MA-INV-1). Полный `gather()` виджету не ну
   sh  час начала суток человека
   g   цель [ккал, Б, Ж, У]                        e   съедено [ккал, Б, Ж, У]
   l   осталось [ккал, Б] (`Remaining`, со знаком)  pk  белок на кг веса (нет веса — нет ключа)
-  es  % ккал оценкой (≈, §3.5 MA)
+  f   третья ячейка подвала [подпись, значение]: «Вес» / «Приёмов» (`foot_third`, D-78)
   s   серия [дней, заморозка недели 0/1, покрыто дней, из скольких] (D-44, D-57) — «N из 30»
   h   [[индекс часа, ккал, записей]] — все часы с записями (никогда не режутся)
   it  [[индекс часа, «мм», имя, ккал, ≈ 0/1, граммы (0 — без веса), Б, Ж, У, id записи, id позиции
@@ -29,10 +29,10 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.application.entities import Meal
-from app.application.results import DailyStats
+from app.application.results import DailyStats, MealSession
 from app.bot.keyboards import weighable
 from app.bot.quick import Frequent, parse_op
-from app.bot.ui.context import DayContext, est_share
+from app.bot.ui.context import DayContext
 from app.bot.ui.kit import MON, WD, macros_rows, pct
 from app.bot.ui.screens import WeekView, week_hits
 from app.domain.goals import Goal, Remaining
@@ -64,9 +64,11 @@ def size(text: str) -> int:
 
 def today_data(
     stats: DailyStats, goal: Goal, weight_kg: float | None, streak: Streak | None,
-    now: datetime, start_h: int,
+    now: datetime, start_h: int, foot: str = "weight",
 ) -> str:
     """`chat_data` виджета «Сегодня» (FR-49.1). Всегда ≤ LIMIT байт.
+
+    `foot` — `ui_prefs.foot_third` (D-78): третья ячейка подвала, как в аппке.
 
     Данные — те же сервисы, что у rich-экрана (`assistant.today`, цель, вес, темп): одна правда
     (MA-INV-1). Полный `gather()` здесь не нужен — он считает неделю и месяц, а виджет
@@ -95,7 +97,9 @@ def today_data(
         "e": [round(c.kcal), round(c.protein), round(c.fat), round(c.carb)],
         # Остатки — тем же `Remaining`, что у rich-экрана и подписи: JS их не вычитает (W-INV-1).
         "l": [round(stats.remaining.kcal_left), round(stats.remaining.protein_left)],
-        "es": est_share(stats),
+        # Третья ячейка — как в аппке: вес, а без замеров — приёмов (группы FR-47, MA-INV-79).
+        "f": (["Вес", f"{weight_kg:.1f}".replace(".", ",")] if foot != "meals" and weight_kg
+              else ["Приёмов", len(MealSession.group(stats.meals))]),
         "h": [[h, round(k), int(n)] for h, (k, n) in sorted(hours.items())],
     }
     if weight_kg:

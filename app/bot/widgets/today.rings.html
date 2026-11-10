@@ -1,0 +1,6 @@
+<style>#hero{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px}#hero svg{width:88px;height:88px;flex:none;transform:rotate(-90deg)}.rw{flex:1 1 130px;min-width:0}.rw div{display:flex;gap:4px;align-items:baseline;padding:2px 0;font-size:13px}.rw span{flex:1;color:var(--m)}.rw s{text-decoration:none;color:var(--m);font-size:12px}.rw i{font-style:normal;font-weight:600}.ft:empty{display:none}.an .ar{animation:ar .9s ease-out both}@keyframes ar{from{stroke-dasharray:0 400}}@media (max-width:260px){.rw div{font-size:12px}.rw i{display:none}}</style>
+<script>
+function hero(){const g=D.g,e=D.e,CL=['--br','--pr','--fa','--ca'];
+$('hero').innerHTML='<svg viewBox="0 0 120 120">'+e.map((v,i)=>{const r=52-11*i,p=g[i]>0?Math.min(1,v/g[i]):0;return'<circle cx=60 cy=60 r='+r+' fill=none stroke="var(--tr)" stroke-width=9 /><circle class=ar cx=60 cy=60 r='+r+' fill=none stroke="var('+CL[i]+')" stroke-width=9 stroke-dasharray="'+(6.283*r*p).toFixed(1)+' 400"/>'}).join('')+'</svg><div class=rw>'+
+e.map((v,i)=>'<div><span>'+['Ккал','Белок','Жир','Углеводы'][i]+'</span><b>'+(i?v:NU(v))+'</b><s>/'+g[i]+'</s><i'+(!i&&v>g[0]?' style="color:var(--dg)"':'')+'>'+(g[i]>0?Math.round(v/g[i]*100):0)+'%</i></div>').join('')+'<div><span>'+D.f[0]+'</span><b>'+D.f[1]+'</b></div></div>';$('ft').innerHTML=''}
+</script>
