@@ -1,4 +1,6 @@
-"""Данные HTML-виджетов (FR-49): `chat_data` и подписи из того же `gather()`, что rich-экраны.
+"""Данные HTML-виджетов (FR-49): `chat_data` и подписи из тех же сервисов `Assistant`, что у
+rich-экранов (MA-INV-1). Полный `gather()` виджету не нужен: он считает неделю и месяц, а виджет
+дня пересобирается после каждого апдейта человека.
 
 Шаблон виджета статичен (`app/bot/widgets/<имя>.html`), всё конкретное — здесь, JSON ≤ 1024
 байт (W-INV-3). Числа посчитаны Python'ом (W-INV-1): JS их только рисует.
@@ -8,11 +10,11 @@
   sh  час начала суток человека                   hn  индекс текущего часа от `sh`
   g   цель [ккал, Б, Ж, У]                        e   съедено [ккал, Б, Ж, У]
   l   осталось [ккал, Б] (`Remaining`, со знаком)  pk  белок на кг веса (нет веса — нет ключа)
-  w   последний вес, кг (или нет ключа)           es  % ккал оценкой (≈, §3.5 MA)
-  s   серия [дней, заморозка недели 0/1] (D-44)   n   норма по часам от `sh` (нет — MA-INV-37)
-  h   [[индекс часа, ккал]] — все часы с записями (никогда не режутся)
-  it  [[индекс часа, «мм», имя, ккал, ≈ 0/1]] — записи, свежие первыми (режутся с хвоста)
-  x   сколько записей не влезло
+  es  % ккал оценкой (≈, §3.5 MA)                s   серия [дней, заморозка недели 0/1] (D-44)
+  n   норма по часам от `sh` (нет — MA-INV-37)    nk  «сейчас» кривой — `DayPace.today_kcal`
+  h   [[индекс часа, ккал, записей]] — все часы с записями (никогда не режутся)
+  it  [[индекс часа, «мм», имя, ккал, ≈ 0/1]] — записи, свежие первыми (режутся с хвоста);
+      записей часа в `h` больше, чем в `it`, — виджет пишет «ещё N — в приложении»
 """
 from __future__ import annotations
 
@@ -21,10 +23,9 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from aiogram.types import InlineKeyboardMarkup
-
-from app.application.entities import Meal, Product
+from app.application.entities import Meal
 from app.application.results import DailyStats, DayPace
+from app.bot.quick import Frequent, parse_op
 from app.bot.ui.context import est_share
 from app.bot.ui.kit import MON, WD
 from app.domain.goals import Goal
@@ -69,9 +70,11 @@ def today_data(
         return (dt.astimezone(tz).hour - start_h) % 24
 
     meals = sorted(stats.meals, key=lambda m: m.eaten_at, reverse=True)
-    hours: dict[int, float] = {}
+    hours: dict[int, list[float]] = {}  # час → [ккал, записей]
     for m in meals:
-        hours[idx(m.eaten_at)] = hours.get(idx(m.eaten_at), 0.0) + m.totals.kcal
+        hk = hours.setdefault(idx(m.eaten_at), [0.0, 0])
+        hk[0] += m.totals.kcal
+        hk[1] += 1
     base: dict[str, Any] = {
         "v": 1,
         "d": day.isoformat(),
@@ -84,15 +87,15 @@ def today_data(
         # Остатки — тем же `Remaining`, что у rich-экрана и подписи: JS их не вычитает (W-INV-1).
         "l": [round(stats.remaining.kcal_left), round(stats.remaining.protein_left)],
         "es": est_share(stats),
-        "h": [[h, round(k)] for h, k in sorted(hours.items())],
+        "h": [[h, round(k), int(n)] for h, (k, n) in sorted(hours.items())],
     }
     if weight_kg:
-        base["w"] = round(weight_kg, 1)
         base["pk"] = round(c.protein / weight_kg, 1)
     if streak is not None and streak.days > 0:
         base["s"] = [streak.days, int(streak.frozen)]
     if pace is not None and pace.norm:
         base["n"] = [round(v) for v in pace.norm]
+        base["nk"] = round(pace.today_kcal)  # W-INV-1: «сейчас» — не сумма округлённых часов в JS
 
     text = ""
     for limit in NAME_STEPS:
@@ -102,7 +105,7 @@ def today_data(
             for m in meals
         ]
         while True:
-            text = _dump({**base, "it": rows, "x": len(meals) - len(rows)})
+            text = _dump({**base, "it": rows})
             if size(text) <= LIMIT or not rows:
                 break
             rows = rows[:-1]  # выпадает самая старая запись; её час с суммой остаётся в `h`
@@ -110,7 +113,8 @@ def today_data(
             break
     if size(text) > LIMIT:  # ponytail: норма — первое, чем жертвуем (кривая не нарисуется)
         base.pop("n", None)
-        text = _dump({**base, "it": [], "x": len(meals)})
+        base.pop("nk", None)
+        text = _dump({**base, "it": []})
     return text
 
 
@@ -127,32 +131,24 @@ def today_caption(stats: DailyStats, g: Goal) -> str:
     )
 
 
-def frequent_data(
-    markup: InlineKeyboardMarkup, products: dict[int, Product], sets: dict[str, Meal]
-) -> str:
+def frequent_data(freq: Frequent) -> str:
     """`chat_data` виджета «⚡ Частое» (FR-49.2): ровно плитки клавиатуры FR-40 — тот же топ,
-    те же подписи и граммы, что у кнопок (`frequent_keyboard`), плюс ккал порции.
+    те же подписи и граммы (`frequent_tiles`, одна выборка `quick.frequent`), плюс ккал порции.
 
     Формат v1: {"v":1,"t":[[подпись, хвост, операция, ккал, ≈ 0/1], …]}; операция — `p:<id>:<г>`
     или `s:<ключ набора>`, она же уходит в запрос `w:<операция>:<ключ>`. Ккал продукта —
     граммы × запиннутая плотность (INV-2), набора — его записанный итог (INV-3)."""
     tiles = []
-    for row in markup.inline_keyboard:
-        for b in row:
-            op = (b.callback_data or "").split(":", 1)[-1]
-            label, _, tail = b.text.rpartition(" · ")
-            parts = op.split(":")
-            kcal, est = 0, 0
-            if parts[0] == "p" and len(parts) == 3:
-                prod = products.get(int(parts[1]))
-                if prod is not None:
-                    kcal = round(macros_for_grams(prod.density, float(parts[2])).kcal)
-                    est = int(prod.is_estimate)
-            elif parts[0] == "s" and len(parts) == 2 and parts[1] in sets:
-                m = sets[parts[1]]
-                kcal = round(m.totals.kcal)
-                est = int(any(i.is_estimate for i in m.items))
-            tiles.append([label.removeprefix("📌 "), tail, op, kcal, est])
+    for t in freq.tiles:
+        op = parse_op(t.op)
+        kcal, est = 0, 0
+        if isinstance(op, tuple) and (prod := freq.products.get(op[0])) is not None:
+            kcal = round(macros_for_grams(prod.density, op[1]).kcal)
+            est = int(prod.is_estimate)
+        elif isinstance(op, str) and (m := freq.sets.get(op)) is not None:
+            kcal = round(m.totals.kcal)
+            est = int(any(i.is_estimate for i in m.items))
+        tiles.append([t.label, t.tail, t.op, kcal, est])
     text = _dump({"v": 1, "t": tiles})
     while size(text) > LIMIT and tiles:  # ponytail: 8 плиток × короткие подписи влезают с запасом
         tiles.pop()

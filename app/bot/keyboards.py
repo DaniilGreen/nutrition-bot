@@ -7,6 +7,7 @@ import re
 from collections.abc import Sequence
 from datetime import date
 from functools import cache
+from typing import NamedTuple
 from zoneinfo import ZoneInfo
 
 from aiogram.types import (
@@ -285,45 +286,68 @@ def _freq_labels(names: Sequence[str]) -> list[str]:
     return out
 
 
-def frequent_keyboard(
+class FreqTile(NamedTuple):
+    """Одна плитка «⚡ Частое»: и кнопка FR-40, и плитка виджета FR-49.2 строятся из неё."""
+
+    label: str  # имя под 320 px (`_freq_labels`), без «📌 »
+    tail: str  # «180 г» у продукта, «420 ккал» у набора
+    op: str  # `p:<product_id>:<граммы>` / `s:<ключ набора>` — без префикса канала
+    is_set: bool
+
+
+def frequent_tiles(
     sets: Sequence[tuple[Meal, int]], frequent: Sequence[tuple[int | None, str, float, int]]
-) -> InlineKeyboardMarkup | None:
-    """FR-40: один рейтинг на всех — сколько раз ели за 30 дней; ≤ FREQ_MAX кнопок, наборов ≤
+) -> list[FreqTile]:
+    """FR-40: один рейтинг на всех — сколько раз ели за 30 дней; ≤ FREQ_MAX плиток, наборов ≤
     FREQ_SETS_MAX. Набор не стоит первым только потому, что он набор: «Частое» — про то, что ешь
     сейчас (поправка владельца 24.10.2026). При ничьей выше продукт — его порядок уже по свежести.
 
-    По одной кнопке в ряд: на 320 px две в ряд резали бы как раз число. Продукт без product_id
-    не показываем: записать его можно только моделью, а это уже не «один тап». Граммы — в
-    callback и после округления: записано будет ровно то, что на кнопке, и «0 г» не бывает.
-    None — показывать нечего; пустую клавиатуру не шлём.
+    Продукт без product_id не показываем: записать его можно только моделью, а это уже не
+    «один тап». Граммы — в операции и после округления: записано будет ровно то, что на
+    плитке, и «0 г» не бывает. Пусто — показывать нечего.
     """
     seen: set[str] = set()
-    entries: list[tuple[int, str, str, str]] = []  # (раз, имя, хвост кнопки, callback)
+    entries: list[tuple[int, str, str, str, bool]] = []  # (раз, имя, хвост, операция, набор)
     for pid, name, grams, times in frequent:
         g = round(grams, 1)
         if pid and 0 < g <= 5000:
-            entries.append((times, name, f"{g:g} г", f"{FREQ_PREFIX}:p:{pid}:{g:g}"))
+            entries.append((times, name, f"{g:g} г", f"p:{pid}:{g:g}", False))
     for m, times in sets:  # свежие первыми (Assistant.sets) — из «Курица»/«курица» берём свежий
         name = m.template_name or ""
         if name and name.casefold() not in seen:
             seen.add(name.casefold())
-            entries.append((times, "📌 " + name, f"{round(m.totals.kcal)} ккал",
-                            f"{FREQ_PREFIX}:s:{set_key(name)}"))
+            entries.append((times, name, f"{round(m.totals.kcal)} ккал", f"s:{set_key(name)}",
+                            True))
     entries.sort(key=lambda e: -e[0])  # устойчиво: при ничьей продукт выше набора
-    picked: list[tuple[int, str, str, str]] = []
+    picked: list[tuple[int, str, str, str, bool]] = []
     for e in entries:
-        if e[1].startswith("📌 ") and sum(p[1].startswith("📌 ") for p in picked) == FREQ_SETS_MAX:
+        if e[4] and sum(p[4] for p in picked) == FREQ_SETS_MAX:
             continue
         picked.append(e)
         if len(picked) == FREQ_MAX:
             break
-    if not picked:
+    labels = _freq_labels([n for _, n, _, _, _ in picked])
+    return [
+        FreqTile(label, tail, op, is_set)
+        for (_, _, tail, op, is_set), label in zip(picked, labels, strict=True)
+    ]
+
+
+def frequent_keyboard(
+    sets: Sequence[tuple[Meal, int]], frequent: Sequence[tuple[int | None, str, float, int]]
+) -> InlineKeyboardMarkup | None:
+    return tiles_keyboard(frequent_tiles(sets, frequent))
+
+
+def tiles_keyboard(tiles: Sequence[FreqTile]) -> InlineKeyboardMarkup | None:
+    """FR-40 кнопками: по одной в ряд — на 320 px две в ряд резали бы как раз число.
+    None — показывать нечего; пустую клавиатуру не шлём."""
+    if not tiles:
         return None
     builder = InlineKeyboardBuilder()
-    names = [n.removeprefix("📌 ") for _, n, _, _ in picked]
-    for (_, name, tail, data), label in zip(picked, _freq_labels(names), strict=True):
-        pin = "📌 " if name.startswith("📌 ") else ""
-        builder.button(text=f"{pin}{label} · {tail}", callback_data=data)
+    for t in tiles:
+        builder.button(text=f"{'📌 ' if t.is_set else ''}{t.label} · {t.tail}",
+                       callback_data=f"{FREQ_PREFIX}:{t.op}")
     builder.adjust(1)
     return builder.as_markup()
 

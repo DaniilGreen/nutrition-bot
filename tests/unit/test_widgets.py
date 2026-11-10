@@ -17,6 +17,7 @@ import pytest
 
 from app.application.entities import Meal, MealItem, User, WeightLog
 from app.application.results import DailyStats, DayPace, WeightTrend
+from app.bot.middlewares import WidgetQueryMiddleware
 from app.bot.ui.widgets import LIMIT, today_caption, today_data
 from app.bot.widgets import live, template
 from app.bot.widgets.transport import AnswerWidgetQuery, EditMessageWidgetData, SendWidget
@@ -93,13 +94,15 @@ def test_шаблон_в_профиле_1(path: Path) -> None:
 
 
 def test_данные_худшего_дня_в_бюджете() -> None:
-    """AC-269: 20 записей, имена по 99 символов — ≤ 1024 байт, все часы на месте, «ещё N»."""
+    """AC-269: 20 записей, имена по 99 символов — ≤ 1024 байт, все часы на месте, «ещё N»:
+    записей в часах больше, чем в ленте, — виджет пишет «ещё N — в приложении»."""
     meals = _worst_day()
     text = today_data(_stats(meals), GOAL, 91.5, PACE, Streak(12, True), NOW, 4)
     assert len(text.encode()) <= LIMIT
     d = json.loads(text)
-    assert d["x"] > 0 and len(d["it"]) + d["x"] == 20
-    assert abs(sum(k for _, k in d["h"]) - sum(m.totals.kcal for m in meals)) <= len(d["h"])
+    assert sum(n for _, _, n in d["h"]) == 20 and len(d["it"]) < 20
+    assert abs(sum(k for _, k, _ in d["h"]) - sum(m.totals.kcal for m in meals)) <= len(d["h"])
+    assert "x" not in d and "w" not in d  # мёртвые ключи не возвращаются
     assert "n" in d and len(d["n"]) == 24
     assert all(len(row[2]) <= 22 for row in d["it"])
 
@@ -115,17 +118,18 @@ def test_данные_обычного_дня() -> None:
     assert d["hn"] == 10  # 14:00 − начало суток 4:00
     assert d["g"] == [2200, 183, 80, 200] and d["e"][0] == 1120
     assert d["es"] == 38  # 420 из 1120 — оценкой
-    assert d["h"] == [[5, 420], [9, 700]]
+    assert d["h"] == [[5, 420, 1], [9, 700, 1]]
+    assert d["nk"] == 990  # «сейчас» кривой — число Python (`DayPace.today_kcal`), W-INV-1
     assert d["it"][0] == [9, "05", "Курица", 700, 0]  # свежие первыми
     assert d["it"][1] == [5, "12", "Овсянка", 420, 1]
-    assert d["s"] == [3, 0] and d["w"] == 91.5 and d["x"] == 0
+    assert d["s"] == [3, 0] and d["pk"] == round(d["e"][1] / 91.5, 1)
 
 
 def test_без_нормы_нет_кривой_и_серии() -> None:
     """MA-INV-37: нет пяти дошедших дней — `n` нет; серия 0 — пилюли нет."""
     empty = DayPace(show=False, hour=9, norm_kcal=0, today_kcal=0, days_used=2)
     d = json.loads(today_data(_stats([]), GOAL, None, empty, Streak(0, False), NOW, 4))
-    assert "n" not in d and "s" not in d and "w" not in d and d["it"] == [] and d["h"] == []
+    assert "n" not in d and "s" not in d and "pk" not in d and d["it"] == [] and d["h"] == []
 
 
 def test_подпись() -> None:
@@ -216,9 +220,21 @@ class FakeAssistant:
         return list(reversed(rows)), GOAL
 
 
+def _open(assistant: object):  # noqa: ANN202
+    """Открывалка сессии для `live.push`: в тестах — сразу готовый фейковый ассистент."""
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def open_():  # noqa: ANN202
+        yield assistant
+
+    return open_
+
+
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch: pytest.MonkeyPatch) -> None:
     live._LIVE.clear()
+    live._LOCKS.clear()  # замок привязывается к циклу событий, а у каждого теста он свой
     real = live.build
 
     async def fixed(assistant, user, now=None):  # noqa: ANN001, ANN202
@@ -266,10 +282,10 @@ async def test_пуш_после_записи_и_тишина_без_измен�
     bot = FakeBot()
     a = FakeAssistant([_meal(datetime(2026, 11, 10, 2, 0, tzinfo=UTC), "Овсянка", 420)])
     await live.show_today(bot, 351362942, OWNER, a)  # type: ignore[arg-type]
-    await live.push(bot, OWNER, a)  # type: ignore[arg-type]
+    await live.push(bot, OWNER, _open(a))  # type: ignore[arg-type]
     assert not bot.of(EditMessageWidgetData) and not bot.captions
     a.meals.append(_meal(datetime(2026, 11, 10, 6, 0, tzinfo=UTC), "Курица", 700))
-    await live.push(bot, OWNER, a)  # type: ignore[arg-type]
+    await live.push(bot, OWNER, _open(a))  # type: ignore[arg-type]
     edit = bot.of(EditMessageWidgetData)
     assert len(edit) == 1 and json.loads(edit[0].chat_data)["e"][0] == 1120
     assert edit[0].message_id == live._LIVE[351362942].message_id
@@ -311,7 +327,7 @@ async def test_пропавший_виджет_забывается(monkeypatch:
 
     monkeypatch.setattr(FakeBot, "__call__", lambda self, m: gone(m))
     a.meals.append(_meal(datetime(2026, 11, 10, 6, 0, tzinfo=UTC), "Курица", 700))
-    await live.push(bot, OWNER, a)  # type: ignore[arg-type]
+    await live.push(bot, OWNER, _open(a))  # type: ignore[arg-type]
     assert not live.watching(OWNER)
 
 
@@ -410,7 +426,7 @@ async def test_middleware_ловит_widget_query() -> None:
         seen.append(event)
         return "routed"
 
-    mw = live.WidgetQueryMiddleware(container=None)  # type: ignore[arg-type]
+    mw = WidgetQueryMiddleware(container=None)  # type: ignore[arg-type]
     bot = FakeBot()
     upd = Update.model_validate({"update_id": 1, "widget_query": _q("bad")})
     assert await mw(handler, upd, {"bot": bot}) is None and not seen
@@ -424,7 +440,8 @@ async def test_middleware_ловит_widget_query() -> None:
 def test_данные_частого_те_же_плитки_что_кнопки() -> None:
     """MA-INV-1: плитки — ровно кнопки FR-40; ккал — граммы × запиннутая плотность (INV-1)."""
     from app.application.entities import Product
-    from app.bot.keyboards import frequent_keyboard, set_key
+    from app.bot.keyboards import frequent_tiles, set_key, tiles_keyboard
+    from app.bot.quick import Frequent
     from app.bot.ui.widgets import frequent_data
     from app.domain.value_objects import Density
 
@@ -432,9 +449,11 @@ def test_данные_частого_те_же_плитки_что_кнопки(
                      density=Density(121, 17, 5, 3))
     s = _meal(NOW, "Курица", 420, est=True)
     s.template_name = "Обед"
-    markup = frequent_keyboard([(s, 5)], [(12, "Творог 5%", 180.0, 9)])
-    assert markup is not None
-    d = json.loads(frequent_data(markup, {12: tvorog}, {set_key("Обед"): s}))
+    tiles = frequent_tiles([(s, 5)], [(12, "Творог 5%", 180.0, 9)])
+    markup = tiles_keyboard(tiles)
+    assert markup is not None and [b.callback_data for r in markup.inline_keyboard for b in r] == [
+        f"fq:{t.op}" for t in tiles]  # кнопки и плитки — из одного списка
+    d = json.loads(frequent_data(Frequent(tiles, {12: tvorog}, {set_key("Обед"): s})))
     assert d["t"][0] == ["Творог 5%", "180 г", "p:12:180", 218, 0]  # 121 × 1.8 = 217.8
     assert d["t"][1] == ["Обед", "420 ккал", f"s:{set_key('Обед')}", 420, 1]
     assert len(json.dumps(d, ensure_ascii=False).encode()) <= LIMIT
@@ -442,9 +461,9 @@ def test_данные_частого_те_же_плитки_что_кнопки(
 
 @pytest.fixture
 def freq(monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
-    """Запись «Частого» без БД: `_log_frequent` подменён, запоминаем, что он получил."""
+    """Запись «Частого» без БД: `quick.log_frequent` подменён, запоминаем, что он получил."""
     from app.application.results import MealLogged
-    from app.bot import handlers
+    from app.bot import quick
     from app.bot.widgets import frequent
 
     frequent._done.clear()
@@ -461,7 +480,7 @@ def freq(monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
         meals[meal.id] = meal
         return MealLogged(meal=meal, remaining=remaining(meal.totals, GOAL))
 
-    monkeypatch.setattr(handlers, "_log_frequent", fake_log)
+    monkeypatch.setattr(quick, "log_frequent", fake_log)
     return frequent, calls, meals
 
 
@@ -479,7 +498,7 @@ async def test_частое_пишет_один_раз_на_тап(freq) -> None
     a = FakeAssistant([])
     w = frequent.on_write
     r = await _run(w, 1, "w:p:12:180:k3x9a1", OWNER, a)
-    assert r["ok"] == 1 and r["k"] == 218 and r["l"] == 2200 - 218 and calls == ["fq:p:12:180"]
+    assert r["ok"] == 1 and r["k"] == 218 and r["l"] == 2200 - 218 and calls == ["p:12:180"]
     assert await _run(w, 1, "w:p:12:180:k3x9a1", OWNER, a) == r and len(calls) == 1  # W-INV-5
     assert (await _run(w, 1, "w:p:12:180:zz11yy", OWNER, a))["ok"] == 1 and len(calls) == 2
     for bad in ("w:p:12:0:abcd", "w:p:12:9999:abcd", "w:p:x:1:abcd", "w:p:12:180",
@@ -573,7 +592,7 @@ async def test_маршрут_пишущего_запроса(freq, monkeypatch:
     monkeypatch.setattr(live, "push", fake_push)
     from aiogram.types import Update
 
-    mw = live.WidgetQueryMiddleware(container)  # type: ignore[arg-type]
+    mw = WidgetQueryMiddleware(container)  # type: ignore[arg-type]
     bot = FakeBot()
 
     async def handler(event: object, data: dict) -> None:
@@ -582,7 +601,7 @@ async def test_маршрут_пишущего_запроса(freq, monkeypatch:
     upd = Update.model_validate({"update_id": 3, "widget_query": _q("w:p:12:180:abcd")})
     await mw(handler, upd, {"bot": bot})
     assert json.loads(bot.of(AnswerWidgetQuery)[-1].data)["ok"] == 1
-    assert committed == [True] and pushed == [351362942] and calls == ["fq:p:12:180"]
+    assert committed == [True] and pushed == [351362942] and calls == ["p:12:180"]
     other = _q("w:p:12:180:efgh", **{"from": {"id": 357309245}},
                chat={"id": 357309245, "type": "private"})
     await mw(handler, Update.model_validate({"update_id": 4, "widget_query": other}), {"bot": bot})
@@ -643,3 +662,307 @@ async def test_вес_виджет_или_png(monkeypatch: pytest.MonkeyPatch) -
     assert sent.html == template("weight") and sent.caption == "⚖️ 85,1 кг · за период −0,9 кг"
     assert not await live.show_weight(FakeBot(fail=True), 1, pts, TZ, "cut")  # type: ignore[arg-type]
     assert not await live.show_weight(bot, 1, pts[:1], TZ, "cut")  # type: ignore[arg-type]
+
+
+# --- ревью 10.11: гонка, подпись, смена дня, сбой запроса, хуки (Step 1) ---------------------
+
+class _GoneOnCaption(FakeBot):
+    """Данные принимаются, подпись — «сообщение не найдено» (бывает у фолбэк-подписи)."""
+
+    async def edit_message_caption(self, **kw: object) -> None:
+        from aiogram.exceptions import TelegramBadRequest
+
+        raise TelegramBadRequest(method=None, message="Bad Request: message to edit not found")  # type: ignore[arg-type]
+
+
+async def test_подпись_упала_данные_приняты_пуш_живой(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ошибка правки подписи не выдаёт виджет за пропавший: данные легли — пуш не замолкает."""
+    monkeypatch.setattr(live, "enabled", lambda u, s=None: True)
+    bot = _GoneOnCaption()
+    a = FakeAssistant([])
+    await live.show_today(bot, 351362942, OWNER, a)  # type: ignore[arg-type]
+    a.meals.append(_meal(datetime(2026, 11, 10, 6, 0, tzinfo=UTC), "Курица", 700))
+    await live.push(bot, OWNER, _open(a))  # type: ignore[arg-type]
+    assert live.watching(OWNER) and len(bot.of(EditMessageWidgetData)) == 1
+    assert live._LIVE[351362942].caption.startswith("📊 Сегодня: пока пусто")  # повторим позже
+
+
+async def test_not_modified_не_ошибка(monkeypatch: pytest.MonkeyPatch) -> None:
+    """«message is not modified» у данных и у подписи — запоминаем нарисованное, виджет живой."""
+    from aiogram.exceptions import TelegramBadRequest
+
+    monkeypatch.setattr(live, "enabled", lambda u, s=None: True)
+
+    class Same(FakeBot):
+        async def __call__(self, method: object) -> object:
+            if isinstance(method, EditMessageWidgetData):
+                self.calls.append(method)
+                raise TelegramBadRequest(  # type: ignore[arg-type]
+                    method=method, message="Bad Request: message is not modified")
+            return await super().__call__(method)
+
+        async def edit_message_caption(self, **kw: object) -> None:
+            self.captions.append(str(kw["caption"]))
+            raise TelegramBadRequest(method=None, message="Bad Request: message is not modified")  # type: ignore[arg-type]
+
+    bot = Same()
+    a = FakeAssistant([])
+    await live.show_today(bot, 351362942, OWNER, a)  # type: ignore[arg-type]
+    a.meals.append(_meal(datetime(2026, 11, 10, 6, 0, tzinfo=UTC), "Курица", 700))
+    await live.push(bot, OWNER, _open(a))  # type: ignore[arg-type]
+    state = live._LIVE[351362942]
+    assert "700 из 2200" in state.caption and json.loads(state.key)["e"][0] == 700
+    await live.push(bot, OWNER, _open(a))  # ничего не изменилось — правок больше нет
+    assert len(bot.of(EditMessageWidgetData)) == 1 and len(bot.captions) == 1
+
+
+async def test_гонка_пушей_старые_цифры_не_ложатся_поверх(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Два апдейта задачами: первый собрал данные ДО записи и застрял, второй — после. Без замка
+    первый правил бы последним и вернул старые цифры; под замком последней ложится свежая."""
+    import asyncio
+
+    monkeypatch.setattr(live, "enabled", lambda u, s=None: True)
+    bot = FakeBot()
+    gate = asyncio.Event()
+
+    class Slow(FakeAssistant):
+        calls = 0
+
+        async def today(self, user: User) -> DailyStats:
+            self.calls += 1
+            snap = _stats(list(self.meals))  # снимок базы на момент чтения
+            if self.calls == 2:  # первая сборка пуша (1-я — показ)
+                await gate.wait()
+            return snap
+
+    a = Slow([])
+    await live.show_today(bot, 351362942, OWNER, a)  # type: ignore[arg-type]
+    a.meals.append(_meal(datetime(2026, 11, 10, 6, 0, tzinfo=UTC), "Курица", 700))
+    first = asyncio.create_task(live.push(bot, OWNER, _open(a)))  # type: ignore[arg-type]
+    await asyncio.sleep(0)
+    a.meals.append(_meal(datetime(2026, 11, 10, 6, 30, tzinfo=UTC), "Рис", 300))
+    second = asyncio.create_task(live.push(bot, OWNER, _open(a)))  # type: ignore[arg-type]
+    await asyncio.sleep(0)
+    gate.set()
+    await asyncio.gather(first, second)
+    edits = bot.of(EditMessageWidgetData)
+    assert json.loads(edits[-1].chat_data)["e"][0] == 1000
+
+
+async def test_новый_день_вчерашний_виджет_забыт(monkeypatch: pytest.MonkeyPatch) -> None:
+    """После полуночи вчерашний виджет — снимок: пуш его забывает, а не собирает день впустую."""
+    monkeypatch.setattr(live, "enabled", lambda u, s=None: True)
+    bot = FakeBot()
+    a = FakeAssistant([])
+    await live.show_today(bot, 351362942, OWNER, a)  # type: ignore[arg-type]
+    live._LIVE[351362942].day = "2026-11-09"
+    await live.push(bot, OWNER, _open(a))  # type: ignore[arg-type]
+    assert not live.watching(OWNER) and not bot.of(EditMessageWidgetData)
+
+
+def _container(fail: bool = False, assistant: object | None = None) -> SimpleNamespace:
+    from contextlib import asynccontextmanager
+
+    class Session:
+        async def commit(self) -> None: ...
+        async def rollback(self) -> None: ...
+
+    class Users:
+        async def get_or_create(self, **kw: object) -> User:
+            if fail:
+                raise RuntimeError("db down")
+            return OWNER
+
+    @asynccontextmanager
+    async def factory():  # noqa: ANN202
+        yield Session()
+
+    return SimpleNamespace(
+        db=SimpleNamespace(session_factory=factory),
+        assistant_for=lambda s: (assistant or FakeAssistant([]), Users()),
+        body_scans_for=lambda s: None,
+        settings=SimpleNamespace(default_timezone=TZ),
+    )
+
+
+async def test_запрос_дня_сбой_бд_всё_равно_ответ(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`t:` при упавшем get_or_create — ответ `err:fail`, а не 15 с тишины (TIMEOUT)."""
+    from aiogram.types import Update
+
+    monkeypatch.setattr(live, "enabled", lambda u, s=None: True)
+    bot = FakeBot()
+    mw = WidgetQueryMiddleware(_container(fail=True))  # type: ignore[arg-type]
+    upd = Update.model_validate({"update_id": 9, "widget_query": _q()})
+    await mw(lambda e, d: None, upd, {"bot": bot})  # type: ignore[arg-type]
+    assert json.loads(bot.of(AnswerWidgetQuery)[0].data) == {"err": "fail"}
+    ok = WidgetQueryMiddleware(_container())  # type: ignore[arg-type]
+    await ok(lambda e, d: None, Update.model_validate({"update_id": 10, "widget_query": _q()}),  # type: ignore[arg-type]
+             {"bot": bot})
+    assert json.loads(bot.of(AnswerWidgetQuery)[1].data)["v"] == 1
+    assert len(bot.of(EditMessageWidgetData)) == 1  # после рестарта: выучил id и поправил
+
+
+async def test_хук_пуша_в_middleware(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ServicesMiddleware: после апдейта — пуш; хендлер сам показал «Сегодня» — пуша нет."""
+    from app.bot.middlewares import ServicesMiddleware
+
+    monkeypatch.setattr(live, "enabled", lambda u, s=None: True)
+    pushed: list[int] = []
+
+    async def fake_push(bot: object, user: User, opener: object) -> None:
+        pushed.append(user.telegram_id)
+
+    monkeypatch.setattr(live, "push", fake_push)
+    mw = ServicesMiddleware(_container())  # type: ignore[arg-type]
+    tg = SimpleNamespace(id=OWNER.telegram_id, full_name="D", language_code="ru")
+    data = {"event_from_user": tg, "bot": FakeBot()}
+
+    async def plain(event: object, d: dict) -> str:
+        return "ok"
+
+    assert await mw(plain, object(), dict(data)) == "ok" and pushed == []  # виджета нет
+    live._LIVE[OWNER.telegram_id] = live._Live("2026-11-10", 5, "", "")
+    await mw(plain, object(), dict(data))
+    assert pushed == [OWNER.telegram_id]
+
+    async def shows(event: object, d: dict) -> None:
+        await live.show_today(d["bot"], OWNER.telegram_id, OWNER, FakeAssistant([]))  # type: ignore[arg-type]
+
+    await mw(shows, object(), dict(data))
+    assert pushed == [OWNER.telegram_id]  # показал сам — без второй сборки
+
+
+async def test_частое_вернуть_чужой_виджет_и_пропавшая_запись(freq) -> None:  # noqa: ANN001
+    """«Вернуть» — только из того виджета, что записал (FR-49.2); записи нет — `gone`."""
+    frequent, _, meals = freq
+    a = FakeAssistant([])
+
+    async def get_meal(user: User, meal_id: int) -> Meal | None:
+        return meals.get(meal_id)
+
+    a.get_meal = get_meal  # type: ignore[attr-defined]
+    r = await _run(frequent.on_write, 1, "w:p:12:180:mmmm", OWNER, a)
+    other = await frequent.on_undo(1, 8, f"u:{r['m']}:nnnn", OWNER, a)  # другой виджет
+    assert other.reply == {"err": "bad"}
+    meals.pop(r["m"])  # удалили в «Сегодня» / аппке
+    assert (await _run(frequent.on_undo, 1, f"u:{r['m']}:oooo", OWNER, a)) == {"err": "gone"}
+
+
+class _FreqAssistant(FakeAssistant):
+    def __init__(self, products: list) -> None:  # noqa: ANN001
+        super().__init__([])
+        self.products = {p.id: p for p in products}
+
+    async def recent_sets(self, user: User, days: int = 30) -> list:
+        return []
+
+    async def frequent(self, user: User, *, days: int = 30, limit: int = 10) -> list:
+        return [(p.id, p.display_name, 180.0, 5) for p in self.products.values()]
+
+    async def get_product(self, pid: int):  # noqa: ANN201
+        return self.products.get(pid)
+
+
+async def test_частое_виджет_и_фолбэк_на_клавиатуру(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FR-49.2: с флагом — виджет без клавиатуры; виджет не ушёл или пусто — прежние кнопки."""
+    from unittest.mock import AsyncMock
+
+    from app.application.entities import Product
+    from app.bot import handlers
+    from app.bot.widgets import frequent
+    from app.domain.value_objects import Density
+
+    long = Product(canonical_key="p", display_name="Протеиновый батончик шоколадный с орехами",
+                   id=3, is_estimate=True, density=Density(400, 30, 15, 35))
+    a = _FreqAssistant([long])
+    bot = FakeBot()
+    assert await frequent.show(bot, 1, OWNER, a)  # type: ignore[arg-type]
+    d = json.loads(bot.of(SendWidget)[0].chat_data)
+    assert d["t"][0][2] == "p:3:180" and d["t"][0][3] == 720 and d["t"][0][4] == 1
+    assert not await frequent.show(FakeBot(fail=True), 1, OWNER, a)  # type: ignore[arg-type]
+    assert not await frequent.show(FakeBot(), 1, OWNER, _FreqAssistant([]))  # type: ignore[arg-type]
+
+    monkeypatch.setattr(handlers.widgets_live, "enabled", lambda u, s=None: True)
+    msg = AsyncMock()
+    msg.chat = SimpleNamespace(id=1)
+    msg.bot = FakeBot()
+    await handlers.btn_frequent(msg, OWNER, a, AsyncMock())  # type: ignore[arg-type]
+    assert not msg.answer.await_count and msg.bot.of(SendWidget)
+    msg.bot = FakeBot(fail=True)
+    await handlers.btn_frequent(msg, OWNER, a, AsyncMock())  # type: ignore[arg-type]
+    kb = msg.answer.await_args.kwargs["reply_markup"]
+    assert [b.callback_data for r in kb.inline_keyboard for b in r] == ["fq:p:3:180"]
+
+
+async def test_вес_хендлеры_виджет_или_png(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FR-49.3: «⚖️ Вес» и запись веса — с флагом виджет без PNG; виджет не ушёл — PNG."""
+    from unittest.mock import AsyncMock
+
+    from app.application.results import WeightLogged
+    from app.bot import handlers
+
+    t0 = datetime(2026, 10, 1, 1, 0, tzinfo=UTC)
+    pts = [(t0 + timedelta(days=i), 86.0 - 0.1 * i) for i in range(5)]
+    ctx = SimpleNamespace(weight_points=pts, weight=SimpleNamespace(timezone=TZ),
+                          goal=SimpleNamespace(target="cut"))
+
+    async def fake_gather(assistant: object, user: object, scans: object = None) -> object:
+        return ctx
+
+    async def fake_rich(message: object, html: str, markup: object = None) -> None: ...
+
+    monkeypatch.setattr(handlers, "gather", fake_gather)
+    monkeypatch.setattr(handlers, "_rich", fake_rich)
+    monkeypatch.setattr(handlers.screens, "weight", lambda c: "RICH")
+    monkeypatch.setattr(handlers, "render_weight_chart", lambda *a, **k: b"png")
+    monkeypatch.setattr(handlers.widgets_live, "enabled", lambda u, s=None: True)
+    sent: list[bool] = [True]
+
+    async def show(*a: object) -> bool:
+        return sent[0]
+
+    monkeypatch.setattr(handlers.widgets_live, "show_weight", show)
+    msg = AsyncMock()
+    msg.chat = SimpleNamespace(id=1)
+    await handlers._show_weight(msg, OWNER, None)  # type: ignore[arg-type]
+    assert not msg.answer_photo.await_count
+    sent[0] = False
+    await handlers._show_weight(msg, OWNER, None)  # type: ignore[arg-type]
+    assert msg.answer_photo.await_count == 1
+
+    class A:
+        async def weight_trend(self, user: User, limit: int = 14) -> WeightTrend:
+            return WeightTrend([WeightLog(1, t, w) for t, w in reversed(pts)], TZ)
+
+        async def current_goal(self, user: User) -> Goal:
+            return GOAL
+
+    logged = WeightLogged(WeightLog(1, NOW, 85.6), -0.1)
+    sent[0] = True
+    await handlers._maybe_weight_chart(msg, OWNER, A(), logged)  # type: ignore[arg-type]
+    assert msg.answer_photo.await_count == 1
+    sent[0] = False
+    await handlers._maybe_weight_chart(msg, OWNER, A(), logged)  # type: ignore[arg-type]
+    assert msg.answer_photo.await_count == 2
+
+
+async def test_ответ_на_t_не_ждёт_замка(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Медленная правка чужого апдейта держит замок — ответ виджету уходит не дожидаясь (15 с)."""
+    import asyncio
+
+    from aiogram.types import Update
+
+    monkeypatch.setattr(live, "enabled", lambda u, s=None: True)
+    bot = FakeBot()
+    mw = WidgetQueryMiddleware(_container())  # type: ignore[arg-type]
+    held = live.lock(OWNER.telegram_id)
+    await held.acquire()
+    upd = Update.model_validate({"update_id": 11, "widget_query": _q()})
+    task = asyncio.create_task(mw(lambda e, d: None, upd, {"bot": bot}))  # type: ignore[arg-type]
+    await asyncio.sleep(0.05)
+    assert json.loads(bot.of(AnswerWidgetQuery)[0].data)["v"] == 1 and not task.done()
+    held.release()
+    await task
+    assert len(bot.of(EditMessageWidgetData)) == 1  # правка — после, под замком

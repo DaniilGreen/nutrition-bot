@@ -12,18 +12,19 @@ ponytail: какой виджет «живой» — помним в памят�
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable
-from contextlib import suppress
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from aiogram import BaseMiddleware, Bot
+from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import TelegramObject, Update
 
 from app.application.assistant import Assistant
 from app.application.entities import User
@@ -36,9 +37,6 @@ from app.domain.prefs import day_start
 from app.domain.streak import logged_streak
 from app.domain.timeframe import local_date
 from app.domain.weight_change import kg as wkg
-
-if TYPE_CHECKING:
-    from app.container import Container
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +56,29 @@ class _Live:
 
 
 _LIVE: dict[int, _Live] = {}  # telegram id (= id личного чата) → виджет дня
+_LOCKS: dict[int, asyncio.Lock] = {}
+# Показал ли «Сегодня» текущий апдейт: тогда пуш после него — лишняя сборка того же самого.
+# В контексте лежит изменяемая метка: её видно и через копию контекста.
+_SHOWN: ContextVar[list[bool] | None] = ContextVar("widget_shown", default=None)
+
+
+def lock(uid: int) -> asyncio.Lock:
+    """Замок человека: сборка данных дня и правка виджета — одна операция (гонка пушей).
+
+    Порядок захвата: хендлер держит свою сессию БД и ждёт замка (`show_today`), пуш держит замок
+    и открывает сессию. Взаимной блокировки нет, пока пул соединений больше числа людей, которые
+    пишут одновременно (пул 5 + 10, людей двое); ponytail: при росте — собирать до замка."""
+    return _LOCKS.setdefault(uid, asyncio.Lock())
+
+
+def begin_update() -> list[bool]:
+    """Метка апдейта: middleware ставит её до хендлера, `show_today` отмечает показ.
+
+    Контракт: `show_today` — последнее, что хендлер делает с днём. Хендлер, который пишет ПОСЛЕ
+    показа, оставит виджет со старыми цифрами до следующего апдейта (пуш этого апдейта пропущен)."""
+    mark = [False]
+    _SHOWN.set(mark)
+    return mark
 
 
 def enabled(user: User, spec: str | None = None) -> bool:
@@ -105,22 +126,28 @@ async def show_today(bot: Bot, chat_id: int, user: User, assistant: Assistant) -
     """Отправить виджет дня. False — не вышло, вызывающий шлёт rich-экран (W-INV-2, AC-272).
 
     Тот же день уже показан — новый виджет внизу, прежний удаляется (D-47)."""
-    try:
-        built = await build(assistant, user)
-        msg = await bot(
-            SendWidget(
-                chat_id=chat_id, html=template("today"), chat_data=built.data,
-                caption=built.caption, allow_queries=True, reply_markup=open_in_app("day"),
+    async with lock(user.telegram_id):
+        try:
+            built = await build(assistant, user)
+            msg = await bot(
+                SendWidget(
+                    chat_id=chat_id, html=template("today"), chat_data=built.data,
+                    caption=built.caption, allow_queries=True, reply_markup=open_in_app("day"),
+                )
             )
+        except Exception as exc:  # noqa: BLE001 — любой сбой виджета не должен оставить без «Сегодня»
+            logger.warning("widget: sendWidget не прошёл (%s) — фолбэк на rich", exc)
+            return False
+        old = _LIVE.get(user.telegram_id)
+        _LIVE[user.telegram_id] = _Live(
+            built.day, msg.message_id, _key(built.data), built.caption
         )
-    except Exception as exc:  # noqa: BLE001 — любой сбой виджета не должен оставить без «Сегодня»
-        logger.warning("widget: sendWidget не прошёл (%s) — фолбэк на rich", exc)
-        return False
-    old = _LIVE.get(user.telegram_id)
-    _LIVE[user.telegram_id] = _Live(built.day, msg.message_id, _key(built.data), built.caption)
-    if old is not None and old.day == built.day and old.message_id != msg.message_id:
-        with suppress(Exception):
-            await bot.delete_message(chat_id, old.message_id)
+        mark = _SHOWN.get()
+        if mark is not None:
+            mark[0] = True
+        if old is not None and old.day == built.day and old.message_id != msg.message_id:
+            with suppress(Exception):
+                await bot.delete_message(chat_id, old.message_id)
     return True
 
 
@@ -146,7 +173,10 @@ async def show_weight(
 
 
 async def _apply(bot: Bot, chat_id: int, live: _Live, built: Built) -> None:
-    """Правка данных и подписи живого виджета; «not modified» — не ошибка."""
+    """Правка данных и подписи живого виджета; «not modified» — не ошибка.
+
+    Данные и подпись — раздельно: подпись — фолбэк (W-INV-2), её сбой не должен выдать виджет за
+    пропавший — тогда пуш замолчал бы, хотя данные только что приняты."""
     key = _key(built.data)
     if key != live.key:
         try:
@@ -165,7 +195,11 @@ async def _apply(bot: Bot, chat_id: int, live: _Live, built: Built) -> None:
             )
         except TelegramBadRequest as exc:
             if "not modified" not in str(exc).lower():
-                raise
+                logger.warning("widget: подпись виджета дня не правится: %s", exc)
+                return  # данные приняты; подпись попробуем со следующей правкой
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("widget: подпись виджета дня не правится: %s", exc)
+            return
         live.caption = built.caption
 
 
@@ -178,22 +212,34 @@ async def _safe_apply(bot: Bot, uid: int, live: _Live, built: Built) -> None:
     try:
         await _apply(bot, uid, live, built)
     except TelegramBadRequest as exc:
-        if any(w in str(exc).lower() for w in _GONE):
+        if any(w in str(exc).lower() for w in _GONE) and _LIVE.get(uid) is live:
             _LIVE.pop(uid, None)
         logger.warning("widget: правка виджета дня не прошла: %s", exc)
     except Exception as exc:  # noqa: BLE001 — виджет подтянет сам при показе (запрос t:)
         logger.warning("widget: правка виджета дня не прошла: %s", exc)
 
 
-async def push(bot: Bot, user: User, assistant: Assistant) -> None:
-    """После апдейта человека: виджет дня показывает то, что сейчас в базе (D-46, AC-273)."""
-    live = _LIVE.get(user.telegram_id)
-    if live is None or not enabled(user):
-        return
-    built = await build(assistant, user)
-    if built.day != live.day:  # наступил новый день — вчерашний виджет остаётся снимком
-        return
-    await _safe_apply(bot, user.telegram_id, live, built)
+Opener = Callable[[], AbstractAsyncContextManager[Assistant]]
+
+
+async def push(bot: Bot, user: User, open_assistant: Opener) -> None:
+    """После апдейта человека: виджет дня показывает то, что сейчас в базе (D-46, AC-273).
+
+    Под замком человека: сборка и правка — одна операция, иначе два апдейта подряд (aiogram
+    гоняет их задачами) могут положить старые цифры поверх свежих. Сессия БД закрыта до похода
+    в Telegram — соединение пула не ждёт HTTP."""
+    uid = user.telegram_id
+    async with lock(uid):
+        live = _LIVE.get(uid)
+        if live is None or not enabled(user):
+            return
+        async with open_assistant() as assistant:
+            built = await build(assistant, user)
+        if built.day != live.day:  # новый день: вчерашний виджет — снимок, забываем его
+            if _LIVE.get(uid) is live:
+                _LIVE.pop(uid, None)
+            return
+        await _safe_apply(bot, uid, live, built)
 
 
 def _reply(obj: dict[str, Any]) -> str:
@@ -245,128 +291,63 @@ class Outcome:
 
 
 # Запросы других виджетов: префикс `data` до «:» → обработчик. Обработчик пишет через assistant;
-# фиксацию, ответ и пуш виджета дня делает middleware (`_route`).
+# фиксацию, ответ и пуш виджета дня делает middleware (`app/bot/middlewares.py`).
 Route = Callable[[int, int, str, User, Assistant], Awaitable[Outcome]]
 ROUTES: dict[str, Route] = {}
+
+
+async def respond(
+    parsed: tuple[int, int, str], user: User, assistant: Assistant
+) -> tuple[dict[str, Any], Built | None]:
+    """Ответ на `t:<день>` и собранное для него. Без замка: чтение не гоняется с пушем, а ответ
+    не должен ждать медленную правку чужого апдейта (15 с до TIMEOUT). Правка самого сообщения —
+    после ответа, через `push`: под замком и свежей сборкой.
+
+    Сбой сборки — исключение: вызывающий отвечает `{"err":"fail"}` (без ответа виджет ждал бы
+    15 с и получил TIMEOUT)."""
+    if not enabled(user):
+        return {"err": "bad"}, None  # AC-270: данные не читаем
+    uid, mid, day = parsed
+    built = await build(assistant, user)
+    live = _LIVE.get(uid)
+    if built.day != day or (live is not None and live.day == day and mid < live.message_id):
+        # Вчерашний — «итог дня» (1), старший того же дня — «снимок» (2); не правим (AC-274).
+        return {"st": 1 if built.day != day else 2}, None
+    if live is None or live.message_id != mid:  # после рестарта: учимся заново
+        _LIVE[uid] = _Live(day, mid, "", "")
+    return json.loads(built.data), built
+
+
+async def reply(bot: Bot, qid: str, obj: dict[str, Any]) -> None:
+    """`answerWidgetQuery`; сбой — в лог: виджет сам покажет TIMEOUT, поллинг не падает."""
+    try:
+        await bot(AnswerWidgetQuery(widget_query_id=qid, data=_reply(obj)))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("widget: ответ на запрос не ушёл: %s", exc)
 
 
 async def answer(
     bot: Bot, q: dict[str, Any], user: User | None, assistant: Assistant | None
 ) -> None:
-    """Ответить на `widget_query` за 15 с; правка состояния — после ответа (док. 10.4)."""
+    """Ответить на `t:` за 15 с, когда пользователь и сервисы уже под рукой (кривой запрос —
+    сразу `err`), и поправить виджет. Middleware делает то же по шагам, закрывая сессию до HTTP."""
     qid = q.get("id")
     if not isinstance(qid, str) or not qid:
         return
     parsed = parse_query(q)
-    later: Built | None = None
-    if parsed is None or user is None or assistant is None or not enabled(user):
-        reply: dict[str, Any] = {"err": "bad"}  # AC-270: данные не читаем
-    else:
-        uid, mid, day = parsed
-        try:
-            built = await build(assistant, user)
-        except Exception:  # noqa: BLE001 — без ответа виджет ждал бы 15 с и получил TIMEOUT
-            logger.exception("widget: сборка данных дня по запросу упала")
-            with suppress(Exception):
-                await bot(AnswerWidgetQuery(widget_query_id=qid, data=_reply({"err": "fail"})))
-            return
-        live = _LIVE.get(uid)
-        if built.day != day or (live is not None and live.day == day and mid < live.message_id):
-            # Вчерашний — «итог дня» (1), старший того же дня — «снимок» (2); не правим (AC-274).
-            reply = {"st": 1 if built.day != day else 2}
-        else:
-            reply = json.loads(built.data)
-            if live is None or live.message_id != mid:  # после рестарта: учимся заново
-                _LIVE[uid] = _Live(day, mid, "", "")
-            later = built
-    with suppress(Exception):
-        await bot(AnswerWidgetQuery(widget_query_id=qid, data=_reply(reply)))
-    if later is not None and parsed is not None and parsed[0] in _LIVE:
-        await _safe_apply(bot, parsed[0], _LIVE[parsed[0]], later)
+    if parsed is None or user is None or assistant is None:
+        await reply(bot, qid, {"err": "bad"})
+        return
+    try:
+        obj, built = await respond(parsed, user, assistant)
+    except Exception:  # noqa: BLE001
+        logger.exception("widget: сборка данных дня по запросу упала")
+        obj, built = {"err": "fail"}, None
+    await reply(bot, qid, obj)
+    if built is not None:
 
+        @asynccontextmanager
+        async def same() -> AsyncIterator[Assistant]:
+            yield assistant
 
-class WidgetQueryMiddleware(BaseMiddleware):
-    """`widget_query` — апдейт 10.4, которого aiogram 3.31 не знает (D-45): он лежит в
-    `Update.model_extra`, и без перехвата до разбора типа aiogram выкинул бы его с
-    «unknown update type». Ловим здесь, на outer-middleware `dp.update`."""
-
-    def __init__(self, container: Container) -> None:
-        self._container = container
-
-    async def __call__(
-        self,
-        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
-        event: TelegramObject,
-        data: dict[str, Any],
-    ) -> Any:
-        q = (event.model_extra or {}).get("widget_query") if isinstance(event, Update) else None
-        if not isinstance(q, dict):
-            return await handler(event, data)
-        bot: Bot = data["bot"]
-        origin = parse_origin(q)
-        # OQ-W1: по этой строке в логе видно, что запросы виджета доходят до бота при поллинге.
-        logger.info("widget: запрос %r, источник принят: %s", q.get("data"), origin is not None)
-        handler_ = ROUTES.get(origin[2].split(":", 1)[0]) if origin else None
-        if origin is not None and handler_ is not None and isinstance(q.get("id"), str):
-            await self._route(bot, q, origin, handler_)
-            return None
-        parsed = parse_query(q)
-        if parsed is None:
-            await answer(bot, q, None, None)
-            return None
-        frm = q["from"]
-        try:
-            async with self._container.db.session_factory() as session:
-                assistant, users = self._container.assistant_for(session)
-                user = await users.get_or_create(
-                    telegram_id=parsed[0], name=frm.get("first_name"),
-                    locale=frm.get("language_code") or "ru",
-                    timezone=self._container.settings.default_timezone,
-                )
-                await answer(bot, q, user, assistant)
-                await session.commit()
-        except Exception:  # noqa: BLE001 — апдейт виджета не должен ронять поллинг
-            logger.exception("widget: запрос виджета не обработан")
-        return None
-
-    async def _route(
-        self, bot: Bot, q: dict[str, Any], origin: tuple[int, int, str], handler_: Route
-    ) -> None:
-        """Пишущий запрос: обработчик → фиксация → ответ → пуш виджета дня. Сбой — `err`."""
-        uid, mid, data = origin
-        frm = q["from"]
-        reply: dict[str, Any] = {"err": "fail"}
-        user: User | None = None
-        try:
-            async with self._container.db.session_factory() as session:
-                assistant, users = self._container.assistant_for(session)
-                user = await users.get_or_create(
-                    telegram_id=uid, name=frm.get("first_name"),
-                    locale=frm.get("language_code") or "ru",
-                    timezone=self._container.settings.default_timezone,
-                )
-                if not enabled(user):
-                    reply = {"err": "bad"}
-                else:
-                    out = await handler_(uid, mid, data, user, assistant)
-                    try:
-                        await session.commit()  # «записал» в ответе не должен врать
-                    except BaseException:
-                        if out.abort is not None:
-                            out.abort()
-                        raise
-                    if out.commit is not None:
-                        out.commit()
-                    reply = out.reply
-        except Exception:  # noqa: BLE001
-            logger.exception("widget: пишущий запрос не обработан")
-            reply = {"err": "fail"}
-        with suppress(Exception):
-            await bot(AnswerWidgetQuery(widget_query_id=str(q["id"]), data=_reply(reply)))
-        if reply.get("ok") and user is not None:
-            try:
-                async with self._container.db.session_factory() as session:
-                    assistant, _ = self._container.assistant_for(session)
-                    await push(bot, user, assistant)
-            except Exception:  # noqa: BLE001
-                logger.exception("widget: пуш виджета дня после запроса упал")
+        await push(bot, user, same)

@@ -7,10 +7,10 @@ header{margin-bottom:10px;flex-wrap:wrap}header b{font-size:20px}.sp{flex:1}#dl{
 .lv{color:var(--m)}.lv i{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ac);margin-right:5px;animation:pu 2s infinite}
 @keyframes pu{50%{transform:scale(.55)}}
 .c{background:var(--cd);border-radius:18px;padding:12px 14px;margin-bottom:8px}
-#hero{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.bg{font-size:clamp(28px,12vw,44px);font-weight:700;letter-spacing:-1px;line-height:1.05;margin-top:2px}.bg small{font-size:14px;color:var(--m);font-weight:500;margin-left:2px}
-.tk{height:6px;border-radius:3px;background:var(--tr);margin-top:8px;display:flex;overflow:hidden}.tk i{display:block;height:100%;transition:width .7s cubic-bezier(.2,.8,.2,1)}
-.ft{display:grid;grid-template-columns:1fr 1fr 1fr;margin-top:12px;padding-top:10px;border-top:1px solid var(--tr);font-size:15px;gap:6px}
+#hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.bg{font-size:clamp(24px,12vw,44px);font-weight:700;letter-spacing:-1px;line-height:1.05;margin-top:2px}.bg small{font-size:14px;color:var(--m);font-weight:500;margin-left:2px}
+.tk{height:6px;border-radius:3px;background:var(--tr);margin-top:8px;overflow:hidden}.tk i{display:block;height:100%}.an .tk i{animation:g .7s cubic-bezier(.2,.8,.2,1)}@keyframes g{from{width:0}}
+.ft{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin-top:12px;padding-top:10px;border-top:1px solid var(--tr);font-size:15px;gap:6px}
 .ft b{font-weight:600}.ft s{text-decoration:none;color:var(--m);font-size:13px}.ft div:last-child{text-align:right}.d{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px}
 svg{display:block;width:100%;height:auto;margin-top:6px}.ax{display:flex;justify-content:space-between;font-size:11px;color:var(--m)}
 #hs{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
@@ -18,40 +18,37 @@ svg{display:block;width:100%;height:auto;margin-top:6px}.ax{display:flex;justify
 .ch.on{background:var(--ac);color:var(--at)}.ch.on b{color:var(--at)}
 .it{display:flex;gap:8px;font-size:14px;padding:5px 0;border-top:1px solid var(--tr)}.it:first-child{border:0}.it span:nth-child(2){flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fl{animation:fl 1.2s}@keyframes fl{20%{box-shadow:0 0 0 2px var(--ac)}}
-@media (max-width:260px){#dl,.pk{display:none}}@media (prefers-reduced-motion:reduce){.lv i,.fl{animation:none}.tk i{transition:none}}
+@media (max-width:260px){#dl,.pk,.ft s,.d{display:none}.ft{gap:4px}.ft .mi{font-size:11px}}@media (prefers-reduced-motion:reduce){.lv i,.fl,.an .tk i{animation:none}}
 </style>
 <header class=r><b>Сегодня</b><span class=m id=dl></span><span class=sp></span><span class="p lv" id=lv></span><span class=p id=sk></span></header>
 <section class=c id=hc><div id=hero></div><div class=ft id=ft></div></section>
 <section class=c id=pc></section>
 <div class=m>По часам <span id=hm></span></div><div id=hs></div><div id=ls></div>
 <script>
-const W=window.TelegramWidget,$=i=>document.getElementById(i),Q=s=>document.querySelectorAll(s),RM=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
+const W=window.TelegramWidget,$=i=>document.getElementById(i),RM=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
 let D=null,E=0,S=-1,F=1,K='',ST=0,B=0;
-const J=s=>{try{return JSON.parse(s)}catch(e){return null}},R=Math.round,C=n=>(n+'').replace('.',','),H=i=>('0'+(D.sh+i)%24).slice(-2),A=()=>F&&!RM,
+const J=s=>{try{return JSON.parse(s)}catch(e){return null}},R=Math.round,C=n=>(n+'').replace('.',','),H=i=>('0'+(D.sh+i)%24).slice(-2),
 T=s=>(s+'').replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';'),
-I=(w,c)=>'<i data-w="'+w+'%" style="width:'+(A()?0:w)+'%;background:var('+c+')"></i>',
-bar=(v,g,c)=>{if(g<=0)return'<div class=tk></div>';const o=v>g,w=o?g/v*100:v/g*100;return'<div class=tk>'+I(w,c)+(o?I(100-w,'--dg'):'')+'</div>'},
-col=(l,n,u,c,sub,b)=>'<div><div class=m>'+l+'</div><div class=bg style="color:var('+c+')"><span data-n="'+n+'">'+(A()?0:n)+'</span>'+(u?'<small>'+u+'</small>':'')+'</div>'+b+'<div class=mi>'+sub+'</div></div>',
+bar=(v,g,c)=>'<div class=tk><i style="width:'+(g>0?Math.min(100,v/g*100):0)+'%;background:var('+c+')"></i></div>',
+col=(l,n,u,c,sub,b)=>'<div><div class=m>'+l+'</div><div class=bg style="color:var('+c+')">'+n+(u?'<small>'+u+'</small>':'')+'</div>'+b+'<div class=mi>'+sub+'</div></div>',
 ft=(l,c,v,g)=>'<div><div class=mi>'+(c?'<i class=d style="background:var('+c+')"></i>':'')+l+'</div><b>'+v+'</b>'+(g?'<s>/'+g+'</s>':'')+'</div>';
-function hero(){const g=D.g,e=D.e,lk=D.l[0],lp=D.l[1],pk=D.pk!=null?'<span class=pk> · '+C(D.pk)+' г/кг</span>':'';
+function hero(){const g=D.g,e=D.e,lk=D.l[0],lp=D.l[1],pk=D.pk!=null?'<span class=pk> · '+C(D.pk)+' г/кг</span>':'';$('hc').className='c'+(F&&!RM?' an':'');
 $('hero').innerHTML=E?col('Съедено ккал',e[0],'','--t','из '+g[0]+(lk>=0?' · ещё '+lk:' · перебор '+-lk),bar(e[0],g[0],'--br'))+col('Съедено белка',e[1],'г','--t','из '+g[1]+pk,bar(e[1],g[1],'--pr')):col(lk<0?'Перебор ккал':'Осталось ккал',Math.abs(lk),'',lk<0?'--dg':'--t',e[0]+' из '+g[0],bar(e[0],g[0],'--br'))+col('Осталось белка',Math.max(0,lp),'г',lp>0&&e[0]>0?'--wa':'--t',e[1]+' из '+g[1]+pk,bar(e[1],g[1],'--pr'));
-$('ft').innerHTML=ft('Жир','--fa',e[2],g[2])+ft('Углев.','--ca',e[3],g[3])+ft('Оценкой','',e[0]?'≈'+D.es+'%':'—')}
+$('ft').innerHTML=ft('Жир','--fa',e[2],g[2])+ft('Углев.','--ca',e[3],g[3])+ft('Оценка','',e[0]?'≈'+D.es+'%':'—')}
 function pace(){const n=D.n,p=$('pc');p.style.display=n&&D.g[0]?'':'none';if(!n||!D.g[0])return;const hn=D.hn,cum=[],h={};let a=0;(D.h||[]).forEach(x=>h[x[0]]=x[1]);for(let i=0;i<=hn;i++){a+=h[i]||0;cum.push(a)}
 const mx=Math.max(D.g[0],n[23],a)*1.05,X=i=>i*300/23,Y=v=>(66-v/mx*62).toFixed(1),pl=v=>v.map((y,i)=>X(i).toFixed(1)+','+Y(y)).join(' '),b=v=>'<b style="color:var(--t)">'+R(v)+'</b>',L=(v,c,w,d)=>'<polyline points="'+pl(v)+'" fill=none stroke="var('+c+')" stroke-width='+w+(d?' stroke-dasharray="5 4"':' stroke-linejoin=round stroke-linecap=round')+' />';
-p.innerHTML='<div class=m>К '+H(hn+1)+':00 обычно '+b(n[hn])+' · сейчас '+b(a)+'</div><svg viewBox="0 0 300 70"><line x1=0 x2=300 y1='+Y(D.g[0])+' y2='+Y(D.g[0])+' stroke="var(--tr)" stroke-dasharray="2 4"/>'+L(n,'--li',2,1)+L(cum,'--da',3)+'<circle cx='+X(hn)+' cy='+Y(a)+' r=4.5 fill="var(--da)"/></svg><div class=ax>'+[0,6,12,18,23].map(i=>'<span>'+H(i)+'</span>').join('')+'</div><div class=mi>— сегодня · - - обычно · ··· цель</div>'}
+p.innerHTML='<div class=m>К '+H(hn+1)+':00 обычно '+b(n[hn])+' · сейчас '+b(D.nk!=null?D.nk:a)+'</div><svg viewBox="0 0 300 70"><line x1=0 x2=300 y1='+Y(D.g[0])+' y2='+Y(D.g[0])+' stroke="var(--tr)" stroke-dasharray="2 4"/>'+L(n,'--li',2,1)+L(cum,'--da',3)+'<circle cx='+X(hn)+' cy='+Y(a)+' r=4.5 fill="var(--da)"/></svg><div class=ax>'+[0,6,12,18,23].map(i=>'<span>'+H(i)+'</span>').join('')+'</div><div class=mi>— сегодня · - - обычно · ··· цель</div>'}
 function hours(){const al=D.h||[],k=Math.max(3,Math.floor(((document.body.clientWidth||320)-22)/58)),hs=al.slice(-k);if(!hs.some(x=>x[0]==S))S=hs.length?hs[hs.length-1][0]:-1;
 $('hm').textContent=al.length>k?'· ещё '+(al.length-k)+' ч раньше':'';$('hs').innerHTML=hs.length?hs.map(x=>'<div class="ch'+(x[0]==S?' on':'')+'" data-h='+x[0]+'>'+H(x[0])+'<b>'+x[1]+'</b></div>').join(''):'<div class=m>Пока пусто — напиши, что съел.</div>';
-const all=(D.it||[]).filter(x=>x[0]==S),its=all.slice(0,5),sum=all.reduce((a,x)=>a+x[3],0),c=(hs.find(x=>x[0]==S)||[0,0])[1];
-$('ls').innerHTML=its.map(x=>'<div class=it><span class=m>'+H(x[0])+':'+x[1]+'</span><span>'+T(x[2])+'</span><b>'+(x[4]?'≈':'')+x[3]+'</b></div>').join('')+(S>=0&&(all.length>5||Math.abs(sum-c)>all.length)?'<div class="it m">Остальное — в приложении ↓</div>':'')}
-function fin(){Q('.tk i').forEach(i=>i.style.width=i.dataset.w);Q('[data-n]').forEach(x=>x.textContent=x.dataset.n)}
+const all=(D.it||[]).filter(x=>x[0]==S),its=all.slice(0,5),mo=((hs.find(x=>x[0]==S)||[])[2]||all.length)-its.length;
+$('ls').innerHTML=its.map(x=>'<div class=it><span class=m>'+H(x[0])+':'+x[1]+'</span><span>'+T(x[2])+'</span><b>'+(x[4]?'≈':'')+x[3]+'</b></div>').join('')+(mo>0?'<div class="it m">Ещё '+mo+' — в приложении ↓</div>':'')}
 function draw(s){const d=J(s);if(!d||d.v!=1)return;const k=JSON.stringify({...d,at:0,hn:0}),ch=K&&k!=K;K=k;D=d;
 $('dl').textContent=d.dl;$('lv').innerHTML=ST?(ST>1?'снимок':'итог дня'):'<i></i>'+d.at;$('sk').style.display=d.s?'':'none';$('sk').textContent=d.s?'🔥 '+d.s[0]+(d.s[1]?' ❄':''):'';
-hero();pace();hours();
-if(ch){const c=$('hc');c.classList.remove('fl');void c.offsetWidth;c.classList.add('fl')}
-if(A()){requestAnimationFrame(()=>{Q('.tk i').forEach(i=>i.style.width=i.dataset.w);const t0=Date.now(),ns=Q('[data-n]');(function st(){const k=Math.min(1,(Date.now()-t0)/600);ns.forEach(x=>x.textContent=R(x.dataset.n*(1-Math.pow(1-k,3))));if(k<1)requestAnimationFrame(st)})()});setTimeout(fin,1500)}F=0}
+hero();pace();hours();F=0;
+if(ch){const c=$('hc');c.classList.remove('fl');void c.offsetWidth;c.classList.add('fl')}}
 document.addEventListener('click',ev=>{const t=ev.target.closest('[data-h]');if(t){S=+t.dataset.h;hours();hp()}else if(ev.target.closest('#hero')){E=1-E;hero();hp()}});
 function hp(){try{W.HapticFeedback.selectionChanged()}catch(e){}}
-function ask(){if(!W||!D||!W.request||ST||B)return;B=1;W.request('t:'+D.d).then(a=>{B=0;const r=J(a&&a.result);if(r&&r.st){ST=r.st;draw(W.chatData)}else if(r&&r.v)draw(a.result)},()=>B=0)}
-if(W){W.onEvent('chatDataChanged',()=>draw(W.chatData));W.onEvent('activated',ask);draw(W.chatData);ask();W.ready&&W.ready()}
+function ask(){if(!W||!D||!W.request||ST||B)return;B=1;try{W.request('t:'+D.d).then(a=>{B=0;const r=J(a&&a.result);if(r&&r.st){ST=r.st;draw(W.chatData)}else if(r&&r.v)draw(a.result)},()=>B=0)}catch(e){B=0}}
+if(W){W.onEvent('chatDataChanged',()=>draw(W.chatData));W.onEvent('activated',ask);draw(W.chatData);try{W.ready&&W.ready()}catch(e){}ask()}
 if(!D)document.body.insertAdjacentHTML('beforeend','<p class=m>Нет данных.</p>');
 </script>

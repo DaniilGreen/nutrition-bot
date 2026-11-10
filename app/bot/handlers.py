@@ -72,7 +72,7 @@ from app.application.results import (
     WeightLogged,
     WeightTrend,
 )
-from app.bot import coach_chat
+from app.bot import coach_chat, quick
 from app.bot.dashboard_image import render_weight_chart  # единственный уцелевший PNG — график веса
 from app.bot.formatters import (  # текстовые подсказки внутри диалога (не экраны)
     SCAN_REFUSAL,
@@ -100,7 +100,6 @@ from app.bot.keyboards import (
     DISH_SESSION,
     FIX_PICK_PREFIX,
     FREQ_PREFIX,
-    FREQ_TOP,
     GOAL_TARGET_PREFIX,
     ITEM_WEIGHT_PREFIX,
     LABEL_G_PREFIX,
@@ -114,7 +113,6 @@ from app.bot.keyboards import (
     card_meal_id,
     day_nav_keyboard,
     fix_pick_keyboard,
-    frequent_keyboard,
     goal_target_keyboard,
     goal_type_keyboard,
     half_up,
@@ -135,8 +133,8 @@ from app.bot.keyboards import (
     restore_button,
     scan_apply_keyboard,
     scan_keyboard,
-    set_key,
     sex_keyboard,
+    tiles_keyboard,
     undo_picker_keyboard,
     variant_keyboard,
     weighable,
@@ -620,21 +618,13 @@ async def btn_frequent(
         and await widgets_frequent.show(message.bot, message.chat.id, app_user, assistant)
     ):
         return
-    sets = await assistant.recent_sets(app_user, days=30)
-    # Тот же топ, что у аппки: бот не показывает продукт, которого нет в её чипах. Имя — из
-    # каталога (так его запишет log_quick и покажет карточка), а не из снапшотов; продукт,
-    # которого в каталоге уже нет (слили/удалили), кнопкой не показываем.
-    rows = []
-    for pid, _name, grams, times in await assistant.frequent(app_user, days=30, limit=FREQ_TOP):
-        product = await assistant.get_product(pid) if pid else None
-        if product is not None:
-            rows.append((pid, product.display_name, grams, times))
-    markup = frequent_keyboard(sets, rows)
+    freq = await quick.frequent(app_user, assistant)
+    markup = tiles_keyboard(freq.tiles)
     if markup is None:
         await message.answer(_FREQ_EMPTY)
         return
     # строка про 📌 — только когда набор реально попал в кнопки
-    has_sets = any(b.text.startswith("📌") for row in markup.inline_keyboard for b in row)
+    has_sets = any(t.is_set for t in freq.tiles)
     await message.answer(_FREQ_HEAD + (_FREQ_HEAD_SETS if has_sets else ""), reply_markup=markup)
 
 
@@ -2100,33 +2090,6 @@ async def _write_once(
     return result
 
 
-async def _log_frequent(user: User, assistant: Assistant, data: str) -> MealLogged | None:
-    """Кнопка «⚡ Частое» → запись в сегодня тем же use-case, что у чипа аппки. None — кнопка
-    устарела (продукт слили или удалили, набор переименован) или callback кривой."""
-    parts = data.split(":")
-    if len(parts) == 4 and parts[1] == "p":
-        try:
-            product_id, grams = int(parts[2]), float(parts[3])
-        except ValueError:
-            return None
-        if not 0 < grams <= 5000:  # NaN и бесконечность сюда тоже не проходят
-            return None
-        result = await assistant.log_quick(user, product_id, grams)
-        return result if isinstance(result, MealLogged) else None
-    if len(parts) == 3 and parts[1] == "s":
-        # Набор — по имени (его идентичность), а не по id приёма: тот меняется с каждым повтором.
-        # Повтор самого свежего приёма с этим именем — ровно то, что делает и чип аппки (FR-39.2).
-        found = next(
-            (m for m in await assistant.sets(user)
-             if m.template_name and set_key(m.template_name) == parts[2]),
-            None,
-        )
-        if found is None or found.id is None:
-            return None
-        return await assistant.repeat_meal(user, found.id)
-    return None
-
-
 @router.callback_query(F.data.startswith(f"{FREQ_PREFIX}:"))
 async def on_frequent_tap(
     callback: CallbackQuery, app_user: User, assistant: Assistant, session: AsyncSession
@@ -2141,7 +2104,7 @@ async def on_frequent_tap(
 
     async def write() -> MealLogged | None:
         await callback.answer()  # гасим спиннер сразу
-        return await _log_frequent(app_user, assistant, data)
+        return await quick.log_frequent(app_user, assistant, data.removeprefix(f"{FREQ_PREFIX}:"))
 
     result = await _write_once(callback, session, app_user.id, write)
     if result is False:

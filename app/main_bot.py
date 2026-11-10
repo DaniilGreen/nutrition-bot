@@ -12,9 +12,8 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.bot.handlers import router
 from app.bot.menu import setup_bot_commands, setup_miniapp_button
-from app.bot.middlewares import ServicesMiddleware
+from app.bot.middlewares import ServicesMiddleware, WidgetQueryMiddleware
 from app.bot.reminders import run_reminder_loop
-from app.bot.widgets.live import WidgetQueryMiddleware
 from app.config import get_settings
 from app.container import Container, check_provider
 from app.infrastructure.products.seed import seed_curated
