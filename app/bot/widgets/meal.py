@@ -34,6 +34,7 @@ from app.bot.widgets import live, template
 from app.bot.widgets.transport import EditMessageWidgetData, SendWidget
 from app.domain.goals import Remaining
 from app.domain.plausibility import MAX_PORTION_G, MIN_PORTION_G
+from app.domain.prefs import merge, sanitize
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ _DEL = re.compile(rf"m:d:{_ID}:{_ID}:{_KEY}")
 _UNDO = re.compile(rf"m:u:{_ID}:{_KEY}")
 _BACK = re.compile(rf"m:r:{_ID}:{_KEY}")
 _OPEN = re.compile(rf"o:{_ID}:{_KEY}")
+_ROWS = re.compile(rf"m:l:([01]):{_KEY}")
 _T_ADJ = re.compile(rf"s:a:{_ID}:{_ID}:([0-9]{{1,4}}):{_KEY}")
 _T_DEL = re.compile(rf"s:x:{_ID}:{_KEY}")
 _T_BACK = re.compile(rf"s:r:{_KEY}")
@@ -86,7 +88,8 @@ async def _card(
         sess = None
     ss = sum(m.totals.kcal for m in sess.meals) if sess is not None else None
     data = meal_data(meal, left, user.timezone, session_kcal=ss, undo=undo, deleted=deleted,
-                     head="Запись" if opened else head)
+                     head="Запись" if opened else head,
+                     rows=sanitize(user.ui_prefs)["card_macros"] == "list")
     return data, sess
 
 
@@ -234,7 +237,9 @@ async def _answer(
 async def on_meal(
     uid: int, mid: int, data: str, user: User, assistant: Assistant
 ) -> live.Outcome:
-    """`m:a|d|u|r:…` — правка записи из её карточки (AC-285, AC-286)."""
+    """`m:a|d|u|r:…` — правка записи из её карточки (AC-285, AC-286); `m:l:0|1` — раскладка."""
+    if (lay := _ROWS.fullmatch(data)) is not None:
+        return await _layout(user, lay.group(1) == "1")
     m = _ADJ.fullmatch(data) or _DEL.fullmatch(data) or _UNDO.fullmatch(data) or _BACK.fullmatch(
         data)
     if m is None:
@@ -255,6 +260,17 @@ async def on_meal(
     if not out.reply.get("ok"):
         _done.pop(key, None)
     return out
+
+
+async def _layout(user: User, rows: bool) -> live.Outcome:
+    """Тап по блоку дня (D-76): столбик ⇄ сетка — в `ui_prefs` человека, все его карточки дальше
+    так же. Повтор безвреден: кладётся то же значение. Виджет уже перерисовался сам."""
+    users = (live.EXTRA.get() or {}).get("users")
+    if users is None or user.id is None:
+        return live.Outcome({"err": "bad"})
+    user.ui_prefs = merge(user.ui_prefs, {"card_macros": "list" if rows else "grid"})
+    await users.set_prefs(user.id, user.ui_prefs)
+    return live.Outcome({"ok": 1})
 
 
 async def _apply(

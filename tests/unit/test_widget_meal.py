@@ -397,3 +397,24 @@ async def test_правка_прямо_в_сегодня(world) -> None:  # noqa
     assert await assistant.get_meal(u, meal.id) is None
     back = await wmeal.on_today(5, 300, "s:r:t3t3", u, assistant)  # type: ignore[arg-type]
     assert back.reply["ok"] == 1 and back.reply["z"] == 0
+
+
+async def test_раскладка_блока_дня_у_каждого_своя(world, fake_container) -> None:  # noqa: ANN001
+    """AC-301, D-76: тап по блоку дня — `m:l:1` кладёт `card_macros=list` в настройки человека,
+    и все его карточки дальше идут с `l=1`; `m:l:0` — обратно сеткой. Мусор — `bad`, без записи."""
+    from app.bot.widgets import live
+
+    assistant, u, meal = await world()
+    _, users = fake_container.assistant_for(None)
+    live.EXTRA.set({"users": users, "scans": None})
+    data, _ = await wmeal._card(assistant, u, meal)  # type: ignore[arg-type]
+    assert "l" not in json.loads(data)  # по умолчанию — сетка
+    assert await _do(assistant, u, "m:l:1:k1k1") == {"ok": 1}
+    stored = await users.get_or_create(telegram_id=5, name="x", locale="ru", timezone="UTC")
+    assert stored.ui_prefs["card_macros"] == "list"
+    data, _ = await wmeal._card(assistant, stored, meal)  # type: ignore[arg-type]
+    assert json.loads(data)["l"] == 1
+    assert await _do(assistant, stored, "m:l:0:k2k2") == {"ok": 1}
+    assert stored.ui_prefs["card_macros"] == "grid"
+    assert (await _do(assistant, stored, "m:l:2:k3k3"))["err"] == "bad"
+    assert stored.ui_prefs["card_macros"] == "grid"

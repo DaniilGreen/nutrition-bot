@@ -69,7 +69,7 @@ async def test_частичная_правка_не_сбрасывает_ост�
                                  "foot_third": "weight", "mic_first": False,
                                  "feed_order": "new_first", "day_start": 0,
                                  "bmr_source": "inbody", "activity": "medium",
-                                 "target_fat_pct": None}
+                                 "target_fat_pct": None, "card_macros": "grid"}
 
 
 @pytest.mark.parametrize(

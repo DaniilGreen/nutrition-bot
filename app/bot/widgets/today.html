@@ -42,7 +42,7 @@ e.innerHTML=x?'<span class=m>вес</span><button data-e=-1>−</button><b>'+RG+
 function SD(q){if(Q||!W||!W.request)return;Q=1;try{W.request(q+':'+(Date.now()%1e6+1e6)).then(a=>{Q=0;const r=J(a&&a.result);if(r&&r.v){UZ=r.z||0;if(q[2]!='a')SM=0;draw(a.result)}hp();ed();FL()},()=>Q=0)}catch(e){Q=0}}
 function FL(){const x=(D.it||[]).find(x=>x[9]==SM);if(!Q&&x&&RG!=x[5])SD('s:a:'+SM+':'+SI+':'+RG)}
 function draw(s=W&&W.chatData){const d=J(s);if(!d||d.v!=1)return;const k=JSON.stringify({...d,at:0,hn:0}),sm=K==k;K=k;D=d;
-$('dl').textContent=d.dl;$('lv').innerHTML=ST?(ST>1?'снимок':'итог дня'):'<i></i>'+d.at;const k2=d.s;$('sk').style.display=k2?'':'none';$('sk').textContent=k2?(k2[0]?'🔥 '+k2[0]+(k2[1]?' ❄':'')+' · ':'')+k2[2]+' из '+k2[3]:'';
+$('dl').textContent=d.dl;$('lv').innerHTML=ST?(ST>1?'снимок':'итог дня'):'<i></i>'+d.at;const k2=d.s;$('sk').style.display=k2?'':'none';$('sk').textContent=k2?(k2[0]?'🔥 '+k2[0]+' дн. подряд'+(k2[1]?' ❄':''):k2[2]+' из '+k2[3]+' дн.'):'';
 if(sm&&!A1)return;AN();hero();hours();
 }
 document.addEventListener('click',ev=>{const t=ev.target.closest('[data-h]');if(t){S=+t.dataset.h;hours();hp()}else if(ev.target.closest('#hero')){E=1-E;hero();hp()}else{const b=ev.target.closest('[data-e]');if(b){const a=b.dataset.e;if(a=='x')SD('s:x:'+SM);else if(a=='r')SD('s:r');else if(a){RG=Math.min(2000,Math.max(1,RG+10*a));hp();ed();FL()}return}

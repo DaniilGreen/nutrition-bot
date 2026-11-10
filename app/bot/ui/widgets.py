@@ -200,7 +200,7 @@ MEAL_NAME_STEPS = (28, 18, 12)
 
 def meal_data(
     meal: Meal, left: Remaining, tz: str, *, session_kcal: float | None = None,
-    undo: int = 0, deleted: bool = False, head: str | None = None,
+    undo: int = 0, deleted: bool = False, head: str | None = None, rows: bool = False,
 ) -> str | None:
     """`chat_data` карточки приёма (FR-49.4). None — не влезла в бюджет: вызывающий шлёт rich.
 
@@ -216,6 +216,7 @@ def meal_data(
       rv  ревизия (мс): `chatDataChanged` старше показанного виджет пропускает
       hd  шапка вместо «Записал» («📌 Пиши «бургер»» у набора, FR-47); нет ключа — «Записал»
       nb  (только у `merged_data`) имя набора, в который вошла запись
+      l   1 — блок дня столбиком (`ui_prefs.card_macros`, D-76); нет ключа — сеткой 2×2
     Граммы и ккал позиции — снапшот (INV-3); JS лишь предпросматривает пропорцию (W-INV-1)."""
     zone = ZoneInfo(tz)
     at = meal.eaten_at.astimezone(zone)
@@ -234,6 +235,8 @@ def meal_data(
         base["ss"] = round(session_kcal)
     if head:
         base["hd"] = head
+    if rows:
+        base["l"] = 1
     for limit in MEAL_NAME_STEPS:
         items = []
         for i in meal.items:
