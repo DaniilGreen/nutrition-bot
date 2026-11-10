@@ -62,7 +62,6 @@ async def show(bot: Bot, chat_id: int, ctx: DayContext) -> bool:
             return False
         await bot(SendWidget(
             chat_id=chat_id, html=template("week"), chat_data=data,
-            caption="📈 Неделя",  # W-INV-2, D-60: цифры — в виджете
             allow_queries=True, reply_markup=open_in_app("tot-week"),
         ))
     except Exception as exc:  # noqa: BLE001

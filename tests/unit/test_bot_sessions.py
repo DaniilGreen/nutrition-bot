@@ -639,7 +639,7 @@ async def test_приём_пищи_в_набор_под_виджетом(monkeyp
     d = json.loads(old.chat_data)
     assert old.message_id == 5 and d["nb"] == "бургер" and d["x"] == 1 and d["z"] == 0
     [new] = [c for c in calls if isinstance(c, SendWidget)]
-    assert new.caption == "📌 Набор «бургер» — дальше просто пиши «бургер»"
-    assert json.loads(new.chat_data)["hd"] == "📌 Набор сохранён"
+    assert new.caption is None and json.loads(new.chat_data)["hd"] == "📌 Пиши «бургер»"  # D-75
+    assert "Набор сохранён" not in new.chat_data
     assert not msg.bot.send_rich_message.await_count
     assert not any("rich_message" in e for e in _edits(msg))  # rich-следа по виджету нет

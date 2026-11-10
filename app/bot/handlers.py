@@ -1014,8 +1014,8 @@ async def _save_session_set(
                             f"<h3>📌 Вошло в набор «{escape(name, quote=False)}»</h3>"
                             "<p>Карточка набора — ниже.</p>", None)
     if flag and bot is not None and await widgets_meal.show(  # FR-49.4: набор — виджетом
-        bot, message.chat.id, user, assistant, logged, head="📌 Набор сохранён",
-        caption=f"📌 Набор «{name}» — дальше просто пиши «{name}»",
+        bot, message.chat.id, user, assistant, logged,
+        head=f"📌 Пиши «{name[:40]}»",  # набор = его имя, подписи нет (FR-47, D-75)
     ):
         return
     ctx, sess = await gather(assistant, user), await _session(user, assistant, logged.meal.id)
@@ -3909,7 +3909,6 @@ async def _weight_logged(
         goal is not None and message.bot is not None and widgets_live.enabled(app_user)
         and await widgets_live.show_weight(
             message.bot, message.chat.id, pts, trend.timezone, goal.target,
-            caption="⚖️ Вес записан",
         )
     ):
         return

@@ -29,7 +29,7 @@ from app.application.entities import Meal, User
 from app.application.meal_service import SnapshotStale, meal_fingerprint
 from app.application.results import MealLogged, MealSession
 from app.bot.keyboards import meal_widget_keyboard, weighable
-from app.bot.ui.widgets import meal_caption, meal_data, merged_data
+from app.bot.ui.widgets import meal_data, merged_data
 from app.bot.widgets import live, template
 from app.bot.widgets.transport import EditMessageWidgetData, SendWidget
 from app.domain.goals import Remaining
@@ -45,6 +45,9 @@ _DEL = re.compile(rf"m:d:{_ID}:{_ID}:{_KEY}")
 _UNDO = re.compile(rf"m:u:{_ID}:{_KEY}")
 _BACK = re.compile(rf"m:r:{_ID}:{_KEY}")
 _OPEN = re.compile(rf"o:{_ID}:{_KEY}")
+_T_ADJ = re.compile(rf"s:a:{_ID}:{_ID}:([0-9]{{1,4}}):{_KEY}")
+_T_DEL = re.compile(rf"s:x:{_ID}:{_KEY}")
+_T_BACK = re.compile(rf"s:r:{_KEY}")
 
 _done: dict[tuple[int, str], tuple[float, dict[str, Any]]] = {}  # (кто, ключ) → (когда, ответ)
 
@@ -74,8 +77,8 @@ def _sweep(now: float) -> None:
 async def _card(
     assistant: Assistant, user: User, meal: Meal, *, undo: int = 0, deleted: bool = False,
     left: Remaining | None = None, head: str | None = None, opened: bool = False,
-) -> tuple[str | None, str, MealSession | None]:
-    """Данные, подпись и приём пищи (FR-47, только из нескольких записей) карточки из базы;
+) -> tuple[str | None, MealSession | None]:
+    """Данные и приём пищи (FR-47, только из нескольких записей) карточки из базы;
     остаток — дня самой записи, а не сегодняшнего."""
     left = left or await assistant.day_left(user, meal.eaten_at)
     sess = None if deleted or meal.id is None else await assistant.session_of(user, meal.id)
@@ -84,26 +87,23 @@ async def _card(
     ss = sum(m.totals.kcal for m in sess.meals) if sess is not None else None
     data = meal_data(meal, left, user.timezone, session_kcal=ss, undo=undo, deleted=deleted,
                      head="Запись" if opened else head)
-    caption = meal_caption(meal, deleted=deleted)
-    if opened and not deleted:
-        caption = caption.replace("✅ Записал:", "✏️ Запись:", 1)
-    return data, caption, sess
+    return data, sess
 
 
 async def show(
     bot: Bot, chat_id: int, user: User, assistant: Assistant, result: MealLogged, *,
-    head: str | None = None, caption: str | None = None,
+    head: str | None = None,
 ) -> bool:
     """Отправить карточку записи виджетом. False — не вышло или не влезло: вызывающий шлёт
-    rich-карточку с прежними кнопками (W-INV-2). head/caption — у слитого набора (FR-47)."""
+    rich-карточку с прежними кнопками (W-INV-2). head — у слитого набора (FR-47)."""
     try:
-        data, own, sess = await _card(
+        data, sess = await _card(
             assistant, user, result.meal, left=result.remaining, head=head
         )
         if data is None:
             return False
         await bot(SendWidget(
-            chat_id=chat_id, html=template("meal"), chat_data=data, caption=caption or own,
+            chat_id=chat_id, html=template("meal"), chat_data=data,
             allow_queries=True, reply_markup=meal_widget_keyboard(result.meal, sess),
         ))
     except Exception as exc:  # noqa: BLE001
@@ -113,11 +113,11 @@ async def show(
 
 
 async def _edit(
-    bot: Bot, uid: int, mid: int, data: str, caption: str, meal: Meal | None,
+    bot: Bot, uid: int, mid: int, data: str, meal: Meal | None,
     sess: MealSession | None,
 ) -> bool:
-    """Правка самого сообщения: данные, подпись, кнопки под ним. False — данные не легли (это не
-    виджет или сообщения нет); подпись и кнопки тогда не трогаем.
+    """Правка самого сообщения: данные и кнопки под ним. False — данные не легли (это не
+    виджет или сообщения нет); кнопки тогда не трогаем.
 
     Под замком человека и со сверкой ревизии: тап в виджете и ответ текстом правят одно сообщение
     задачами, и собранное раньше не должно лечь последним (открытая позже карточка врала бы)."""
@@ -128,11 +128,11 @@ async def _edit(
         if len(_rv) > 200:  # ponytail: двое людей; чистим целиком, худшее — одна лишняя правка
             _rv.clear()
         _rv[key] = rv
-        return await _put(bot, uid, mid, data, caption, meal, sess)
+        return await _put(bot, uid, mid, data, meal, sess)
 
 
 async def _put(
-    bot: Bot, uid: int, mid: int, data: str, caption: str, meal: Meal | None,
+    bot: Bot, uid: int, mid: int, data: str, meal: Meal | None,
     sess: MealSession | None,
 ) -> bool:
     try:
@@ -142,32 +142,31 @@ async def _put(
             logger.warning("widget: данные карточки приёма не правятся: %s", exc)
             return False
     try:
-        await bot.edit_message_caption(
-            chat_id=uid, message_id=mid, caption=caption, parse_mode=None,
-            reply_markup=meal_widget_keyboard(meal, sess),
+        await bot.edit_message_reply_markup(  # подписи нет (D-75) — только кнопки
+            chat_id=uid, message_id=mid, reply_markup=meal_widget_keyboard(meal, sess),
         )
     except Exception as exc:  # noqa: BLE001 — данные уже легли: виджет показывает правду
         if "not modified" not in str(exc).lower():
-            logger.warning("widget: подпись карточки приёма не правится: %s", exc)
+            logger.warning("widget: кнопки карточки приёма не правятся: %s", exc)
     return True
 
 
 async def card(
     assistant: Assistant, user: User, result: MealLogged
-) -> tuple[str | None, str, InlineKeyboardMarkup | None]:
-    """Данные, подпись и кнопки свежей карточки — для того, кто шлёт её позже, без сессии БД
+) -> tuple[str | None, InlineKeyboardMarkup | None]:
+    """Данные и кнопки свежей карточки — для того, кто шлёт её позже, без сессии БД
     (подтверждение разбора, FR-49.7)."""
-    data, caption, sess = await _card(assistant, user, result.meal, left=result.remaining)
-    return data, caption, meal_widget_keyboard(result.meal, sess)
+    data, sess = await _card(assistant, user, result.meal, left=result.remaining)
+    return data, meal_widget_keyboard(result.meal, sess)
 
 
 def _refresh(
-    uid: int, mid: int, data: str, caption: str, meal: Meal | None, sess: MealSession | None
+    uid: int, mid: int, data: str, meal: Meal | None, sess: MealSession | None
 ) -> Callable[[Bot], Awaitable[None]]:
     """Правка самого сообщения после ответа виджету — открытая позже карточка покажет правду."""
 
     async def run(bot: Bot) -> None:
-        await _edit(bot, uid, mid, data, caption, meal, sess)
+        await _edit(bot, uid, mid, data, meal, sess)
 
     return run
 
@@ -176,7 +175,7 @@ async def merged(bot: Bot, uid: int, mid: int, name: str) -> bool:
     """Виджет, где нажали «📌 Приём пищи — в набор», — след «вошло в набор» без действий (FR-47,
     FR-49.4): его записей больше нет. False — это не виджет: вызывающий правит rich-следом."""
     _undo.pop((uid, mid), None)
-    return await _edit(bot, uid, mid, merged_data(name), f"📌 Вошло в набор «{name}»", None, None)
+    return await _edit(bot, uid, mid, merged_data(name), None, None)
 
 
 async def refresh_fix(
@@ -193,10 +192,8 @@ async def refresh_fix(
     if shown is None:
         return False
     undo = 0 if snapshot is None else 1 if meal is not None else 2
-    data, caption, sess = await _card(assistant, user, shown, undo=undo, deleted=meal is None)
-    if data is None or not await _edit(
-        bot, uid, mid, data, caption, None if meal is None else meal, sess
-    ):
+    data, sess = await _card(assistant, user, shown, undo=undo, deleted=meal is None)
+    if data is None or not await _edit(bot, uid, mid, data, meal, sess):
         return False
     if snapshot is not None:
         _undo[(uid, mid)] = _Undo(_now(), snapshot, meal_fingerprint(meal), undo)
@@ -210,8 +207,8 @@ async def _answer(
     meal: Meal, *, undo: int, deleted: bool = False, slot: _Undo | None = None,
     drop_slot: bool = False,
 ) -> live.Outcome:
-    data, caption, sess = await _card(assistant, user, meal, undo=undo, deleted=deleted,
-                                      opened=(uid, mid) in _opened)
+    data, sess = await _card(assistant, user, meal, undo=undo, deleted=deleted,
+                             opened=(uid, mid) in _opened)
     if data is None:
         # Карточка после правки не влезла в 1024 байта: исключение откатит сессию — правка не
         # сохранится молча за ответом «не вышло» (и «Вернуть» не потеряется).
@@ -230,7 +227,7 @@ async def _answer(
 
     return live.Outcome(
         reply, commit=commit, abort=abort,
-        after=_refresh(uid, mid, data, caption, None if deleted else meal, sess),
+        after=_refresh(uid, mid, data, None if deleted else meal, sess),
     )
 
 
@@ -335,7 +332,7 @@ async def on_open(
     if meal is None:
         return live.Outcome({"err": "gone"})  # чужая или уже удалённая
     left = await assistant.day_left(user, meal.eaten_at)
-    data_, caption, sess = await _card(assistant, user, meal, left=left, opened=True)
+    data_, sess = await _card(assistant, user, meal, left=left, opened=True)
     if data_ is None:
         return live.Outcome({"err": "bad"})
     reply: dict[str, Any] = {"ok": 1}
@@ -345,7 +342,7 @@ async def on_open(
 
     async def send(bot: Bot) -> None:
         msg = await bot(SendWidget(
-            chat_id=uid, html=template("meal"), chat_data=data_, caption=caption,
+            chat_id=uid, html=template("meal"), chat_data=data_,
             allow_queries=True, reply_markup=meal_widget_keyboard(meal, sess),
         ))
         if len(_opened) > 200:  # ponytail: двое людей; чистим целиком — худшее: шапка «Записал»
@@ -355,5 +352,62 @@ async def on_open(
     return live.Outcome(reply, commit=commit, after=send)
 
 
+async def on_today(
+    uid: int, mid: int, data: str, user: User, assistant: Assistant
+) -> live.Outcome:
+    """Правка прямо в «Сегодня» (D-74): `s:a:<запись>:<позиция>:<г>` — вес той же
+    `adjust_meal_item`, что ±10 г карточки; `s:x:<запись>` — удалить (`delete_meal`); `s:r` —
+    «⏪ Вернуть» удалённое этим виджетом (отпечаток FR-41). Ответ — данные дня из `live.build`."""
+    m = _T_ADJ.fullmatch(data) or _T_DEL.fullmatch(data) or _T_BACK.fullmatch(data)
+    if m is None:
+        return live.Outcome({"err": "bad"})
+    now = _now()
+    _sweep(now)
+    key, slot_key = (uid, m.groups()[-1]), (uid, mid)
+    if (seen := _done.get(key)) is not None:
+        return live.Outcome(seen[1])
+    op, slot = data[2], _undo.get(slot_key)
+    commit_slot: _Undo | None = None
+    drop = False
+    if op == "r":
+        if slot is None:
+            return live.Outcome({"err": "old"})
+        try:
+            if await assistant.restore_meal(user, slot.snapshot, expect=slot.after) is None:
+                return live.Outcome({"err": "bad"})
+        except SnapshotStale:
+            return live.Outcome({"err": "edited"})
+        drop = True
+    else:
+        meal = await assistant.get_meal(user, int(m.group(1)))
+        if meal is None:
+            return live.Outcome({"err": "gone"})
+        if op == "a":
+            item_id, grams = int(m.group(2)), int(m.group(3))
+            if item_id not in {i.id for i in weighable(meal)} or not (
+                    MIN_PORTION_G <= grams <= MAX_PORTION_G):
+                return live.Outcome({"err": "bad"})
+            if await assistant.adjust_meal_item(user, meal.id or 0, item_id, float(grams)) is None:
+                return live.Outcome({"err": "gone"})
+        else:
+            snapshot = copy.deepcopy(meal)
+            if (await assistant.delete_meal(user, meal.id or 0)).meal is None:
+                return live.Outcome({"err": "gone"})
+            commit_slot = _Undo(now, snapshot, meal_fingerprint(None), 2)
+    built = await live.build(assistant, user)
+    undo = commit_slot is not None or (slot is not None and not drop)
+    reply = {**json.loads(built.data), "ok": 1, "z": int(undo)}
+
+    def commit() -> None:
+        _done[key] = (now, reply)
+        if commit_slot is not None:
+            _undo[slot_key] = commit_slot
+        elif drop:
+            _undo.pop(slot_key, None)
+
+    return live.Outcome(reply, commit=commit)
+
+
 live.ROUTES["m"] = on_meal
+live.ROUTES["s"] = on_today
 live.ROUTES["o"] = on_open

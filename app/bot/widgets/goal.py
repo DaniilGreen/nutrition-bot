@@ -21,7 +21,6 @@ from app.domain.goals import Goal, rebalance
 
 logger = logging.getLogger(__name__)
 _SET = re.compile(r"g:t:(cut|maintain|bulk):([0-9a-z]{4,10})")
-CAPTION = "🎯 Цель"
 
 
 async def _weight(assistant: Assistant, user: User) -> float | None:
@@ -36,7 +35,7 @@ async def show(bot: Bot, chat_id: int, user: User, assistant: Assistant, goal: G
         await bot(SendWidget(
             chat_id=chat_id, html=template("goal"),
             chat_data=goal_data(goal, await _weight(assistant, user), head),
-            caption=CAPTION, allow_queries=True,
+            allow_queries=True,
         ))
     except Exception as exc:  # noqa: BLE001
         logger.warning("widget: цель не ушла (%s) — фолбэк на rich", exc)

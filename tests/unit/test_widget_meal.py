@@ -24,7 +24,7 @@ from app.domain.value_objects import Macros
 class Bot:
     def __init__(self, fail: bool = False) -> None:
         self.calls: list[object] = []
-        self.captions: list[dict] = []
+        self.marks: list[dict] = []  # правки кнопок под сообщением
         self.fail = fail
 
     async def __call__(self, method: object) -> object:
@@ -33,8 +33,9 @@ class Bot:
         self.calls.append(method)
         return SimpleNamespace(message_id=77)
 
-    async def edit_message_caption(self, **kw: object) -> None:
-        self.captions.append(kw)
+    async def edit_message_reply_markup(self, **kw: object) -> None:
+        assert "caption" not in kw  # D-75: подписи у виджета нет — правим только кнопки
+        self.marks.append(kw)
 
 
 def _rec(uid: int) -> Meal:
@@ -93,7 +94,6 @@ def test_данные_карточки_в_бюджете_и_снапшоты() -
     assert text is not None and len(text.encode()) <= LIMIT - 8
     # AC-290: подпись — что записал, без граммов и ккал (они в виджете)
     assert meal_caption(m) == "✅ Записал: курица гриль, рис"
-    assert meal_caption(m, deleted=True) == "↩️ Запись удалена"
 
 
 def test_все_числа_карточки_целые() -> None:
@@ -121,7 +121,7 @@ async def test_показ_и_фолбэк(world) -> None:  # noqa: ANN001
     assert await wmeal.show(bot, 5, u, assistant, MealLogged(meal, left))  # type: ignore[arg-type]
     sent = bot.calls[0]
     assert isinstance(sent, SendWidget) and sent.html == template("meal") and sent.allow_queries
-    assert sent.caption == "✅ Записал: курица гриль, рис"  # AC-290: цифры — в виджете
+    assert sent.caption is None  # AC-290, D-75: только сам виджет
     kb = [b.callback_data for r in sent.reply_markup.inline_keyboard for b in r]
     assert f"meal_repeat:{meal.id}" in kb and f"dish_save:{meal.id}" in kb
     assert not any(c and c.startswith(("meal_undo", "item_del", "iw:")) for c in kb)
@@ -181,7 +181,7 @@ async def test_отменить_всё_вернуть_и_правка_между
 
 
 async def test_после_правки_сообщение_поправлено(world) -> None:  # noqa: ANN001
-    """FR-49.4: после ответа — данные, подпись и кнопки самого сообщения (открытая позже карточка
+    """FR-49.4: после ответа — данные и кнопки самого сообщения (открытая позже карточка
     показывает правду); после удаления под ним только аппка."""
     assistant, u, meal = await world()
     out = await wmeal.on_meal(5, 77, f"m:a:{meal.id}:{meal.items[0].id}:180:z1z1", u, assistant)  # type: ignore[arg-type]
@@ -191,12 +191,11 @@ async def test_после_правки_сообщение_поправлено(w
     edit = bot.calls[0]
     assert isinstance(edit, EditMessageWidgetData) and edit.message_id == 77
     assert json.loads(edit.chat_data)["i"][0][2] == 180
-    assert bot.captions[0]["caption"] == "✅ Записал: курица гриль, рис"
+    assert bot.marks[0]["message_id"] == 77
     out = await wmeal.on_meal(5, 77, f"m:u:{meal.id}:z2z2", u, assistant)  # type: ignore[arg-type]
     bot = Bot()
     await out.after(bot)  # type: ignore[arg-type]
-    assert bot.captions[0]["caption"] == "↩️ Запись удалена"
-    kb = bot.captions[0]["reply_markup"]
+    kb = bot.marks[0]["reply_markup"]
     assert kb is None or not any(b.callback_data for r in kb.inline_keyboard for b in r)
 
 
@@ -348,8 +347,8 @@ async def test_старшая_правка_не_ложится_поверх_св
     wmeal._rv.clear()
     bot = Bot()
     new, old = json.dumps({"v": 1, "rv": 200}), json.dumps({"v": 1, "rv": 100})
-    assert await wmeal._edit(bot, 5, 77, new, "c", None, None)  # type: ignore[arg-type]
-    assert await wmeal._edit(bot, 5, 77, old, "c", None, None)  # type: ignore[arg-type]
+    assert await wmeal._edit(bot, 5, 77, new, None, None)  # type: ignore[arg-type]
+    assert await wmeal._edit(bot, 5, 77, old, None, None)  # type: ignore[arg-type]
     edits = [c for c in bot.calls if isinstance(c, EditMessageWidgetData)]
     assert [json.loads(e.chat_data)["rv"] for e in edits] == [200]
 
@@ -367,7 +366,7 @@ async def test_тап_по_записи_открывает_её_карточку
     await out.after(bot)  # type: ignore[misc]
     [sent] = bot.calls
     assert isinstance(sent, SendWidget) and sent.html == template("meal")
-    assert json.loads(sent.chat_data)["hd"] == "Запись" and sent.caption.startswith("✏️ Запись:")
+    assert json.loads(sent.chat_data)["hd"] == "Запись" and sent.caption is None
     again = await wmeal.on_open(5, 1, f"o:{meal.id}:o1o1", u, assistant)  # type: ignore[arg-type]
     assert again.reply == {"ok": 1} and again.after is None
     stranger = User(telegram_id=6, name="y", locale="ru", timezone="UTC", id=99)
@@ -375,3 +374,26 @@ async def test_тап_по_записи_открывает_её_карточку
         "err": "gone"}
     r = await _do(assistant, u, f"m:a:{meal.id}:{meal.items[0].id}:210:o3o3", mid=77)
     assert r["hd"] == "Запись"
+
+
+async def test_правка_прямо_в_сегодня(world) -> None:  # noqa: ANN001
+    """D-74: `s:a` — вес позиции тем же `adjust_meal_item`, ответ — данные дня (`live.build`);
+    `s:x` — удалить, `s:r` — вернуть; повтор ключа не пишет дважды; кривое — `bad`."""
+    wmeal._undo.clear()
+    assistant, u, meal = await world()
+    rice = meal.items[1]
+    out = await wmeal.on_today(5, 300, f"s:a:{meal.id}:{rice.id}:200:t1t1", u, assistant)  # type: ignore[arg-type]
+    assert out.reply["ok"] == 1 and out.reply["z"] == 0 and "it" in out.reply
+    out.commit()  # type: ignore[misc]
+    got = await assistant.get_meal(u, meal.id)
+    assert got is not None and got.items[1].grams == 200
+    again = await wmeal.on_today(5, 300, f"s:a:{meal.id}:{rice.id}:200:t1t1", u, assistant)  # type: ignore[arg-type]
+    assert again.reply == out.reply
+    for bad in (f"s:a:{meal.id}:{rice.id}:0:t4t4", f"s:a:{meal.id}:999:200:t5t5", "s:q:t6t6"):
+        assert (await wmeal.on_today(5, 300, bad, u, assistant)).reply["err"] == "bad", bad  # type: ignore[arg-type]
+    gone = await wmeal.on_today(5, 300, f"s:x:{meal.id}:t2t2", u, assistant)  # type: ignore[arg-type]
+    assert gone.reply["z"] == 1
+    gone.commit()  # type: ignore[misc]
+    assert await assistant.get_meal(u, meal.id) is None
+    back = await wmeal.on_today(5, 300, "s:r:t3t3", u, assistant)  # type: ignore[arg-type]
+    assert back.reply["ok"] == 1 and back.reply["z"] == 0

@@ -121,7 +121,7 @@ async def test_показ_виджет_или_текст(monkeypatch: pytest.Mon
     assert await burn.show(bot, 1, user, scans)  # type: ignore[arg-type]
     [sent] = bot.calls
     assert isinstance(sent, SendWidget) and sent.html == template("burn")
-    assert sent.caption == "🔥 Реальный расход"
+    assert sent.caption is None  # D-75
     monkeypatch.setattr(handlers.widgets_live, "enabled", lambda u, s=None: True)
     monkeypatch.setattr(handlers.widgets_burn, "show", AsyncMock(return_value=False))
     msg = AsyncMock()

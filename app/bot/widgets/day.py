@@ -38,7 +38,6 @@ _DEL = re.compile(rf"h:x:([0-9]{{1,3}}):([0-9]{{1,10}}):([0-9]{{1,10}}):{_KEY}")
 _BACK = re.compile(rf"h:r:([0-9]{{1,3}}):{_KEY}")
 _ADJ = re.compile(rf"h:a:([0-9]{{1,3}}):([0-9]{{1,10}}):([0-9]{{1,10}}):([0-9]{{1,4}}):{_KEY}")
 _REP = re.compile(rf"h:p:([0-9]{{1,3}}):([0-9]{{1,10}}):([0-9]{{1,10}}):([0-9]{{1,4}}):{_KEY}")
-CAPTION = "🗒 История"
 
 
 class _Undo:
@@ -68,7 +67,7 @@ async def show(bot: Bot, chat_id: int, user: User, assistant: Assistant) -> bool
     try:
         await bot(SendWidget(
             chat_id=chat_id, html=template("day"), chat_data=await _day(assistant, user, 0, False),
-            caption=CAPTION, allow_queries=True, reply_markup=open_in_app("day"),
+            allow_queries=True, reply_markup=open_in_app("day"),
         ))
     except Exception as exc:  # noqa: BLE001
         logger.warning("widget: история не ушла (%s) — фолбэк на rich", exc)

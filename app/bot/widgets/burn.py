@@ -35,7 +35,7 @@ async def show(bot: Bot, chat_id: int, user: User, scans: BodyScanService) -> bo
     try:
         await bot(SendWidget(
             chat_id=chat_id, html=template("burn"), chat_data=await data(user, scans),
-            caption=CAPTION, reply_markup=open_in_app("body"),
+            reply_markup=open_in_app("body"),
         ))
     except Exception as exc:  # noqa: BLE001
         logger.warning("widget: расход не ушёл (%s) — фолбэк на текст", exc)

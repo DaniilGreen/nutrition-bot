@@ -142,7 +142,7 @@ async def show(bot: Bot, chat_id: int, user: User, assistant: Assistant) -> bool
             return False
         await bot(SendWidget(
             chat_id=chat_id, html=template("frequent"), chat_data=frequent_data(freq),
-            caption="⚡ Частое", allow_queries=True,  # «тап — запишу сразу» — в шапке (D-60)
+            allow_queries=True,  # без подписи (D-75)
             reply_markup=open_in_app("cat"),
         ))
     except Exception as exc:  # noqa: BLE001

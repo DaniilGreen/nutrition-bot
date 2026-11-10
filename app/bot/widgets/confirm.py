@@ -34,7 +34,6 @@ logger = logging.getLogger(__name__)
 
 TTL_S = 1800
 MAX_ITEMS = 4  # больше — выше 560 px на 320 (W-INV-8); прежняя цепочка вопросов (D-66)
-CAPTION = "🍽 Проверь и запиши"
 _WRITE = re.compile(r"c:w:([0-9]{1,4}(?:,[0-9]{1,4}){0,7}):([0-9a-z]{4,10})")
 _CANCEL = re.compile(r"c:x:([0-9a-z]{4,10})")
 
@@ -69,8 +68,7 @@ async def show(
         if data is None:
             return False
         msg = await bot(SendWidget(
-            chat_id=chat_id, html=template("confirm"), chat_data=data, caption=CAPTION,
-            allow_queries=True,
+            chat_id=chat_id, html=template("confirm"), chat_data=data, allow_queries=True,
         ))
     except Exception as exc:  # noqa: BLE001
         logger.warning("widget: подтверждение разбора не ушло (%s) — прежние вопросы", exc)
@@ -138,7 +136,7 @@ async def on_confirm(
             logger.warning("widget: подтверждение дало %s вместо записи", type(result).__name__)
             _done.pop(key, None)
             return live.Outcome({"err": "bad"})
-        card, caption, kb = await wmeal.card(assistant, user, result)
+        card, kb = await wmeal.card(assistant, user, result)
     except BaseException:
         _done.pop(key, None)  # сессия откатится — ключ свободен для нового тапа
         raise
@@ -157,7 +155,7 @@ async def on_confirm(
             if card is None:
                 raise ValueError("карточка не влезла")
             await bot(SendWidget(chat_id=uid, html=template("meal"), chat_data=card,
-                                 caption=caption, allow_queries=True, reply_markup=kb))
+                                 allow_queries=True, reply_markup=kb))
         except Exception as exc:  # noqa: BLE001 — запись уже есть: сказать о ней текстом
             logger.warning("widget: карточка после подтверждения не ушла (%s)", exc)
             await bot.send_message(uid, f"{meal_caption(result.meal)} · "

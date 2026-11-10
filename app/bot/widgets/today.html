@@ -17,14 +17,14 @@ header{margin-bottom:10px;flex-wrap:wrap}header b{font-size:20px}.sp{flex:1}#dl{
 .it{display:flex;gap:8px;cursor:pointer;font-size:14px;padding:3px 0;border-top:1px solid var(--tr)}.it:first-child{border:0}.it span:nth-child(2){flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #ls{display:grid;grid-template-columns:minmax(0,1fr)}#ls>div{grid-area:1/1;visibility:hidden}#ls>.on{visibility:visible}.it small{display:block;color:var(--m);font-size:12px;overflow:hidden;text-overflow:ellipsis}
 @media (max-width:260px){#dl,.pk,.ft s,.d{display:none}.ft{gap:4px}.ft .mi{font-size:11px}}@media (prefers-reduced-motion:reduce){.an *{animation:none}}
-</style>
+.ed{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:13px}.ed button{border:0;border-radius:10px;background:var(--cd);color:var(--t);min-width:34px;height:30px;font:600 16px system-ui,sans-serif;cursor:pointer}.ed b{min-width:56px;text-align:center}.it.sl{background:var(--cd);border-radius:8px}</style>
 <header class=r><b>Сегодня</b><span class=m id=dl></span><span class=sp></span><span class="p lv" id=lv></span><span class=p id=sk></span></header>
 <section class=c id=hc><div id=hero></div><div class=ft id=ft></div></section>
-<div id=hs></div><div id=ls></div>
+<div id=hs></div><div id=ls></div><div class=ed id=ed></div>
 <script>
 let A1=1;const TW=window.TelegramWidget;try{TW.setResizeAnchor('bottom')}catch(e){}const NU=v=>'<span class=cu data-n='+v+'>'+v+'</span>',AN=()=>{const v=!TW||TW.isActive!==!1;document.body.className=A1&&v?'an':'';if(A1&&v){A1=0;try{requestAnimationFrame(t0=>{const e=document.querySelectorAll('.cu'),f=t=>{const k=Math.min(1,(t-t0)/900);e.forEach(x=>x.textContent=Math.round(x.dataset.n*(1-(1-k)**3)));k<1&&requestAnimationFrame(f)};f(t0)})}catch(e){}}};try{TW.onEvent('activated',()=>{A1&&(window.RD||draw)()})}catch(e){}
 const W=TW,$=i=>document.getElementById(i);
-let D=null,E=0,S=-1,K='',ST=0,B=0;
+let D=null,E=0,S=-1,K='',ST=0,B=0,SM=0,SI=0,RG=0,Q=0,UZ=0;
 const J=s=>{try{return JSON.parse(s)}catch(e){return null}},R=Math.round,C=n=>(n+'').replace('.',','),H=i=>('0'+(D.sh+i)%24).slice(-2),
 T=s=>(s+'').replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';'),
 bar=(v,g,c)=>'<div class=tk><i style="width:'+(g>0?Math.max(0,Math.min(100,v/g*100)):0)+'%;background:var('+c+')"></i></div>',
@@ -36,12 +36,18 @@ $('ft').innerHTML=ft('Жир','--fa',e[2],g[2])+ft('Углев.','--ca',e[3],g[3
 function hours(){const al=D.h||[],k0=Math.max(3,Math.floor(((document.body.clientWidth||320)-22)/58)),k=al.length>k0?k0-1:k0,hs=al.slice(-k);if(!hs.some(x=>x[0]==S))S=hs.length?hs[hs.length-1][0]:-1;
 $('hs').innerHTML=hs.length?(al.length>k?'<span class=m>+'+(al.length-k)+'\u00a0ч</span>':'')+hs.map(x=>'<div class="ch'+(x[0]==S?' on':'')+'" data-h='+x[0]+'>'+H(x[0])+'<b>'+x[1]+'</b></div>').join(''):'<div class=m>Пока пусто — напиши, что съел.</div>';
 $('ls').innerHTML=hs.map(h=>{const all=(D.it||[]).filter(x=>x[0]==h[0]),its=all.slice(0,4),mo=(h[2]||all.length)-its.length;
-return'<div'+(h[0]==S?' class=on':'')+'>'+its.map(x=>'<div class=it data-m='+x[9]+'><span class=m>'+H(x[0])+':'+x[1]+'</span><span>'+T(x[2])+(x[5]!=null?'<small>'+(x[5]?x[5]+'\u00a0г · ':'')+'Б'+x[6]+' Ж'+x[7]+' У'+x[8]+'</small>':'')+'</span><b>'+(x[4]?'≈':'')+x[3]+'</b></div>').join('')+(mo>0?'<div class="it m">Ещё '+mo+' — в приложении ↓</div>':'')+'</div>'}).join('')}
+return'<div'+(h[0]==S?' class=on':'')+'>'+its.map(x=>'<div class="it'+(x[9]==SM?' sl':'')+'" data-m='+x[9]+'><span class=m>'+H(x[0])+':'+x[1]+'</span><span>'+T(x[2])+(x[5]!=null?'<small>'+(x[5]?x[5]+'\u00a0г · ':'')+'Б'+x[6]+' Ж'+x[7]+' У'+x[8]+'</small>':'')+'</span><b>'+(x[4]?'≈':'')+x[3]+'</b></div>').join('')+(mo>0?'<div class="it m">Ещё '+mo+' — в приложении ↓</div>':'')+'</div>'}).join('');ed()}
+function ed(){const x=(D.it||[]).find(x=>x[9]==SM),e=$('ed');e.style.visibility=x||UZ?'':'hidden';
+e.innerHTML=x?'<span class=m>вес</span><button data-e=-1>−</button><b>'+RG+'\u00a0г</b><button data-e=1>+</button><span class=m>≈'+R(x[3]*RG/x[5])+'</span><span class=sp></span><button data-e=x>🗑</button>':UZ?'<span class=m>Запись удалена</span><span class=sp></span><button data-e=r>⏪ Вернуть</button>':'<button>−</button>'}
+function SD(q){if(Q||!W||!W.request)return;Q=1;try{W.request(q+':'+(Date.now()%1e6+1e6)).then(a=>{Q=0;const r=J(a&&a.result);if(r&&r.v){UZ=r.z||0;if(q[2]!='a')SM=0;draw(a.result)}hp();ed();FL()},()=>Q=0)}catch(e){Q=0}}
+function FL(){const x=(D.it||[]).find(x=>x[9]==SM);if(!Q&&x&&RG!=x[5])SD('s:a:'+SM+':'+SI+':'+RG)}
 function draw(s=W&&W.chatData){const d=J(s);if(!d||d.v!=1)return;const k=JSON.stringify({...d,at:0,hn:0}),sm=K==k;K=k;D=d;
 $('dl').textContent=d.dl;$('lv').innerHTML=ST?(ST>1?'снимок':'итог дня'):'<i></i>'+d.at;const k2=d.s;$('sk').style.display=k2?'':'none';$('sk').textContent=k2?(k2[0]?'🔥 '+k2[0]+(k2[1]?' ❄':'')+' · ':'')+k2[2]+' из '+k2[3]:'';
 if(sm&&!A1)return;AN();hero();hours();
 }
-document.addEventListener('click',ev=>{const t=ev.target.closest('[data-h]');if(t){S=+t.dataset.h;hours();hp()}else if(ev.target.closest('#hero')){E=1-E;hero();hp()}else{const m=ev.target.closest('[data-m]');if(m&&m.dataset.m>0&&W.request)try{W.request('o:'+m.dataset.m+':'+(Date.now()%1e6+1e6)).then(hp,hp)}catch(e){}}});
+document.addEventListener('click',ev=>{const t=ev.target.closest('[data-h]');if(t){S=+t.dataset.h;hours();hp()}else if(ev.target.closest('#hero')){E=1-E;hero();hp()}else{const b=ev.target.closest('[data-e]');if(b){const a=b.dataset.e;if(a=='x')SD('s:x:'+SM);else if(a=='r')SD('s:r');else if(a){RG=Math.min(2000,Math.max(1,RG+10*a));hp();ed();FL()}return}
+const m=ev.target.closest('[data-m]');if(!m||!(m.dataset.m>0))return;const x=D.it.find(x=>x[9]==m.dataset.m);
+if(x&&x[10]&&x[5]){SM=SM==x[9]?0:x[9];SI=x[10];RG=x[5];UZ=0;hours();hp()}else if(W.request)try{W.request('o:'+m.dataset.m+':'+(Date.now()%1e6+1e6)).then(hp,hp)}catch(e){}}});
 function hp(){try{W.HapticFeedback.selectionChanged()}catch(e){}}
 function ask(){if(!W||!D||!W.request||ST||B)return;B=1;try{W.request('t:'+D.d).then(a=>{B=0;const r=J(a&&a.result);if(r&&r.st){ST=r.st;draw(W.chatData)}else if(r&&r.v)draw(a.result)},()=>B=0)}catch(e){B=0}}
 if(W){W.onEvent('chatDataChanged',()=>draw(W.chatData));W.onEvent('activated',ask);draw(W.chatData);try{W.ready&&W.ready()}catch(e){}ask()}

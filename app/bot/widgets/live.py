@@ -43,7 +43,6 @@ _QUERY = re.compile(r"t:([0-9]{4}-[0-9]{2}-[0-9]{2})")
 _VOLATILE = ("at", "hn")  # меняются сами со временем — правку не оправдывают
 # Виджета больше нет (удалили руками, > 48 ч): забыть, а не биться в API на каждом апдейте.
 _GONE = ("not found", "can't be edited", "message_id_invalid", "message to edit")
-CAPTION = "📊 Сегодня"  # W-INV-2, D-60: цифры — в самом виджете, подпись их не повторяет
 
 
 @dataclass
@@ -130,7 +129,7 @@ async def show_today(bot: Bot, chat_id: int, user: User, assistant: Assistant) -
             msg = await bot(
                 SendWidget(
                     chat_id=chat_id, html=template("today"), chat_data=built.data,
-                    caption=CAPTION, allow_queries=True, reply_markup=open_in_app("day"),
+                    allow_queries=True, reply_markup=open_in_app("day"),
                 )
             )
         except Exception as exc:  # noqa: BLE001 — любой сбой виджета не должен оставить без «Сегодня»
@@ -148,7 +147,6 @@ async def show_today(bot: Bot, chat_id: int, user: User, assistant: Assistant) -
 
 async def show_weight(
     bot: Bot, chat_id: int, points: list[tuple[datetime, float]], tz: str, target: str,
-    caption: str = "⚖️ Вес",
 ) -> bool:
     """«⚖️ Вес» графиком (FR-49.3) — единственное сообщение пути (D-60). False — замеров меньше
     двух или не вышло: вызывающий шлёт прежние rich/текст и PNG (D-55)."""
@@ -159,7 +157,7 @@ async def show_weight(
         burn = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
             text="🔥 Реальный расход", callback_data="burn")]])  # FR-50: `burn.CALLBACK`
         await bot(SendWidget(
-            chat_id=chat_id, html=template("weight"), chat_data=data, caption=caption,
+            chat_id=chat_id, html=template("weight"), chat_data=data,
             reply_markup=open_in_app("body", burn),
         ))
     except Exception as exc:  # noqa: BLE001
