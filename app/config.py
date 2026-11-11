@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     # Выключить рассуждения на разборе и фото там, где семейство позволяет (Sonnet/Haiku 5.5).
     # По умолчанию нет: Anthropic советует сначала low с рассуждениями; флаг — для сравнения в eval.
     claude_thinking_off: bool = False
+    # Свой флаг для разбора (D-90): None — как claude_thinking_off. Разбору мышление дотягивает
+    # сутки, а фото с ним не мерили — общий флаг тащил бы непроверенное за собой.
+    nlu_thinking_off: bool | None = None
     # Быстрый режим Opus (D-42) на маршрутах, чья модель его умеет; у Sonnet/Haiku не действует.
     claude_fast: bool = False
 
@@ -87,6 +90,12 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     db_echo: bool = False
+
+    def thinking_off_for(self, route: Literal["nlu", "vision"]) -> bool:
+        """Выключены ли рассуждения на маршруте: у разбора свой флаг важнее общего (D-90)."""
+        if route == "nlu" and self.nlu_thinking_off is not None:
+            return self.nlu_thinking_off
+        return self.claude_thinking_off
 
     def model_for(self, route: Literal["nlu", "vision", "coach"]) -> str:
         """Модель маршрута с учётом провайдера (NFR-6).

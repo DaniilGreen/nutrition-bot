@@ -551,6 +551,14 @@ def test_чужая_модель_в_маршруте_отказ_на_старт�
         _settings(nlu_model="claude-opus-5-5").model_for("nlu")
 
 
+def test_мышление_разбора_своим_флагом_фото_общим():
+    # D-90: разбору мышление включили, фото — нет; без своего флага разбор идёт за общим.
+    s = _settings(claude_thinking_off=True, nlu_thinking_off=False)
+    assert (s.thinking_off_for("nlu"), s.thinking_off_for("vision")) == (False, True)
+    s = _settings(claude_thinking_off=True)
+    assert (s.thinking_off_for("nlu"), s.thinking_off_for("vision")) == (True, True)
+
+
 def test_ключ_не_светится_в_настройках():
     s = _settings(anthropic_api_key="sk-ant-secret")
     assert "sk-ant-secret" not in repr(s) and "sk-ant-secret" not in str(s.model_dump())

@@ -72,7 +72,7 @@ def build_nlu(settings: Settings, meter: object | None = None) -> NluPort:
 
         return ClaudeNlu(
             client, settings.model_for("nlu"), sample_k=settings.sample_k, meter=meter,
-            effort=settings.nlu_effort, thinking_off=settings.claude_thinking_off,
+            effort=settings.nlu_effort, thinking_off=settings.thinking_off_for("nlu"),
             fast=settings.claude_fast,
         )
 
