@@ -424,3 +424,25 @@ async def test_раскладка_блока_дня_у_каждого_своя(w
     assert stored.ui_prefs["card_macros"] == "grid"
     assert (await _do(assistant, stored, "m:l:2:k3k3"))["err"] == "bad"
     assert stored.ui_prefs["card_macros"] == "grid"
+
+
+def test_полосы_дня_показывают_прибавку_записи() -> None:
+    """D-89: полоса блока дня — две части одного цвета: до записи (сплошная) и прибавка самой записи
+    (полупрозрачная). Сумма частей — та же доля дня `dy`, что и число справа; перебор упирается в
+    100 %, прибавка ужимается. Считает шаблон из `dy` и `k`."""
+    from app.bot.widgets import template
+
+    html = template("meal")
+    assert ".tk{display:flex}" in html and ".tk i+i{opacity:.4}" in html
+    assert "(r[0]-k[i])*100/r[1]" in html and "Math.min(100,r[2])-a" in html
+
+    def parts(r: list, k: float) -> tuple[float, float]:  # та же арифметика, что в шаблоне
+        a = max(0, min(100, (r[0] - k) * 100 / r[1]))
+        return a, max(0, min(100, r[2]) - a)
+
+    a, b = parts([349, 2095, 17], 149)  # молоко с карточки владельца 11.11
+    assert round(a, 1) == 9.5 and round(a + b) == 17
+    a, b = parts([2738, 2095, 131], 900)  # перебор: вместе 100 %, прибавка ужата
+    assert a + b == 100 and round(a, 1) == 87.7
+    a, b = parts([900, 2095, 43], 900)  # первая запись дня: всё — прибавка
+    assert a == 0 and b == 43
