@@ -9,16 +9,16 @@ body{margin:0;padding:12px 14px max(26px,env(safe-area-inset-bottom));font:15px/
 .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}.nm s,.dy s{text-decoration:none;color:var(--m);font-weight:400}.kc{text-align:right;font-weight:600}.kc.pv{color:var(--m)}
 button{font:inherit;font-weight:600;border:0;border-radius:12px;background:var(--cd);color:var(--t);padding:6px 12px;cursor:pointer}
 .st{display:flex;align-items:center;gap:4px}.st button{width:34px;height:30px;padding:0;border-radius:10px;background:var(--tr);font-size:18px;line-height:1}.st b{min-width:62px;text-align:center;font-weight:600}.st b.pv{color:var(--ac)}
-.dl{background:none;color:var(--al);padding:4px 6px;justify-self:end}.bz{opacity:.45;pointer-events:none}
-.tk{height:6px;border-radius:3px;background:var(--tr);overflow:hidden;grid-column:1/-1;margin-top:4px;order:3}.tk{display:flex}.tk i{height:100%;background:currentColor}.tk i+i{opacity:.4}
+.dl{background:none;color:var(--al);padding:4px 6px;justify-self:end}.bz{color:var(--m);pointer-events:none}
+.tk{height:6px;border-radius:3px;background:var(--tr);overflow:hidden;grid-column:1/-1;margin-top:4px;order:3;display:flex}.tk i{height:100%;background:currentColor}.tk i+i{box-shadow:inset 0 0 0 3px light-dark(#d3dae399,#32363d99)}
 .dy{padding:10px 12px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px}.dy>div{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;font-size:13px}.dy>div>b{grid-column:1/3;font-size:16px;font-weight:600}.dy>div>i{font-style:normal;font-weight:600}
 #ac{display:flex;gap:8px;flex-wrap:wrap}#ac button{flex:1 1 120px;padding:8px}.un{color:var(--al)}.bk{background:var(--ac);color:var(--at)}
-#ts{font-size:13px;margin-top:8px;color:var(--m)}#ts:empty{display:none}
+#ts{margin-top:8px}#ts:empty{display:none}
 .l1 .dy{grid-template-columns:minmax(0,1fr);gap:6px}.l1 .dy>div{grid-template-columns:auto minmax(0,1fr) auto;column-gap:6px}.l1 .dy>div>b{grid-column:auto;order:1;font-size:inherit;white-space:nowrap}.l1 .dy>div>i{order:2}
-@media (max-width:260px){.st b{min-width:50px}.st button{width:28px}.bg{font-size:26px}.dy>div{font-size:12px}}
+@media (max-width:260px){.st b{min-width:50px}.st button{width:28px}.dy>div{font-size:12px}}
 .an .tk i{animation:g .9s ease-out}@keyframes g{from{width:0}}@media (prefers-reduced-motion:reduce){.an *{animation:none!important}}</style>
 <header class=r><b id=hd>Записал</b><span class=m id=at></span><span class=sp></span></header>
-<div id=bd></div><div id=ac></div><div id=ts></div>
+<div id=bd></div><div id=ac></div><div id=ts class=m></div>
 <script>
 {{boot}}const W=TW,$=i=>document.getElementById(i),J=s=>{try{return JSON.parse(s)}catch(e){return null}},R=Math.round,
 K=()=>Math.random().toString(36).slice(2,8).padEnd(6,'0'),C=n=>(n+'').replace('.',',');

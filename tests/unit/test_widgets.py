@@ -105,6 +105,15 @@ def test_шаблон_в_бюджете(path: _Shipped) -> None:
     assert b"\x00" not in raw
 
 
+@pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.name)
+def test_шаблон_без_прозрачности(path: _Shipped) -> None:
+    """W-INV-9, D-91: прозрачность и фильтры — «тяжёлые» элементы; за 16 Telegram останавливает виджет
+    («Widget stopped», 11.11 — карточка записи и «Итоги»). Приглушаем цветом."""
+    html = path.read_text()
+    for pat in (r"opacity", r"\bfilter\s*:", r"backdrop-filter", r"box-shadow:[^;}]*\d+px \d+px [1-9]"):
+        assert not re.search(pat, html), f"{path.name}: {pat}"
+
+
 _OUT_OF_PROFILE = [
     r"<input", r"<select", r"<textarea", r"<form", r"\d+vh\b", r"oklch\(", r"color-mix\(",
     r":has\(", r"clip-path", r"text-shadow", r"src=[\"']?https?:", r"@import", r"@font-face",

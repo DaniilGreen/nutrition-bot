@@ -428,12 +428,12 @@ async def test_раскладка_блока_дня_у_каждого_своя(w
 
 def test_полосы_дня_показывают_прибавку_записи() -> None:
     """D-89: полоса блока дня — две части одного цвета: до записи (сплошная) и прибавка самой записи
-    (полупрозрачная). Сумма частей — та же доля дня `dy`, что и число справа; перебор упирается в
+    (приглушённая цветом дорожки, D-91). Сумма частей — та же доля дня `dy`, что и число справа; перебор упирается в
     100 %, прибавка ужимается. Считает шаблон из `dy` и `k`."""
     from app.bot.widgets import template
 
     html = template("meal")
-    assert ".tk{display:flex}" in html and ".tk i+i{opacity:.4}" in html
+    assert "display:flex}" in html and ".tk i+i{box-shadow:inset 0 0 0 3px light-dark(" in html
     assert "(r[0]-k[i])*100/r[1]" in html and "Math.min(100,r[2])-a" in html
 
     def parts(r: list, k: float) -> tuple[float, float]:  # та же арифметика, что в шаблоне
