@@ -505,6 +505,8 @@ async def test_кнопка_виджета_через_диспетчер() -> No
             self.say, self.boom = say, boom
 
         async def feed_update(self, bot: object, update: Update) -> None:
+            if update.bot != bot:  # как aiogram: непривязанный апдейт — пересборка через JSON
+                update = Update.model_validate(update.model_dump(), context={"bot": bot})
             cq = update.callback_query
             assert cq is not None
             fed.append(cq)

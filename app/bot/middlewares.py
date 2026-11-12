@@ -173,7 +173,10 @@ class WidgetQueryMiddleware(BaseMiddleware):
             message=message,
         ).as_(bot)
         try:
-            await dispatcher.feed_update(bot, Update(update_id=0, callback_query=tap))
+            # `.as_(bot)` обязателен: апдейт без бота aiogram пересобирает через JSON, и вместо
+            # `_Tap` хендлер получает голый CallbackQuery — ответ виджету уходил бы только после
+            # хендлера, а запись фото идёт дольше 15 с (TIMEOUT → «Не вышло»).
+            await dispatcher.feed_update(bot, Update(update_id=0, callback_query=tap).as_(bot))
         except Exception:  # noqa: BLE001 — кнопка не должна ронять поллинг
             logger.exception("widget: кнопка %r не выполнена", code[:64])
             await tap.answer("Не вышло — попробуй ещё раз.")
