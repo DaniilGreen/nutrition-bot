@@ -89,6 +89,9 @@ bot (aiogram) / web (FastAPI)  →  application (use-cases + Protocol-порты
 - Сторож: `/opt/healthcheck.sh` раз в 10 мин (`/etc/cron.d/healthcheck`) — контейнеры живы и
   диск < 90%. Проблема → одно сообщение в телегу владельцу, при восстановлении «инцидент
   закрыт». Дедуп через флаг `/var/run/healthcheck.failing`, чтобы флап не спамил.
+- Ждём возврата виджетов (D-92): `/opt/widget-watch.sh` раз в день (`/etc/cron.d/widget-watch`,
+  эталон `scripts/widget-watch.sh`). Вернули — одно сообщение владельцу, флаг `/var/lib/widget-watch.done`;
+  после этого скрипт и cron можно удалить.
 
 ## 5. Коммиты (этот репо)
 
