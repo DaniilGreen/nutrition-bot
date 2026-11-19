@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "Telegram-бот учёта питания с AI-разбором сообщений (модель: LLM наполняет, БД фиксирует)"
 requires-python = ">=3.11"
 dependencies = [
-    "aiogram>=3.13",
+    # ponytail: <3.32 — там widget_query и Message.widget типизированы, а мы читаем их из
+    # model_extra (D-45) и шлём Message(widget={}); переход — D-93, после возврата виджетов.
+    "aiogram>=3.13,<3.32",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "sqlalchemy[asyncio]>=2.0",
