@@ -45,7 +45,7 @@ CACHED_PRICES: dict[str, float] = {
     "gpt-4.1": 0.50,
     "gpt-4.1-mini": 0.10,
     "claude-opus-5-5": 0.20,
-    "claude-sonnet-5-5": 0.20,
+    "claude-sonnet-5-5": 0.10,  # 0.05× входа, не 0.1× (skill claude-api, 21.11.2026)
     "claude-haiku-5-5": 0.01,
     "claude-opus-5-5:fast": 0.40,
 }
