@@ -65,7 +65,15 @@ async def _run_once(settings, meter: EvalMeter) -> dict:
         meter.check()  # потолок — до строки, а не после прогона
         tol_by_id[row["id"]] = row.get("tol_item_pct", 0.20)
         expect_clarify = bool(row.get("expect_clarify") or row.get("expect_abstain"))
-        res = await _process_with_retry(assistant, user, row)
+        try:
+            res = await _process_with_retry(assistant, user, row)
+        except BudgetExceeded:
+            raise
+        except Exception as exc:  # noqa: BLE001 — одна строка не должна стоить всего прогона
+            # Человек на такой строке получил бы ошибку, а не число — считаем промахом (est=0)
+            # и называем: 23.11 таймаут на одной строке выкинул 24 минуты и ~$1.5 прогона.
+            print(f"⚠ {row['id']}: {type(exc).__name__}: {exc}", flush=True)
+            res = None
         await asyncio.sleep(ROW_PACING_S)
         # Воздержание — это ЛЮБОЙ отказ записать число, а не только вопрос. Отказ «это не еда»
         # (Unknown) на мусорном вводе — лучший ответ, чем вопрос: спрашивать про «Пизденку»
@@ -144,6 +152,9 @@ def main() -> int:
             return 2
         spent += meter.spent_usd
         m["provider"], m["model"] = settings.llm_provider, settings.model_for("nlu")
+        # Сразу, а не в конце: упал следующий прогон — этот не потерян.
+        print(f"run {len(per_run) + 1}: quality={m['quality_score']} "
+              f"daily15={m['daily_sum_within_15']} usd={meter.spent_usd:.3f}", flush=True)
         per_run.append(m)
     last = per_run[-1]
 
