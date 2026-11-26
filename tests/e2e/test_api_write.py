@@ -203,7 +203,8 @@ async def test_сбой_модели_объясняет_себя(client, fake_co
         async def parse_samples(self, text, known_keys):
             import openai
 
-            raise openai.APIConnectionError(request=None)  # type: ignore[arg-type]
+            # Настоящий запрос, а не None: с openai 3.60 конструктор читает request.headers.
+            raise openai.APIConnectionError(request=httpx.Request("POST", "https://api.openai.com"))
 
         async def parse(self, text, known_keys):
             return await self.parse_samples(text, known_keys)
