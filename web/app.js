@@ -4713,6 +4713,14 @@
       tg.onEvent('viewportChanged', applyTopInset);
     } catch (e) { /* старый клиент не знает этих событий */ }
   }
+  /* MA-INV-84: настройки — пункт меню ⋯. Шестерёнка скрыта в разметке и появляется
+     только у клиента без SettingsButton, иначе туда не попасть вовсе. */
+  if (tg.SettingsButton && tg.isVersionAtLeast && tg.isVersionAtLeast('7.0')) {
+    tg.SettingsButton.show();
+    tg.SettingsButton.onClick(function () { enter({ tab: 'set' }); });
+  } else {
+    document.getElementById('gear').classList.remove('hidden');
+  }
   /* ── быстрый старт (§5.13) ──────────────────────────────────────────── */
 
   /* MA-INV-74: сохранённый день рисуется сразу, пока свежий в пути. Ключ — на
